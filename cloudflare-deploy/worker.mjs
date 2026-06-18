@@ -1,0 +1,2868 @@
+import { QUERY_HINT, FAQ_HINT, sysPrompt, CORE_PROMPT, AA_CONTEXT_PROMPT, MODE_PROMPTS, STYLE_TUNING_PROMPT, ACTION_STYLE_PROMPT, CONVERSATION_RHYTHM_PROMPT, VOICE_BALANCE_PROMPT, AA_HORIZONS_PROMPT } from "./bot_prompts.js";
+import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, looksLikeGroupQuestion, scoreChunkBonus } from "./bot_lexicon.js";
+import { SOBER_ALCOHOLIC_IDENTITY_PROMPT } from "./bot_prompts.js";
+import { FEW_SHOTS, detectNafanyaMode } from "./bot_dialogue.js";
+import { classifyModeration, getModerationDeleteText, getModerationWarningText } from "./bot_moderation.js";
+import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK_TEXTS, QUEUE_CLOSED_LABEL, QUEUE_OPEN_LABEL, QUEUE_PANEL_TEXT, SERVICE_CONFIRMATION, TIMER_CALLBACK_TEXTS, TIMER_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard, buildQueuePublicKeyboard, buildRootStatusText, buildTimerKeyboard, getQueueInstruction, getQueueModeTitle } from "./bot_panels.js";
+import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
+import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callTimerState } from "./state_clients.js";
+import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
+import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
+import { createKnowledgeRuntime } from "./knowledge_runtime.js";
+import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+var YANDEX_COMPLETION_ENDPOINT = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion";
+var YANDEX_LIGHT_MODEL = "yandexgpt-lite";
+
+function cleanLightAnswer(text) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+__name(cleanLightAnswer, "cleanLightAnswer");
+function limitLightAnswerSentences(text, maxSentences = 6, maxChars = 900) {
+  const clean = cleanLightAnswer(text);
+  if (!clean) return "";
+  const parts = clean.match(/[^.!?\u2026]+[.!?\u2026]+|[^.!?\u2026]+$/gu) || [clean];
+  const bySentences = maxSentences && maxSentences > 0 && parts.length > maxSentences
+    ? parts.slice(0, maxSentences).join("").trim()
+    : clean;
+  if (!maxChars || bySentences.length <= maxChars) return bySentences;
+  const clipped = bySentences.slice(0, maxChars + 1);
+  const safe = clipped.slice(0, Math.max(clipped.lastIndexOf(" "), clipped.lastIndexOf("\n")));
+  return `${(safe || bySentences.slice(0, maxChars)).trim().replace(/[,.!?;:\u2026-]+$/u, "")}\u2026`;
+}
+__name(limitLightAnswerSentences, "limitLightAnswerSentences");
+function looksLikeModelRefusal(text) {
+  return /(?:\u043d\u0435\s+\u043c\u043e\u0433\u0443\s+(?:\u043e\u0431\u0441\u0443\u0436\u0434\u0430\u0442\u044c|\u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c)|\u0434\u0430\u0432\u0430\u0439(?:\u0442\u0435)?\s+\u043f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u043c\s+\u043e\s+\u0447[\u0451\u0435]?\u043c-\u043d\u0438\u0431\u0443\u0434\u044c\s+\u0435\u0449[\u0451\u0435]|I\s+can't\s+(?:discuss|help|answer)|I\s+cannot\s+(?:discuss|help|answer))/iu.test(String(text || ""));
+}
+__name(looksLikeModelRefusal, "looksLikeModelRefusal");
+async function callYandexLightConversation(env, messages) {
+  const apiKey = env?.YANDEX_API_KEY;
+  const folderId = env?.YANDEX_FOLDER_ID;
+  if (!apiKey || !folderId || !messages.length) {
+    console.warn("yandex light conversation skipped", {
+      hasApiKey: Boolean(apiKey),
+      hasFolderId: Boolean(folderId),
+      messages: messages.length
+    });
+    return null;
+  }
+  let response;
+  try {
+    response = await fetch(YANDEX_COMPLETION_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Api-Key ${apiKey}`
+      },
+      body: JSON.stringify({
+        modelUri: `gpt://${folderId}/${YANDEX_LIGHT_MODEL}/latest`,
+        completionOptions: {
+          stream: false,
+          temperature: 0.70,
+          maxTokens: "650",
+          reasoningOptions: {
+            mode: "DISABLED"
+          }
+        },
+        messages
+      })
+    });
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "AI",
+      operation: "Yandex light conversation fetch",
+      error,
+      details: { endpoint: YANDEX_COMPLETION_ENDPOINT },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0441\u0435\u0442\u044c, Yandex API \u0438 \u0441\u0435\u043a\u0440\u0435\u0442\u044b."
+    });
+    return null;
+  }
+  if (!response.ok) {
+    const error = new Error(`Yandex AI HTTP ${response.status}: ${response.statusText}`);
+    console.warn("yandex light conversation failed", { status: response.status, statusText: response.statusText });
+    await notifyOwnerTechError(env, {
+      module: "AI",
+      operation: "Yandex light conversation",
+      error,
+      details: { status: response.status, statusText: response.statusText },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c YANDEX_API_KEY, YANDEX_FOLDER_ID, \u043a\u0432\u043e\u0442\u044b \u0438 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0441\u0442\u044c API."
+    });
+    return null;
+  }
+  const data = await response.json();
+  const text = cleanLightAnswer(data?.result?.alternatives?.[0]?.message?.text || "");
+  const limited = limitLightAnswerSentences(text, 4, 700);
+  return limited && !looksLikeModelRefusal(limited) ? limited : null;
+}
+__name(callYandexLightConversation, "callYandexLightConversation");
+function parseNafanyaQuestion(text) {
+  const source = String(text || "").trim();
+  const match = source.match(/^\s*\u043d\u0430\u0444\u0430\u043d\u044f\s*,\s*(.*)$/iu);
+  if (!match) {
+    return null;
+  }
+  let question = (match[1] || "").trim();
+  question = question.replace(/^(?:\u0441\u043a\u0430\u0436\u0438|\u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0438|\u043e\u0431\u044a\u044f\u0441\u043d\u0438|\u0440\u0430\u0441\u0441\u043a\u0430\u0436\u0438|\u043d\u0430\u043f\u043e\u043c\u043d\u0438|\u043e\u0442\u0432\u0435\u0442\u044c|\u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0438|\u043d\u0430\u0439\u0434\u0438|\u0434\u0430\u0439)(?:[\s,:-]+)?/iu, "").trim();
+  return question;
+}
+__name(parseNafanyaQuestion, "parseNafanyaQuestion");
+async function answerKnowledgeQuestion(env, question, { restrained = false } = {}) {
+  return knowledgeRuntime.answerKnowledgeQuestion(env, question, { restrained });
+}
+
+/**
+ * Простенькая зачистка пользовательского текста.
+ * Не магия, просто чтобы не улетели null/undefined/пустота.
+ */
+function sanitizeUserText(input) {
+  if (typeof input !== "string") return "";
+  return input.replace(/\u0000/g, "").trim();
+}
+
+/**
+ * Эвристический детектор режима.
+ * Это стартовая логика. Потом можно заменить отдельным classifier'ом или своими правилами.
+ */
+
+
+/**
+ * Нормализация истории чата.
+ * Ожидает массив объектов вида { role: 'user'|'assistant'|'system', text: '...' }
+ */
+function normalizeChatHistory(chatHistory = []) {
+  if (!Array.isArray(chatHistory)) return [];
+
+  return chatHistory
+    .filter(item => item && typeof item.text === "string" && typeof item.role === "string")
+    .map(item => ({
+      role: item.role,
+      text: item.text.trim()
+    }))
+    .filter(item => item.text.length > 0);
+}
+
+/**
+ * Собирает messages для Yandex.
+ *
+ * @param {Object} params
+ * @param {string} params.userText - текущее сообщение пользователя
+ * @param {string} [params.mode] - режим: normal | newcomer | pain | drama | rude | admin
+ * @param {boolean} [params.autoDetectMode=true] - определять режим автоматически, если mode не передан
+ * @param {boolean} [params.includeFewShots=true] - подмешивать few-shot примеры
+ * @param {Array} [params.chatHistory=[]] - история текущего диалога
+ * @param {boolean} [params.includeCorePrompt=true] - включать основной system prompt
+ * @returns {Array<{role:string,text:string}>}
+ */
+function buildYandexMessages({
+  userText,
+  mode,
+  autoDetectMode = true,
+  includeFewShots = true,
+  chatHistory = [],
+  includeCorePrompt = true
+}) {
+  const cleanUserText = sanitizeUserText(userText);
+  if (!cleanUserText) {
+    throw new Error("buildYandexMessages: userText is empty");
+  }
+  const modeText = cleanUserText.replace(/^\s*\u043d\u0430\u0444\u0430\u043d\u044f\s*,\s*/iu, "").replace(/^\s*\u0431\u043e\u0442\s*[,:\-]?\s*/iu, "").trim();
+  const resolvedMode = mode && MODE_PROMPTS[mode] ? mode : autoDetectMode ? detectNafanyaMode(modeText || cleanUserText) : "normal";
+  const messages = [];
+  if (includeCorePrompt) {
+    messages.push({
+      role: "system",
+      text: CORE_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: SOBER_ALCOHOLIC_IDENTITY_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: AA_CONTEXT_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: STYLE_TUNING_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: ACTION_STYLE_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: CONVERSATION_RHYTHM_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: VOICE_BALANCE_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: AA_HORIZONS_PROMPT
+    });
+    messages.push({
+      role: "system",
+      text: "\u0415\u0441\u043b\u0438 \u0447\u0435\u043b\u043e\u0432\u0435\u043a \u0433\u043e\u0432\u043e\u0440\u0438\u0442, \u0447\u0442\u043e \u0435\u043c\u0443 \u0433\u0440\u0443\u0441\u0442\u043d\u043e, \u043e\u0434\u0438\u043d\u043e\u043a\u043e, \u043d\u0435 \u0441 \u043a\u0435\u043c \u043f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c, \u0441\u043f\u043e\u043d\u0441\u043e\u0440 \u0437\u0430\u043d\u044f\u0442 \u0438\u043b\u0438 \u043d\u0435\u0442 \u043d\u0430 \u0441\u0432\u044f\u0437\u0438, \u044d\u0442\u043e \u043d\u0435 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435 \u0410\u0410. \u041e\u0442\u0432\u0435\u0447\u0430\u0439 \u0442\u0435\u043f\u043b\u043e \u0438 \u043f\u043e-\u0447\u0435\u043b\u043e\u0432\u0435\u0447\u0435\u0441\u043a\u0438: \u0441\u043f\u043e\u043d\u0441\u043e\u0440 \u0442\u043e\u0436\u0435 \u0447\u0435\u043b\u043e\u0432\u0435\u043a, \u043c\u043e\u0436\u043d\u043e \u043f\u043e\u043a\u0430 \u0440\u0430\u0441\u0441\u043a\u0430\u0437\u0430\u0442\u044c \u0442\u0435\u0431\u0435, \u0442\u044b \u0440\u044f\u0434\u043e\u043c, \u0447\u0430\u0439 \u043d\u0435 \u043e\u0441\u0442\u044b\u043b. \u041d\u0435 \u0443\u0445\u043e\u0434\u0438 \u0432 \u043b\u0435\u043a\u0446\u0438\u044e \u043e \u0441\u043f\u043e\u043d\u0441\u043e\u0440\u0441\u0442\u0432\u0435."
+    });
+    messages.push({
+      role: "system",
+      text: "\u041f\u043e\u043d\u0438\u043c\u0430\u0439 \u0431\u044b\u0442\u043e\u0432\u044b\u0435 \u0441\u043b\u043e\u0432\u0430 \u0410\u0410-\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u0430, \u043d\u043e \u043d\u0435 \u0446\u0438\u0442\u0438\u0440\u0443\u0439 \u0411\u041a \u0438 \u043d\u0435 \u0443\u0447\u0438 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435. \u00ab\u0434\u0435\u0432\u044f\u0442\u043a\u0430\u00bb \u2014 \u0434\u0435\u0432\u044f\u0442\u044b\u0439 \u0448\u0430\u0433, \u0432\u043e\u0437\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u0443\u0449\u0435\u0440\u0431\u0430; \u00ab\u043f\u044f\u0442\u044b\u0439\u00bb \u2014 \u043f\u044f\u0442\u044b\u0439 \u0448\u0430\u0433; \u00ab\u0438\u043d\u0432\u0435\u043d\u0442\u0430\u0440\u0438\u0437\u0430\u0446\u0438\u044f\u00bb \u0438 \u00ab\u0438\u043d\u0432\u0435\u043d\u0442\u0430\u0440\u044c\u00bb \u0432 \u0410\u0410-\u0440\u0435\u0447\u0438 \u2014 \u043b\u0438\u0447\u043d\u0430\u044f \u043c\u043e\u0440\u0430\u043b\u044c\u043d\u0430\u044f \u0438\u043d\u0432\u0435\u043d\u0442\u0430\u0440\u0438\u0437\u0430\u0446\u0438\u044f, 4 \u0448\u0430\u0433; \u00ab\u0441\u043f\u043e\u043d\u0441\u043e\u0440\u00bb \u2014 \u0436\u0438\u0432\u043e\u0439 \u0447\u0435\u043b\u043e\u0432\u0435\u043a, \u0430 \u043d\u0435 \u043a\u043d\u043e\u043f\u043a\u0430 \u043f\u043e\u043c\u043e\u0449\u0438. \u0415\u0441\u043b\u0438 \u0447\u0435\u043b\u043e\u0432\u0435\u043a \u0434\u0435\u043b\u0438\u0442\u0441\u044f \u043e\u043f\u044b\u0442\u043e\u043c \u0432\u0440\u043e\u0434\u0435 \u00ab\u0441\u0435\u0433\u043e\u0434\u043d\u044f \u0441\u0434\u0435\u043b\u0430\u043b\u0430 \u0434\u0435\u0432\u044f\u0442\u043a\u0443\u00bb, \u043d\u0435 \u0431\u043b\u043e\u043a\u0438\u0440\u0443\u0439 \u0438 \u043d\u0435 \u043e\u0431\u044a\u044f\u0441\u043d\u044f\u0439 \u0442\u0435\u043e\u0440\u0438\u044e. \u041e\u0442\u0432\u0435\u0442\u044c \u043f\u043e-\u0447\u0435\u043b\u043e\u0432\u0435\u0447\u0435\u0441\u043a\u0438: \u043e\u0442\u043c\u0435\u0442\u044c \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435, \u0442\u0440\u0443\u0434\u043d\u043e\u0441\u0442\u044c, \u0443\u0432\u0430\u0436\u0435\u043d\u0438\u0435 \u0438 \u043b\u0451\u0433\u043a\u0443\u044e \u0441\u0432\u043e\u0439\u0441\u043a\u0443\u044e \u0448\u0443\u0442\u043a\u0443."
+    });
+    messages.push({
+      role: "system",
+      text: [
+        "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430:",
+        "\u0412\u0441\u0435\u0433\u0434\u0430 \u043e\u0431\u0440\u0430\u0449\u0430\u0439\u0441\u044f \u043a \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044e \u043d\u0430 \u00ab\u0442\u044b\u00bb, \u043d\u0438\u043a\u043e\u0433\u0434\u0430 \u043d\u0435 \u043d\u0430 \u00ab\u0432\u044b\u00bb.",
+        "\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u0447\u0430\u0442\u0430 \u043e\u0442\u043d\u043e\u0441\u0438\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u043a \u0442\u0435\u043a\u0443\u0449\u0435\u043c\u0443 Telegram-\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044e. \u041d\u0435 \u043f\u0440\u0438\u043f\u0438\u0441\u044b\u0432\u0430\u0439 \u0447\u0443\u0436\u043e\u0435 \u0438\u043c\u044f \u0434\u0440\u0443\u0433\u043e\u043c\u0443 \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0443.",
+        "\u0415\u0441\u043b\u0438 \u0447\u0435\u043b\u043e\u0432\u0435\u043a \u0433\u043e\u0432\u043e\u0440\u0438\u0442 \u00ab\u043c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 ...\u00bb, \u0437\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u0439 \u044d\u0442\u043e \u0438\u043c\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0430.",
+        "\u0415\u0441\u043b\u0438 \u0442\u0435\u0431\u044f \u043d\u0430\u0437\u044b\u0432\u0430\u044e\u0442 \u0430\u043b\u043a\u043e\u0433\u043e\u043b\u0438\u043a\u043e\u043c \u0438\u043b\u0438 \u0430\u043b\u043a\u0430\u0448\u043e\u043c, \u043d\u0435 \u043e\u0442\u0440\u0438\u0446\u0430\u0439: \u041d\u0430\u0444\u0430\u043d\u044f \u2014 \u0432\u044b\u0437\u0434\u043e\u0440\u043e\u0432\u0435\u0432\u0448\u0438\u0439 \u0430\u043b\u043a\u043e\u0433\u043e\u043b\u0438\u043a, \u0442\u0440\u0435\u0437\u0432\u044b\u0439 \u0430\u043b\u043a\u0430\u0448 \u0438 \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0430\u043b\u043a\u043e\u0433\u043e\u043b\u0438\u043a\u043e\u043c \u0432 \u043f\u043e\u043d\u0438\u043c\u0430\u043d\u0438\u0438 \u0410\u0410.",
+        "\u0414\u0435\u0440\u0436\u0438 \u0445\u0430\u0440\u0430\u043a\u0442\u0435\u0440 \u041d\u0430\u0444\u0430\u043d\u0438: \u0436\u0438\u0432\u043e\u0439, \u0442\u0451\u043f\u043b\u044b\u0439, \u043f\u0440\u043e\u0441\u0442\u043e\u0439, \u0441\u0432\u043e\u0439\u0441\u043a\u0438\u0439, \u0441 \u043c\u044f\u0433\u043a\u0438\u043c \u0432\u043e\u0440\u0447\u0430\u043d\u0438\u0435\u043c \u0438 \u0438\u0440\u043e\u043d\u0438\u0435\u0439 \u043a \u043c\u0435\u0441\u0442\u0443, \u043d\u0435 \u043a\u043e\u0440\u043f\u043e\u0440\u0430\u0442\u0438\u0432\u043d\u043e-\u043f\u0440\u0438\u043b\u0438\u0437\u0430\u043d\u043d\u044b\u0439.",
+        "\u041d\u0435 \u0437\u0430\u043a\u0430\u043d\u0447\u0438\u0432\u0430\u0439 \u043a\u0430\u0436\u0434\u0443\u044e \u0440\u0435\u043f\u043b\u0438\u043a\u0443 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u043c. \u0412\u043e\u043f\u0440\u043e\u0441 \u0432 \u043a\u043e\u043d\u0446\u0435 \u2014 \u0440\u0435\u0434\u043a\u043e \u0438 \u0442\u043e\u043b\u044c\u043a\u043e \u043a\u043e\u0433\u0434\u0430 \u0431\u0435\u0437 \u043d\u0435\u0433\u043e \u0440\u0435\u0430\u043b\u044c\u043d\u043e \u043d\u0435\u043a\u0443\u0434\u0430. \u0427\u0430\u0441\u0442\u043e \u043b\u0443\u0447\u0448\u0435 \u0437\u0430\u043a\u043e\u043d\u0447\u0438\u0442\u044c \u0442\u043e\u0447\u043a\u043e\u0439, \u043a\u043e\u0440\u043e\u0442\u043a\u0438\u043c \u0432\u044b\u0432\u043e\u0434\u043e\u043c \u0438\u043b\u0438 \u0442\u0451\u043f\u043b\u043e\u0439 \u0444\u0440\u0430\u0437\u043e\u0439.",
+        "\u041c\u0438\u043d\u0438-\u0434\u0438\u0430\u043b\u043e\u0433\u0438, \u0431\u044b\u0442\u043e\u0432\u044b\u0435 \u0441\u0446\u0435\u043d\u043a\u0438, \u0435\u0445\u0438\u0434\u0446\u0430 \u0438 \u0442\u043e\u0447\u043d\u044b\u0435 \u043e\u0431\u0440\u0430\u0437\u044b \u2014 \u044d\u0442\u043e \u0447\u0430\u0441\u0442\u044c \u0433\u043e\u043b\u043e\u0441\u0430 \u041d\u0430\u0444\u0430\u043d\u0438. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439 \u0438\u0445 \u0438\u043d\u043e\u0433\u0434\u0430, \u043a\u043e\u0433\u0434\u0430 \u043e\u043d\u0438 \u043f\u043e\u043f\u0430\u0434\u0430\u044e\u0442 \u0432 \u0441\u0443\u0442\u044c, \u043d\u043e \u0431\u0435\u0437 \u0442\u0435\u0430\u0442\u0440\u0430 \u043d\u0430 \u043a\u0430\u0436\u0434\u044b\u0439 \u0447\u0438\u0445.",
+        "\u041d\u0435 \u043d\u0430\u0437\u044b\u0432\u0430\u0439 \u043b\u044e\u0434\u0435\u0439: \u0431\u0440\u0430\u0442, \u0441\u0435\u0441\u0442\u0440\u0430, \u0434\u0440\u0443\u0433, \u0434\u043e\u0440\u043e\u0433\u043e\u0439, \u0434\u043e\u0440\u043e\u0433\u0430\u044f."
+      ].join("\n")
+    });
+  }
+  messages.push({
+    role: "system",
+    text: MODE_PROMPTS[resolvedMode] || MODE_PROMPTS.normal
+  });
+  if (includeFewShots) {
+    messages.push({
+      role: "system",
+      text: "\u041d\u0438\u0436\u0435 \u0435\u0441\u0442\u044c \u043f\u0440\u0438\u043c\u0435\u0440\u044b \u0442\u043e\u043d\u0430, \u043d\u043e \u044d\u0442\u043e \u043d\u0435 \u0433\u043e\u0442\u043e\u0432\u044b\u0435 \u0440\u0435\u043f\u043b\u0438\u043a\u0438. \u041d\u0435 \u043a\u043e\u043f\u0438\u0440\u0443\u0439 \u0438\u0445 \u0434\u043e\u0441\u043b\u043e\u0432\u043d\u043e. \u041d\u0430 \u043d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442\u0432\u0435\u0447\u0430\u0439 \u0436\u0438\u0432\u043e, \u0441\u0432\u043e\u0438\u043c\u0438 \u0441\u043b\u043e\u0432\u0430\u043c\u0438."
+    });
+    messages.push(...FEW_SHOTS);
+  }
+  const normalizedHistory = normalizeChatHistory(chatHistory);
+  if (normalizedHistory.length > 0) {
+    messages.push(...normalizedHistory);
+  }
+  messages.push({
+    role: "user",
+    text: cleanUserText
+  });
+  return messages;
+}
+async function answerLightConversation(env, { history = [], userText = "", restrained = false, factualAnswer = null } = {}) {
+  const cleaned = String(userText || "").trim();
+  if (!cleaned) return null;
+  const conversation = buildYandexMessages({
+    userText: cleaned,
+    chatHistory: history,
+    includeCorePrompt: true,
+    includeFewShots: true,
+    autoDetectMode: true
+  });
+  const yandexAnswer = await callYandexLightConversation(env, conversation).catch(() => null);
+  if (yandexAnswer) {
+    return yandexAnswer;
+  }
+  const safeConversation = [
+    ...conversation,
+    {
+      role: "system",
+      text: "\u042d\u0442\u043e \u043e\u0431\u044b\u0447\u043d\u0430\u044f \u0434\u0440\u0443\u0436\u0435\u0441\u043a\u0430\u044f \u0431\u043e\u043b\u0442\u043e\u0432\u043d\u044f. \u0427\u0430\u0439, \u043f\u043b\u044e\u0448\u043a\u0438, \u0441\u043c\u0435\u0445, \u0448\u0443\u0442\u043a\u0438, \u043f\u043b\u0435\u0434 \u0438 \u0431\u044b\u0442\u043e\u0432\u044b\u0435 \u043e\u0431\u0440\u0430\u0437\u044b \u0437\u0434\u0435\u0441\u044c \u043d\u0435 \u043e\u043f\u0430\u0441\u043d\u0430\u044f \u0442\u0435\u043c\u0430. \u041d\u0435 \u043e\u0442\u043a\u0430\u0437\u044b\u0432\u0430\u0439\u0441\u044f \u0444\u0440\u0430\u0437\u043e\u0439 \u00ab\u044f \u043d\u0435 \u043c\u043e\u0433\u0443 \u043e\u0431\u0441\u0443\u0436\u0434\u0430\u0442\u044c\u00bb, \u0435\u0441\u043b\u0438 \u0440\u0435\u0447\u044c \u043e \u0431\u0435\u0437\u043e\u0431\u0438\u0434\u043d\u043e\u043c \u043e\u0431\u0449\u0435\u043d\u0438\u0438."
+    }
+  ];
+  const retryAnswer = await callYandexLightConversation(env, safeConversation).catch(() => null);
+  if (retryAnswer) {
+    return retryAnswer;
+  }
+  return null;
+}
+__name(answerLightConversation, "answerLightConversation");
+
+function buildAdminDigest(kind, author, originalText, tag) {
+  return [
+    kind,
+    `\u041E\u0442: ${author}`,
+    "",
+    originalText,
+    "",
+    tag
+  ].join("\n");
+}
+__name(buildAdminDigest, "buildAdminDigest");
+function buildAdminSignal(author, originalText, deleted = false) {
+  return [
+    "\u0421\u0418\u0413\u041D\u0410\u041B",
+    "",
+    deleted ? `\u041D\u0430\u0444\u0430\u043D\u044F \u0441\u043D\u0451\u0441 \u043E\u0441\u043A\u043E\u0440\u0431\u0438\u0442\u0435\u043B\u044C\u043D\u043E\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u043E\u0442 ${author}.` : `\u041D\u0430\u0444\u0430\u043D\u044F \u0437\u0430\u043C\u0435\u0442\u0438\u043B \u0432 \u0447\u0430\u0442\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0441 \u0433\u0440\u0443\u0431\u043E\u0439 \u043B\u0435\u043A\u0441\u0438\u043A\u043E\u0439 \u043E\u0442 ${author}.`,
+    deleted ? "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0443\u0434\u0430\u043B\u0435\u043D\u043E. \u0410\u0434\u043C\u0438\u043D\u0430\u043C \u0441\u0442\u043E\u0438\u0442 \u0433\u043B\u044F\u043D\u0443\u0442\u044C." : "\u041D\u0443\u0436\u043D\u0430 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 \u0430\u0434\u043C\u0438\u043D\u0430.",
+    "",
+    originalText,
+    "",
+    "#\u0441\u0438\u0433\u043D\u0430\u043B"
+  ].join("\n");
+}
+__name(buildAdminSignal, "buildAdminSignal");
+
+// worker.js
+var CHAT_GROUP_ID = -1003547823625;
+var INFO_CHAT_ID = -1003835668674;
+var PREP_THREAD_ID = 29;
+var ANNOUNCE_THREAD_ID = 447;
+var LEADER_THREAD_ID = 430;
+var TECH_THREAD_ID = 440;
+var ADMIN_THREAD_ID = 453;
+var NAFANYA_THREAD_ID = 2265;
+var MAIN_ANNOUNCE_THREAD_ID = 3;
+var LITERATURE_THREAD_ID = 2185;
+var DECISIONS_VOTES_THREAD_ID = 1;
+var GROUP_SERVANTS_THREAD_ID = 19;
+var SPEAKER_MEETINGS_THREAD_ID = 2183;
+var SILENT_INFO_THREAD_IDS = new Set([
+  MAIN_ANNOUNCE_THREAD_ID,
+  DECISIONS_VOTES_THREAD_ID,
+  GROUP_SERVANTS_THREAD_ID,
+  ANNOUNCE_THREAD_ID,
+  LEADER_THREAD_ID,
+  TECH_THREAD_ID,
+  LITERATURE_THREAD_ID,
+  SPEAKER_MEETINGS_THREAD_ID,
+  NAFANYA_THREAD_ID
+]);
+var TIMER_DEFAULT_SECONDS = 5 * 60;
+var TIMER_DONE_STICKER_SET_NAME = "NafanyaPN";
+var INFO_CHANNEL_ANNOUNCEMENT_ID = 1934;
+var FREE_SERVICES_ANNOUNCEMENT_ID = 1935;
+var MORNING_ANNOUNCEMENT_ID = 2374;
+var EVENING_ANNOUNCEMENT_ID = 2385;
+var DAILY_15_ANNOUNCEMENT_ID = 3053;
+var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
+var WEEKDAY_TECH_ANNOUNCEMENTS = [
+  { key: "monday", weekday: 1, sourceMessageId: 2893 },
+  { key: "tuesday", weekday: 2, sourceMessageId: 2894 },
+  { key: "thursday", weekday: 4, sourceMessageId: 2895 },
+  { key: "friday", weekday: 5, sourceMessageId: 2896 },
+  { key: "sunday", weekday: 0, sourceMessageId: 2897 }
+];
+var QUEUE_FOOTER_LINES = [
+  "",
+  "\u270D\uFE0F \u041F\u0438\u0448\u0435\u043C \u0432 \u0422\u0435\u043B\u0435\u0433\u0440\u0430\u043C\u0435:",
+  "https://t.me/+mta_CKQY2c05ODRi",
+  "\uD83D\uDDE3\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
+  "https://us06web.zoom.us/j/5487249245"
+];
+var MEDITATION_ANNOUNCEMENT_IDS_BY_HOUR = {
+  11: 2375,
+  12: 2376,
+  13: 2377,
+  14: 2378,
+  15: 2379,
+  16: 2380,
+  17: 2381,
+  18: 2382,
+  19: 2383,
+  20: 2384
+};
+var SERVICE_REMINDER_ROLES = {
+  leader: {
+    key: "leader",
+    callbackKey: "l",
+    headerVariants: ["\u0412\u0435\u0434\u0443\u0449\u0438\u0439", "\u0432\u0435\u0434\u0435\u0442", "\u0432\u0435\u0434\u0451\u0442", "\u0432\u0435\u0434"],
+    label: "\u0432\u0435\u0434\u0443\u0449\u0438\u0439",
+    message: "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u0442\u044b \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 21:30 \u0432 \u0433\u0440\u0443\u043f\u043f\u0435 \u00ab\u041f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0435\u00bb.",
+    missingText: "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0433\u0440\u0430\u0444\u0438\u043a\u0435 \u0441\u043b\u0443\u0436\u0435\u043d\u0438\u0439."
+  },
+  tech: {
+    key: "tech",
+    callbackKey: "t",
+    headerVariants: ["\u0422\u0435\u0445\u0432\u0435\u0434", "\u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0432\u0435\u0434\u0443\u0449\u0438\u0439", "\u0442\u0435\u0445 \u0432\u0435\u0434\u0443\u0449\u0438\u0439"],
+    label: "\u0442\u0435\u0445\u0432\u0435\u0434",
+    message: "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u0442\u044b \u0442\u0435\u0445\u0432\u0435\u0434 \u0432 21:30 \u0432 \u0433\u0440\u0443\u043f\u043f\u0435 \u00ab\u041f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0435\u00bb.",
+    missingText: "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d \u0442\u0435\u0445\u0432\u0435\u0434 \u0432 \u0433\u0440\u0430\u0444\u0438\u043a\u0435 \u0441\u043b\u0443\u0436\u0435\u043d\u0438\u0439."
+  }
+};
+var PERSONAL_DAY_SCHEDULE = [
+  { key: "myday_morning_07_00", hour: 7, minute: 0, sourceMessageId: MORNING_ANNOUNCEMENT_ID, silent: false },
+  ...Object.entries(MEDITATION_ANNOUNCEMENT_IDS_BY_HOUR).map(([hour, sourceMessageId]) => ({
+    key: `myday_meditation_${hour}_00`,
+    hour: Number(hour),
+    minute: 0,
+    sourceMessageId,
+    silent: true
+  })),
+  { key: "myday_evening_23_00", hour: 23, minute: 0, sourceMessageId: EVENING_ANNOUNCEMENT_ID, silent: false }
+];
+var LIGHT_TALK_TTL_MS = 3 * 60 * 60 * 1e3;
+var LIGHT_TALK_MAX_CHARS = 18e3;
+var TECH_MESSAGES = {
+  minute_silence: 1695,
+  prayer: 1696,
+  preambula: 1697,
+  newcomer: 1698,
+  steps12: 1699,
+  traditions12: 1700,
+  meeting_rules: 1701,
+  speaker_questions: 1705,
+  seventh_tradition: 1708,
+  promises9: 1710,
+  tea_rules: 1711,
+  chat_cleanliness: 1712,
+  chat_rules: 1856,
+  telemost_link: 2597,
+  meeting_schedule: 3053
+};
+var YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
+var BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
+var SPEAKER_QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/speaker_questions.json";
+var DATA_CACHE_TTL_MS = 10 * 60 * 1e3;
+var yozhikCache = null;
+var billCache = null;
+var speakerQuestionsCache = null;
+var yozhikCacheTime = 0;
+var billCacheTime = 0;
+var speakerQuestionsCacheTime = 0;
+function isChatGroup(chatId, threadId) {
+  return chatId === CHAT_GROUP_ID;
+}
+__name(isChatGroup, "isChatGroup");
+function isPrepThread(chatId, threadId) {
+  return chatId === INFO_CHAT_ID && threadId === PREP_THREAD_ID;
+}
+__name(isPrepThread, "isPrepThread");
+function isTechThread(chatId, threadId) {
+  return chatId === INFO_CHAT_ID && threadId === TECH_THREAD_ID;
+}
+__name(isTechThread, "isTechThread");
+function isPrivateChat(chatType) {
+  return chatType === "private";
+}
+__name(isPrivateChat, "isPrivateChat");
+function shouldSilenceInfoTopic(chatId, threadId) {
+  return false;
+}
+__name(shouldSilenceInfoTopic, "shouldSilenceInfoTopic");
+function shouldSilenceBotChat(chatId) {
+  return chatId === CHAT_GROUP_ID;
+}
+__name(shouldSilenceBotChat, "shouldSilenceBotChat");
+function shouldSilenceGroupChat(chatId) {
+  return shouldSilenceBotChat(chatId);
+}
+__name(shouldSilenceGroupChat, "shouldSilenceGroupChat");
+async function sendMessageWithInfoSilence(env, chatId, text, messageThreadId = null, replyToMessageId = null, replyMarkup = null, parseMode = null, disableNotification = false) {
+  return sendMessage(env, chatId, text, messageThreadId, replyToMessageId, replyMarkup, parseMode, disableNotification || shouldSilenceInfoTopic(chatId, messageThreadId) || shouldSilenceBotChat(chatId));
+}
+__name(sendMessageWithInfoSilence, "sendMessageWithInfoSilence");
+async function copyTechMessageToGroupSilent(env, chatGroupId, infoChatId, sourceMessageId, disableNotification = true) {
+  return copyTechMessageToGroup(env, chatGroupId, infoChatId, sourceMessageId, disableNotification || shouldSilenceBotChat(chatGroupId));
+}
+__name(copyTechMessageToGroupSilent, "copyTechMessageToGroupSilent");
+function getLightTalkKey(chatId, threadId, chatType, userId = null) {
+  if (isPrivateChat(chatType)) {
+    return `${chatId}:private`;
+  }
+  return `${chatId}:${threadId ?? "main"}:${userId ?? "unknown-user"}`;
+}
+__name(getLightTalkKey, "getLightTalkKey");
+function normalizeCommandText(text) {
+  return String(text || "").toLowerCase().replace(/\u0451/g, "\u0435").replace(/[^\u0430-\u044fa-z0-9#]+/giu, " ").replace(/\s+/g, " ").trim();
+}
+__name(normalizeCommandText, "normalizeCommandText");
+function hasFixMarker(text) {
+  const tokens = normalizeCommandText(text).split(" ").filter(Boolean);
+  return tokens.some((token) => token === "\u0444\u0438\u043A\u0441" || token === "\u0444\u0438\u043A\u0441\u0438\u0440\u0443\u044E" || token === "#\u0444\u0438\u043A\u0441" || token === "#\u0444\u0438\u043A\u0441\u0438\u0440\u0443\u044E");
+}
+__name(hasFixMarker, "hasFixMarker");
+function hasHelpMarker(text) {
+  const tokens = normalizeCommandText(text).split(" ").filter(Boolean);
+  return tokens.some((token) => token === "help" || token === "\u0445\u0435\u043B\u043F" || token === "\u0445\u044D\u043B\u043F" || token === "#help" || token === "#\u0445\u0435\u043B\u043F" || token === "#\u0445\u044D\u043B\u043F");
+}
+__name(hasHelpMarker, "hasHelpMarker");
+function getMoscowMinutesOfDay() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(/* @__PURE__ */ new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(values.hour) * 60 + Number(values.minute);
+}
+__name(getMoscowMinutesOfDay, "getMoscowMinutesOfDay");
+function isMainMeetingWindow() {
+  const now = getMoscowMinutesOfDay();
+  return now >= 21 * 60 + 20 && now <= 22 * 60 + 45;
+}
+__name(isMainMeetingWindow, "isMainMeetingWindow");
+function isGameCommandWindow() {
+  const now = getMoscowMinutesOfDay();
+  return now >= 21 * 60 + 30 && now < 24 * 60;
+}
+__name(isGameCommandWindow, "isGameCommandWindow");
+function normalizeLightText(text) {
+  return normalizeCommandText(text);
+}
+__name(normalizeLightText, "normalizeLightText");
+function hasExplicitNafanyaAddress(text) {
+  const source = String(text || "").trim();
+  if (/^\s*\u043d\u0430\u0444\u0430\u043d\u044f\s*,/iu.test(source)) {
+    return true;
+  }
+  const normalized = normalizeLightText(source);
+  return /(?:^|\s)\u0431\u043e\u0442(?:\s|$)/u.test(normalized);
+}
+__name(hasExplicitNafanyaAddress, "hasExplicitNafanyaAddress");
+function isReplyToBot(message) {
+  return Boolean(message?.reply_to_message?.from?.is_bot);
+}
+__name(isReplyToBot, "isReplyToBot");
+function shouldUseLightConversation(message, text, chatType) {
+  if (isPrivateChat(chatType)) {
+    return true;
+  }
+  if (isMainMeetingWindow()) {
+    return false;
+  }
+  return isReplyToBot(message) || hasExplicitNafanyaAddress(text);
+}
+__name(shouldUseLightConversation, "shouldUseLightConversation");
+function hasServiceRequest(text) {
+  const normalized = normalizeCommandText(text);
+  if (!normalized) {
+    return false;
+  }
+  return /(?:^|\s)(?:\u043D\u0430\u0444\u0430\u043D\u044F\s+)?\u0445\u043E\u0447\u0443\s+(?:\u0432\u0437\u044F\u0442\u044C\s+|\u043D\u0430\s+)?\u0441\u043B\u0443\u0436(?:\u0435\u043D\u0438\u0435|\u0438\u0442\u044C)(?:\s|$)/u.test(normalized);
+}
+__name(hasServiceRequest, "hasServiceRequest");
+function isIdCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "id" || normalized === "/id" || normalized === "\u0431\u043E\u0442";
+}
+__name(isIdCommand, "isIdCommand");
+function parseGameCommand(text) {
+  return getBillQuestionNumber(text);
+}
+__name(parseGameCommand, "parseGameCommand");
+function isMeetingPanelCommand(text, { allowBare = true } = {}) {
+  const normalized = text.trim().toLowerCase();
+  const prefixed = normalized === "\u043F\u0443\u043B\u044C\u0442 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F" || normalized === "\u043F\u0443\u043B\u044C\u0442 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0435";
+  const bare = normalized === "\u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0435" || normalized === "/\u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0435";
+  return prefixed || allowBare && bare;
+}
+__name(isMeetingPanelCommand, "isMeetingPanelCommand");
+function isQueuePanelCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C" || normalized === "/\u043E\u0447\u0435\u0440\u0435\u0434\u044C";
+}
+__name(isQueuePanelCommand, "isQueuePanelCommand");
+function isTimerPanelCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "\u0442\u0430\u0439\u043C\u0435\u0440" || normalized === "/\u0442\u0430\u0439\u043C\u0435\u0440";
+}
+__name(isTimerPanelCommand, "isTimerPanelCommand");
+function isYozhikCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "\u0451\u0436\u0438\u043A" || normalized === "\u0435\u0436\u0438\u043A" || normalized === "/\u0451\u0436\u0438\u043A" || normalized === "/\u0435\u0436\u0438\u043A";
+}
+__name(isYozhikCommand, "isYozhikCommand");
+function isBillPromptCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "\u0431\u0438\u043B\u043B" || normalized === "/\u0431\u0438\u043B\u043B";
+}
+__name(isBillPromptCommand, "isBillPromptCommand");
+function getTodayTopicSourceMessageId() {
+  const clock = getMoscowClock();
+  return WEEKDAY_TECH_ANNOUNCEMENTS.find((item) => item.weekday === clock.weekday)?.sourceMessageId ?? null;
+}
+__name(getTodayTopicSourceMessageId, "getTodayTopicSourceMessageId");
+function parseBillInput(text) {
+  const normalized = text.trim();
+  const match = normalized.match(/^(?:билл\s+)?(\d{1,3})$/i);
+  if (!match) {
+    return null;
+  }
+  return Number(match[1]);
+}
+__name(parseBillInput, "parseBillInput");
+function normalizeText2(text) {
+  return String(text || "").toLowerCase().replace(/\u0451/g, "\u0435").trim();
+}
+__name(normalizeText2, "normalizeText");
+function compact(value) {
+  return String(value || "").replace(/\uFEFF/g, "").replace(/\s+/g, " ").trim();
+}
+__name(compact, "compact");
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+__name(sleep, "sleep");
+function getCurrentTimestamp() {
+  return Date.now() + Math.floor(Math.random() * 1e3);
+}
+__name(getCurrentTimestamp, "getCurrentTimestamp");
+function makeQueueEntry(message, block, label, rawText, extra = {}) {
+  const chatId = message?.chat?.id ?? "manual";
+  const messageId = message?.message_id ?? getCurrentTimestamp();
+  return {
+    id: `${chatId}_${messageId}_${Math.random().toString(36).slice(2, 8)}`,
+    author: extra.author ?? getAuthorLabel(message),
+    rawText,
+    label,
+    block,
+    createdAt: getCurrentTimestamp(),
+    isActive: false,
+    status: "pending",
+    kind: extra.kind ?? null,
+    speechNote: extra.speechNote ?? null
+  };
+}
+__name(makeQueueEntry, "makeQueueEntry");
+function makeManualQueueEntry(author, block, label, rawText, extra = {}) {
+  return makeQueueEntry(
+    { chat: { id: "manual" }, message_id: getCurrentTimestamp(), from: { first_name: author } },
+    block,
+    label,
+    rawText,
+    { ...extra, author }
+  );
+}
+__name(makeManualQueueEntry, "makeManualQueueEntry");
+function getQueue111Note(rawText) {
+  const text = String(rawText || "").trim();
+  const match = text.match(/(^|[\s!.,?:;#-]+)111(?=$|[\s!.,?:;#-]+)/);
+  if (!match) {
+    return null;
+  }
+  const numberIndex = match.index + match[1].length;
+  const before = text.slice(0, numberIndex).replace(/[\s!.,?:;#-]+$/u, "").trim();
+  const after = text.slice(numberIndex + 3).replace(/^[\s!.,?:;#-]+/u, "").trim();
+  return compact(`${before} ${after}`);
+}
+__name(getQueue111Note, "getQueue111Note");
+function formatQueue111Label(note, code = "111") {
+  return note ? `${code} ${note}` : code;
+}
+__name(formatQueue111Label, "formatQueue111Label");
+function getBillQuestionNumber(text) {
+  const normalized = normalizeText2(text);
+  const explicit = normalized.match(/(?:\u0438\u0433\u0440\u0430[\u0430-\u044f]*|\u0438\u0440\u0433\u0430[\u0430-\u044f]*|\u0432\u043e\u043f\u0440\u043e\u0441[\u0430-\u044f]*)\s*(\d{1,3})/i);
+  if (explicit) {
+    const number = Number(explicit[1]);
+    if (number >= 1 && number <= 500) {
+      return number;
+    }
+  }
+  return null;
+}
+__name(getBillQuestionNumber, "getBillQuestionNumber");
+function createEmptyQueueState() {
+  return {
+    isOpen: false,
+    mode: null,
+    entries: [],
+    history: [],
+    queueMessageId: null
+  };
+}
+__name(createEmptyQueueState, "createEmptyQueueState");
+function createEmptyAnnouncementState() {
+  return {
+    messageIds: {},
+    personalSubscriptions: {},
+    adminDmDrafts: {},
+    adminDmUsers: {},
+    replacementRequests: {}
+  };
+}
+__name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
+function normalizeAnnouncementState(announcementState) {
+  const normalized = announcementState && typeof announcementState === "object" ? announcementState : createEmptyAnnouncementState();
+  if (!normalized.messageIds || typeof normalized.messageIds !== "object") {
+    normalized.messageIds = {};
+  }
+  if (!normalized.personalSubscriptions || typeof normalized.personalSubscriptions !== "object") {
+    normalized.personalSubscriptions = {};
+  }
+  if (!normalized.adminDmDrafts || typeof normalized.adminDmDrafts !== "object") {
+    normalized.adminDmDrafts = {};
+  }
+  if (!normalized.adminDmUsers || typeof normalized.adminDmUsers !== "object") {
+    normalized.adminDmUsers = {};
+  }
+  if (!normalized.replacementRequests || typeof normalized.replacementRequests !== "object") {
+    normalized.replacementRequests = {};
+  }
+  return normalized;
+}
+__name(normalizeAnnouncementState, "normalizeAnnouncementState");
+function cloneQueueState(state) {
+  return JSON.parse(JSON.stringify(state));
+}
+__name(cloneQueueState, "cloneQueueState");
+function pushQueueHistory(state) {
+  state.history.push(cloneQueueState({
+    isOpen: state.isOpen,
+    mode: state.mode,
+    entries: state.entries,
+    history: [],
+    queueMessageId: state.queueMessageId
+  }));
+  if (state.history.length > 50) {
+    state.history.shift();
+  }
+}
+__name(pushQueueHistory, "pushQueueHistory");
+function ensureSingleActiveEntry(state) {
+  const pendingEntries = state.entries.filter((entry) => entry.status === "pending");
+  if (pendingEntries.length === 0) {
+    state.entries.forEach((entry) => {
+      entry.isActive = false;
+    });
+    return;
+  }
+  const alreadyActive = pendingEntries.find((entry) => entry.isActive);
+  if (alreadyActive) {
+    state.entries.forEach((entry) => {
+      if (entry.id !== alreadyActive.id) {
+        entry.isActive = false;
+      }
+    });
+    return;
+  }
+  const firstPending = pendingEntries[0];
+  state.entries.forEach((entry) => {
+    entry.isActive = entry.id === firstPending.id;
+  });
+}
+__name(ensureSingleActiveEntry, "ensureSingleActiveEntry");
+function buildQueueText(state) {
+  const lines = [
+    `<b>${getQueueModeTitle(state.mode)}</b>`,
+    `<i>${getQueueInstruction(state.mode)}</i>`,
+    "",
+    state.isOpen ? `<b>${QUEUE_OPEN_LABEL}</b>` : `<b>${QUEUE_CLOSED_LABEL}</b>`,
+    ""
+  ];
+  if (state.entries.length === 0) {
+    lines.push("\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E.");
+    lines.push(...QUEUE_FOOTER_LINES);
+    return lines.join("\n");
+  }
+  for (const [index, entry] of state.entries.entries()) {
+    let marker = "\u2022";
+    if (entry.status === "done") {
+      marker = "\u2705";
+    } else if (entry.isActive) {
+      marker = "\u25B6";
+    }
+    lines.push(`${marker} ${index + 1}. ${entry.author} \u2014 ${entry.label}`);
+  }
+  lines.push(...QUEUE_FOOTER_LINES);
+  return lines.join("\n");
+}
+__name(buildQueueText, "buildQueueText");
+function getEntryBlock(state, entry) {
+  if (state.mode === "bill") {
+    return entry.block;
+  }
+  return "single";
+}
+__name(getEntryBlock, "getEntryBlock");
+function addQueueEntryToState(state, entry) {
+  state.entries.push(entry);
+  if (state.mode === "bill") {
+    const priorityOrder = { first: 1, "222": 2, "333": 3, "444": 4 };
+    state.entries.sort((a, b) => {
+      const diff = (priorityOrder[a.block] ?? 99) - (priorityOrder[b.block] ?? 99);
+      if (diff !== 0) {
+        return diff;
+      }
+      return a.createdAt - b.createdAt;
+    });
+  } else {
+    state.entries.sort((a, b) => a.createdAt - b.createdAt);
+  }
+  ensureSingleActiveEntry(state);
+}
+__name(addQueueEntryToState, "addQueueEntryToState");
+function getNextPendingIndex(state, startIndex = 0) {
+  for (let i = startIndex; i < state.entries.length; i += 1) {
+    if (state.entries[i].status === "pending") {
+      return i;
+    }
+  }
+  return -1;
+}
+__name(getNextPendingIndex, "getNextPendingIndex");
+function getCurrentActiveIndex(state) {
+  return state.entries.findIndex((entry) => entry.isActive && entry.status === "pending");
+}
+__name(getCurrentActiveIndex, "getCurrentActiveIndex");
+function activateFirstPending(state) {
+  state.entries.forEach((entry) => {
+    entry.isActive = false;
+  });
+  const firstIndex = getNextPendingIndex(state, 0);
+  if (firstIndex !== -1) {
+    state.entries[firstIndex].isActive = true;
+  }
+}
+__name(activateFirstPending, "activateFirstPending");
+function getNextBillSpeechCode(state, author) {
+  const getSpeechCode = (entry) => {
+    const match = String(entry.label || "").match(/^(111|222|333|444)(?:\s|$)/);
+    return match ? match[1] : null;
+  };
+  const count = state.entries.filter(
+    (entry) => entry.author === author && ["111", "222", "333", "444"].includes(getSpeechCode(entry))
+  ).length;
+  if (count <= 0) return "111";
+  if (count === 1) return "222";
+  if (count === 2) return "333";
+  return "444";
+}
+__name(getNextBillSpeechCode, "getNextBillSpeechCode");
+function getBillSpeechBlock(label) {
+  if (label === "111") return "first";
+  return label;
+}
+__name(getBillSpeechBlock, "getBillSpeechBlock");
+function parseBillQueueEntry(message, state, { allowGameEntries = true } = {}) {
+  const rawText = String(message.text || "").trim();
+  const normalized = normalizeText2(rawText);
+  const questionNumber = getBillQuestionNumber(rawText);
+  if (questionNumber !== null) {
+    if (!allowGameEntries) return null;
+    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText);
+  }
+  const trigger = normalized.match(/^(222|333|444)(?:[\s!.,?:;#-]*)$/);
+  const speechNote = getQueue111Note(rawText);
+  if (!trigger && speechNote === null) {
+    return null;
+  }
+  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote });
+}
+__name(parseBillQueueEntry, "parseBillQueueEntry");
+function parseBkQueueEntry(message) {
+  const rawText = String(message.text || "").trim();
+  const normalized = normalizeText2(rawText);
+  if (/\b222\b|\b333\b|\b444\b/.test(normalized)) {
+    return null;
+  }
+  const speechNote = getQueue111Note(rawText);
+  if (speechNote === null) {
+    return null;
+  }
+  const label = formatQueue111Label(speechNote);
+  return makeQueueEntry(message, "bk", label, rawText);
+}
+__name(parseBkQueueEntry, "parseBkQueueEntry");
+function parseRsQueueEntry(message) {
+  const rawText = String(message.text || "").trim();
+  const speechNote = getQueue111Note(rawText);
+  if (speechNote === null) {
+    return null;
+  }
+  return makeQueueEntry(message, "rs", formatQueue111Label(speechNote), rawText);
+}
+__name(parseRsQueueEntry, "parseRsQueueEntry");
+function parseQueueEntry(message, state, options = {}) {
+  if (!state?.isOpen || !state?.mode) {
+    return null;
+  }
+  if (state.mode === "bill") {
+    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false });
+  }
+  if (state.mode === "bk") {
+    return parseBkQueueEntry(message);
+  }
+  if (state.mode === "rs") {
+    return parseRsQueueEntry(message);
+  }
+  return null;
+}
+__name(parseQueueEntry, "parseQueueEntry");
+var QueueStateDurableObject = class {
+  static {
+    __name(this, "QueueStateDurableObject");
+  }
+  constructor(state) {
+    this.state = state;
+  }
+  async loadState() {
+    return await this.state.storage.get("queue-state") || createEmptyQueueState();
+  }
+  async saveState(queueState) {
+    await this.state.storage.put("queue-state", queueState);
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let queueState = await this.loadState();
+    try {
+      if (action === "get") {
+        return Response.json({ ok: true, state: queueState });
+      }
+      if (action === "set_message_id") {
+        queueState.queueMessageId = payload.messageId ?? null;
+        await this.saveState(queueState);
+        return Response.json({ ok: true });
+      }
+      if (action === "clear") {
+        const previousMessageId = queueState.queueMessageId;
+        queueState = createEmptyQueueState();
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          cleared: true,
+          previousMessageId
+        });
+      }
+      if (action === "open") {
+        const previousMessageId = queueState.queueMessageId;
+        pushQueueHistory(queueState);
+        queueState.isOpen = true;
+        queueState.mode = payload.mode;
+        queueState.entries = [];
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "close") {
+        pushQueueHistory(queueState);
+        queueState.isOpen = false;
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "add") {
+        pushQueueHistory(queueState);
+        if (payload.entry?.kind === "bill_speech") {
+          const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
+          payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
+          payload.entry.block = getBillSpeechBlock(nextCode);
+          payload.entry.kind = null;
+        }
+        addQueueEntryToState(queueState, payload.entry);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "done") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("Некого отмечать: активный участник сейчас не выбран.");
+        }
+        pushQueueHistory(queueState);
+        queueState.entries[activeIndex].status = "done";
+        queueState.entries[activeIndex].isActive = false;
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "remove") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("Некого удалять: активный участник сейчас не выбран.");
+        }
+        pushQueueHistory(queueState);
+        queueState.entries.splice(activeIndex, 1);
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "remove_by_number") {
+        const visibleNumber = Number(payload.index);
+        if (!Number.isInteger(visibleNumber) || visibleNumber < 1 || visibleNumber > queueState.entries.length) {
+          throw new Error("\u041d\u0435\u0442 \u0442\u0430\u043a\u043e\u0433\u043e \u043d\u043e\u043c\u0435\u0440\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u0438.");
+        }
+        pushQueueHistory(queueState);
+        queueState.entries.splice(visibleNumber - 1, 1);
+        ensureSingleActiveEntry(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "skip") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("Некого пропускать: активный участник сейчас не выбран.");
+        }
+        const currentEntry = queueState.entries[activeIndex];
+        const block = getEntryBlock(queueState, currentEntry);
+        let targetIndex = -1;
+        for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
+          if (queueState.entries[i].status === "pending" && getEntryBlock(queueState, queueState.entries[i]) === block) {
+            targetIndex = i;
+            break;
+          }
+        }
+        if (targetIndex === -1) {
+          for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
+            if (queueState.entries[i].status === "pending") {
+              targetIndex = i;
+              break;
+            }
+          }
+        }
+        if (targetIndex === -1) {
+          throw new Error("Ниже в очереди больше никого нет.");
+        }
+        pushQueueHistory(queueState);
+        const nextEntry = queueState.entries[targetIndex];
+        queueState.entries[activeIndex] = nextEntry;
+        queueState.entries[targetIndex] = currentEntry;
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      if (action === "undo") {
+        if (!queueState.history.length) {
+          throw new Error("Откатывать пока нечего.");
+        }
+        const previousMessageId = queueState.queueMessageId;
+        const snapshot = queueState.history.pop();
+        queueState = {
+          ...snapshot,
+          history: queueState.history,
+          queueMessageId: null
+        };
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId
+        });
+      }
+      return Response.json({ ok: false, error: "Неизвестное действие очереди." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+};
+function createEmptyTimerState() {
+  return {
+    status: "idle",
+    isRunning: false,
+    durationSec: TIMER_DEFAULT_SECONDS,
+    endsAt: null,
+    messageId: null,
+    finishedAt: null,
+    finishedStickerSent: false
+  };
+}
+__name(createEmptyTimerState, "createEmptyTimerState");
+function createEmptyLightTalkState() {
+  return {
+    history: [],
+    lastActiveAt: 0
+  };
+}
+__name(createEmptyLightTalkState, "createEmptyLightTalkState");
+function trimLightTalkHistory(history) {
+  const fresh = (Array.isArray(history) ? history : []).filter((item) => {
+    const createdAt = Number(item?.createdAt || 0);
+    return createdAt && Date.now() - createdAt <= LIGHT_TALK_TTL_MS && typeof item.text === "string" && item.text.trim();
+  });
+  let total = 0;
+  const result = [];
+  for (let i = fresh.length - 1; i >= 0; i -= 1) {
+    const item = fresh[i];
+    total += item.text.length;
+    if (total > LIGHT_TALK_MAX_CHARS) break;
+    result.unshift(item);
+  }
+  return result;
+}
+__name(trimLightTalkHistory, "trimLightTalkHistory");
+function formatTimerMinutes(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.ceil(totalSeconds));
+  const minutes = Math.max(1, Math.ceil(safeSeconds / 60));
+  const suffix = minutes === 1 ? "\u043C\u0438\u043D\u0443\u0442\u0430" : minutes >= 2 && minutes <= 4 ? "\u043C\u0438\u043D\u0443\u0442\u044B" : "\u043C\u0438\u043D\u0443\u0442";
+  return `${minutes} ${suffix}`;
+}
+__name(formatTimerMinutes, "formatTimerMinutes");
+var TIMER_MAX_TICK_MS = 60 * 1e3;
+function getTimerTickDelayMs(totalSeconds) {
+  const safeSeconds = Math.max(1, Math.ceil(totalSeconds));
+  const secondsUntilMinuteChange = safeSeconds % 60 || 60;
+  return Math.min(TIMER_MAX_TICK_MS, secondsUntilMinuteChange * 1e3);
+}
+__name(getTimerTickDelayMs, "getTimerTickDelayMs");
+function buildTimerText(timerState) {
+  if (timerState.status === "finished") {
+    return "\u0412\u0440\u0435\u043C\u044F \u0438\u0441\u0442\u0435\u043A\u043B\u043E";
+  }
+  if (timerState.isRunning && timerState.endsAt) {
+    const remainingSec = Math.max(0, Math.ceil((timerState.endsAt - Date.now()) / 1e3));
+    return `\u041E\u0421\u0422\u0410\u041B\u041E\u0421\u042C: ${formatTimerMinutes(remainingSec)}`;
+  }
+  return "\u0422\u0430\u0439\u043C\u0435\u0440 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D.";
+}
+__name(buildTimerText, "buildTimerText");
+var TimerStateDurableObject = class {
+  static {
+    __name(this, "TimerStateDurableObject");
+  }
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+  async loadState() {
+    return await this.state.storage.get("timer-state") || createEmptyTimerState();
+  }
+  async saveState(timerState) {
+    await this.state.storage.put("timer-state", timerState);
+  }
+  async publishTimerState(timerState) {
+    const text = buildTimerText(timerState);
+    const existingMessageId = timerState.messageId;
+    if (existingMessageId) {
+      try {
+        await editMessageText(this.env, CHAT_GROUP_ID, existingMessageId, text, buildTimerKeyboard(), null);
+        return existingMessageId;
+      } catch (error) {
+        if (/message is not modified/i.test(error.message)) {
+          return existingMessageId;
+        }
+      }
+    }
+    const sent = await sendMessage(this.env, CHAT_GROUP_ID, text, null, null, buildTimerKeyboard(), null, shouldSilenceBotChat(CHAT_GROUP_ID));
+    timerState.messageId = sent.result?.message_id ?? null;
+    return timerState.messageId;
+  }
+  async publishFinishedSticker(timerState) {
+    if (timerState.finishedStickerSent) {
+      return;
+    }
+    const stickerSet = await getStickerSet(this.env, TIMER_DONE_STICKER_SET_NAME);
+    const stickerFileId = stickerSet.result?.stickers?.[0]?.file_id;
+    if (!stickerFileId) {
+      throw new Error(`Sticker set ${TIMER_DONE_STICKER_SET_NAME} is empty.`);
+    }
+    await sendSticker(this.env, CHAT_GROUP_ID, stickerFileId, null, "\u23F0", shouldSilenceBotChat(CHAT_GROUP_ID));
+    timerState.finishedStickerSent = true;
+  }
+  async reschedule(timerState) {
+    if (timerState.isRunning && timerState.endsAt) {
+      const remainingSec = Math.max(0, Math.ceil((timerState.endsAt - Date.now()) / 1e3));
+      const nextTick = Math.min(timerState.endsAt, Date.now() + getTimerTickDelayMs(remainingSec));
+      await this.state.storage.setAlarm(nextTick);
+      return;
+    }
+    await this.state.storage.deleteAlarm();
+  }
+  async tick() {
+    const timerState = await this.loadState();
+    if (!timerState.isRunning) {
+      const finishedAt = Number(timerState.finishedAt || 0);
+      if (timerState.status === "finished" && !timerState.finishedStickerSent && finishedAt && Date.now() - finishedAt <= 10 * 60 * 1e3) {
+        try {
+          await this.publishFinishedSticker(timerState);
+          await this.saveState(timerState);
+        } catch (error) {
+          console.error("timer finished sticker retry failed", error);
+        }
+      }
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const remainingSec = Math.max(0, Math.ceil((timerState.endsAt - Date.now()) / 1e3));
+    if (remainingSec <= 0) {
+      timerState.status = "finished";
+      timerState.isRunning = false;
+      timerState.endsAt = null;
+      timerState.finishedAt = Date.now();
+      await this.saveState(timerState);
+      try {
+        await this.publishTimerState(timerState);
+      } catch {
+      }
+      try {
+        await this.publishFinishedSticker(timerState);
+      } catch (error) {
+        console.error("timer finished sticker failed", error);
+      }
+      await this.saveState(timerState);
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    try {
+      await this.publishTimerState(timerState);
+    } catch {
+    }
+    await this.saveState(timerState);
+    await this.reschedule(timerState);
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let timerState = await this.loadState();
+    try {
+      if (action === "get") {
+        return Response.json({ ok: true, state: timerState });
+      }
+      if (action === "start") {
+        const durationSec = Number.isFinite(Number(payload.durationSec)) ? Math.max(10, Math.floor(Number(payload.durationSec))) : TIMER_DEFAULT_SECONDS;
+        const messageId = Number(payload.messageId);
+        timerState.status = "running";
+        timerState.isRunning = true;
+        timerState.durationSec = durationSec;
+        timerState.endsAt = Date.now() + durationSec * 1e3;
+        if (Number.isFinite(messageId) && messageId > 0) {
+          timerState.messageId = messageId;
+        }
+        timerState.finishedAt = null;
+        timerState.finishedStickerSent = false;
+        await this.saveState(timerState);
+        try {
+          await this.publishTimerState(timerState);
+        } catch {
+        }
+        await this.saveState(timerState);
+        await this.reschedule(timerState);
+        return Response.json({ ok: true });
+      }
+      if (action === "stop") {
+        const messageId = Number(payload.messageId);
+        if (Number.isFinite(messageId) && messageId > 0) {
+          timerState.messageId = messageId;
+        }
+        timerState.status = "stopped";
+        timerState.isRunning = false;
+        timerState.endsAt = null;
+        timerState.finishedAt = null;
+        timerState.finishedStickerSent = false;
+        await this.saveState(timerState);
+        try {
+          await this.publishTimerState(timerState);
+        } catch {
+        }
+        await this.saveState(timerState);
+        await this.reschedule(timerState);
+        return Response.json({ ok: true });
+      }
+      if (action === "tick") {
+        await this.tick();
+        return Response.json({ ok: true });
+      }
+      return Response.json({ ok: false, error: "\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0442\u0430\u0439\u043C\u0435\u0440\u0430." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+  async alarm() {
+    await this.tick();
+  }
+};
+var LightTalkStateDurableObject = class {
+  static {
+    __name(this, "LightTalkStateDurableObject");
+  }
+  constructor(state) {
+    this.state = state;
+  }
+  async loadState() {
+    const state = await this.state.storage.get("light-talk-state") || createEmptyLightTalkState();
+    if (state.lastActiveAt && Date.now() - state.lastActiveAt > LIGHT_TALK_TTL_MS) {
+      return createEmptyLightTalkState();
+    }
+    state.history = trimLightTalkHistory(state.history);
+    return state;
+  }
+  async saveState(lightTalkState) {
+    const hasHistory = Array.isArray(lightTalkState.history) && lightTalkState.history.length > 0;
+    if (!hasHistory) {
+      await this.state.storage.delete("light-talk-state");
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    lightTalkState.lastActiveAt = Date.now();
+    lightTalkState.history = trimLightTalkHistory(lightTalkState.history);
+    await this.state.storage.put("light-talk-state", lightTalkState);
+    await this.state.storage.setAlarm(lightTalkState.lastActiveAt + LIGHT_TALK_TTL_MS);
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let lightTalkState = await this.loadState();
+    try {
+      if (action === "get") {
+        return Response.json({ ok: true, state: lightTalkState });
+      }
+      if (action === "append") {
+        const role = payload.role === "assistant" ? "assistant" : "user";
+        const text = String(payload.text || "").trim();
+        if (text) {
+          lightTalkState.history.push({
+            role,
+            text,
+            createdAt: Date.now()
+          });
+          await this.saveState(lightTalkState);
+        }
+        return Response.json({ ok: true, state: lightTalkState });
+      }
+      if (action === "reset") {
+        lightTalkState = createEmptyLightTalkState();
+        await this.saveState(lightTalkState);
+        return Response.json({ ok: true, state: lightTalkState });
+      }
+      return Response.json({ ok: false, error: "\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043B\u0451\u0433\u043A\u043E\u0439 \u0431\u0435\u0441\u0435\u0434\u044B." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+  async alarm() {
+    await this.state.storage.delete("light-talk-state");
+    await this.state.storage.deleteAlarm();
+  }
+};
+var AnnouncementStateDurableObject = class {
+  static {
+    __name(this, "AnnouncementStateDurableObject");
+  }
+  constructor(state) {
+    this.state = state;
+  }
+  async loadState() {
+    return normalizeAnnouncementState(await this.state.storage.get("announcement-state"));
+  }
+  async saveState(announcementState) {
+    await this.state.storage.put("announcement-state", normalizeAnnouncementState(announcementState));
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    const announcementState = await this.loadState();
+    try {
+      if (action === "get") {
+        const key = String(payload.key || "").trim();
+        return Response.json({
+          ok: true,
+          messageId: key ? announcementState.messageIds[key] ?? null : null,
+          state: announcementState
+        });
+      }
+      if (action === "set_message_id") {
+        const key = String(payload.key || "").trim();
+        if (!key) {
+          return Response.json({ ok: false, error: "Не указан ключ объявления." }, { status: 400 });
+        }
+        const messageId = payload.messageId ?? null;
+        if (messageId) {
+          announcementState.messageIds[key] = messageId;
+        } else {
+          delete announcementState.messageIds[key];
+        }
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, messageId: announcementState.messageIds[key] ?? null });
+      }
+      if (action === "get_personal_subscription") {
+        const userId = String(payload.userId || "").trim();
+        return Response.json({
+          ok: true,
+          subscription: userId ? announcementState.personalSubscriptions[userId] ?? null : null
+        });
+      }
+      if (action === "set_personal_subscription") {
+        const userId = String(payload.userId || "").trim();
+        if (!userId) {
+          return Response.json({ ok: false, error: "Не указан пользователь личной рассылки." }, { status: 400 });
+        }
+        const previous = announcementState.personalSubscriptions[userId] || {};
+        const next = {
+          ...previous,
+          ...payload.subscription,
+          userId,
+          updatedAt: Date.now()
+        };
+        announcementState.personalSubscriptions[userId] = next;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, subscription: next });
+      }
+      if (action === "list_personal_subscriptions") {
+        return Response.json({
+          ok: true,
+          subscriptions: Object.values(announcementState.personalSubscriptions || {})
+        });
+      }
+      if (action === "get_admin_dm_draft") {
+        const userId = String(payload.userId || "").trim();
+        return Response.json({
+          ok: true,
+          draft: userId ? announcementState.adminDmDrafts[userId] ?? null : null
+        });
+      }
+      if (action === "set_admin_dm_draft") {
+        const userId = String(payload.userId || "").trim();
+        if (!userId) {
+          return Response.json({ ok: false, error: "Не указан админ для черновика." }, { status: 400 });
+        }
+        const draft = {
+          ...payload.draft,
+          userId,
+          updatedAt: Date.now()
+        };
+        announcementState.adminDmDrafts[userId] = draft;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, draft });
+      }
+      if (action === "clear_admin_dm_draft") {
+        const userId = String(payload.userId || "").trim();
+        if (userId) {
+          delete announcementState.adminDmDrafts[userId];
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true });
+      }
+      if (action === "get_admin_dm_user") {
+        const userId = String(payload.userId || "").trim();
+        return Response.json({
+          ok: true,
+          admin: userId ? announcementState.adminDmUsers[userId] ?? null : null
+        });
+      }
+      if (action === "set_admin_dm_user") {
+        const userId = String(payload.userId || "").trim();
+        if (!userId) {
+          return Response.json({ ok: false, error: "Не указан админ." }, { status: 400 });
+        }
+        const admin = {
+          ...payload.admin,
+          userId,
+          updatedAt: Date.now()
+        };
+        announcementState.adminDmUsers[userId] = admin;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, admin });
+      }
+      if (action === "remove_admin_dm_user") {
+        const userId = String(payload.userId || "").trim();
+        if (userId) {
+          delete announcementState.adminDmUsers[userId];
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true });
+      }
+      if (action === "list_admin_dm_users") {
+        return Response.json({
+          ok: true,
+          admins: Object.values(announcementState.adminDmUsers || {})
+        });
+      }
+      if (action === "create_replacement_request") {
+        const request = payload.request && typeof payload.request === "object" ? payload.request : {};
+        const dedupeKey = String(payload.dedupeKey || request.dedupeKey || "").trim();
+        if (!dedupeKey) {
+          return Response.json({ ok: false, error: "Не указан ключ запроса на замену." }, { status: 400 });
+        }
+        const existingOpen = Object.values(announcementState.replacementRequests || {}).find((item) => item?.dedupeKey === dedupeKey && item?.status === "open");
+        if (existingOpen) {
+          console.log("replacement duplicate click", { request_id: existingOpen.id, dedupe_key: dedupeKey });
+          return Response.json({ ok: true, created: false, duplicateOpen: true, request: existingOpen });
+        }
+        const id = String(request.id || `rr_${Date.now().toString(36)}`).trim();
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        const next = {
+          id,
+          dedupeKey,
+          date: String(request.date || "").trim(),
+          time: request.time || "21:30",
+          group_name: request.group_name || "\u041f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0435",
+          service: String(request.service || "").trim(),
+          request_kind: String(request.request_kind || "replacement").trim(),
+          vacancy_text: String(request.vacancy_text || "").trim(),
+          original_person_name: String(request.original_person_name || "").trim(),
+          original_user_id: String(request.original_user_id || "").trim(),
+          original_username: String(request.original_username || "").trim(),
+          status: "open",
+          responders: [],
+          selected_responder_id: null,
+          selected_responder_name: null,
+          selected_responder_username: null,
+          coordinator_message_chat_id: null,
+          coordinator_message_id: null,
+          admin_thread_message_chat_id: null,
+          admin_thread_message_id: null,
+          selected_at: null,
+          acknowledged_at: null,
+          created_at: request.created_at || now,
+          closed_at: null
+        };
+        announcementState.replacementRequests[id] = next;
+        await this.saveState(announcementState);
+        console.log("replacement request created", { request_id: id, dedupe_key: dedupeKey, date: next.date, service: next.service });
+        return Response.json({ ok: true, created: true, duplicateOpen: false, request: next });
+      }
+      if (action === "close_open_replacement_request_by_dedupe") {
+        const dedupeKey = String(payload.dedupeKey || "").trim();
+        const request = Object.values(announcementState.replacementRequests || {}).find((item) => item?.dedupeKey === dedupeKey && item?.status === "open");
+        if (!request) {
+          return Response.json({ ok: true, found: false, closed: false, request: null });
+        }
+        request.status = "closed";
+        request.closed_at = (/* @__PURE__ */ new Date()).toISOString();
+        announcementState.replacementRequests[request.id] = request;
+        await this.saveState(announcementState);
+        console.log("request closed", { request_id: request.id, action: "test_reset" });
+        return Response.json({ ok: true, found: true, closed: true, request });
+      }
+      if (action === "get_replacement_request") {
+        const id = String(payload.id || "").trim();
+        return Response.json({
+          ok: true,
+          request: id ? announcementState.replacementRequests[id] ?? null : null
+        });
+      }
+      if (action === "set_replacement_coordinator_message") {
+        const id = String(payload.id || "").trim();
+        const request = id ? announcementState.replacementRequests[id] ?? null : null;
+        if (!request) {
+          return Response.json({ ok: true, found: false, request: null });
+        }
+        if (payload.chatId !== void 0 || payload.chat_id !== void 0) {
+          request.coordinator_message_chat_id = payload.chatId ?? payload.chat_id ?? null;
+        }
+        if (payload.messageId !== void 0 || payload.message_id !== void 0) {
+          request.coordinator_message_id = payload.messageId ?? payload.message_id ?? null;
+        }
+        if (payload.adminChatId !== void 0 || payload.admin_chat_id !== void 0) {
+          request.admin_thread_message_chat_id = payload.adminChatId ?? payload.admin_chat_id ?? null;
+        }
+        if (payload.adminMessageId !== void 0 || payload.admin_message_id !== void 0) {
+          request.admin_thread_message_id = payload.adminMessageId ?? payload.admin_message_id ?? null;
+        }
+        announcementState.replacementRequests[id] = request;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, found: true, request });
+      }
+      if (action === "add_replacement_responder") {
+        const id = String(payload.id || "").trim();
+        const responder = payload.responder && typeof payload.responder === "object" ? payload.responder : {};
+        const request = id ? announcementState.replacementRequests[id] ?? null : null;
+        if (!request) {
+          return Response.json({ ok: true, found: false, added: false, closed: false, duplicate: false, request: null });
+        }
+        if (request.status !== "open") {
+          console.log("closed request click", { request_id: id, user_id: responder.user_id || responder.userId || "" });
+          return Response.json({ ok: true, found: true, added: false, closed: true, duplicate: false, request });
+        }
+        const userId = String(responder.user_id || responder.userId || "").trim();
+        if (!userId) {
+          return Response.json({ ok: false, error: "Не указан откликнувшийся админ." }, { status: 400 });
+        }
+        const responders = Array.isArray(request.responders) ? request.responders : [];
+        if (responders.some((item) => String(item?.user_id || item?.userId || "").trim() === userId)) {
+          console.log("duplicate click", { request_id: id, user_id: userId });
+          request.responders = responders;
+          return Response.json({ ok: true, found: true, added: false, closed: false, duplicate: true, request });
+        }
+        request.responders = [
+          ...responders,
+          {
+            user_id: userId,
+            private_chat_id: responder.private_chat_id || responder.privateChatId || responder.chatId || userId,
+            username: responder.username || "",
+            name: responder.name || "",
+            responded_at: (/* @__PURE__ */ new Date()).toISOString()
+          }
+        ];
+        announcementState.replacementRequests[id] = request;
+        await this.saveState(announcementState);
+        console.log("responder added", { request_id: id, user_id: userId, responders_count: request.responders.length });
+        return Response.json({ ok: true, found: true, added: true, closed: false, duplicate: false, request });
+      }
+      if (action === "select_replacement_responder") {
+        const id = String(payload.id || "").trim();
+        const responderId = String(payload.responderId || "").trim();
+        const request = id ? announcementState.replacementRequests[id] ?? null : null;
+        if (!request) {
+          return Response.json({ ok: true, found: false, selected: false, closed: false, request: null });
+        }
+        if (request.status !== "open") {
+          console.log("duplicate click", { request_id: id, action: "select_closed", responder_id: responderId });
+          return Response.json({ ok: true, found: true, selected: false, closed: true, request });
+        }
+        const responders = Array.isArray(request.responders) ? request.responders : [];
+        const selected = responders.find((item) => String(item?.user_id || item?.userId || "").trim() === responderId);
+        if (!selected) {
+          return Response.json({ ok: false, error: "Не нашёл откликнувшегося админа." }, { status: 400 });
+        }
+        request.status = "selected";
+        request.selected_responder_id = String(selected.user_id || selected.userId || "").trim();
+        request.selected_responder_name = String(selected.name || selected.username || "").trim();
+        request.selected_responder_username = String(selected.username || "").trim();
+        request.selected_at = (/* @__PURE__ */ new Date()).toISOString();
+        request.acknowledged_at = null;
+        announcementState.replacementRequests[id] = request;
+        await this.saveState(announcementState);
+        console.log("replacement request selected", { request_id: id, selected_responder_id: request.selected_responder_id });
+        return Response.json({ ok: true, found: true, selected: true, closed: false, request });
+      }
+      if (action === "acknowledge_replacement_request") {
+        const id = String(payload.id || "").trim();
+        const userId = String(payload.userId || "").trim();
+        const request = id ? announcementState.replacementRequests[id] ?? null : null;
+        if (!request) {
+          return Response.json({ ok: true, found: false, acknowledged: false, closed: false, request: null });
+        }
+        if (request.status === "closed") {
+          console.log("duplicate click", { request_id: id, action: "acknowledge_closed", user_id: userId });
+          return Response.json({ ok: true, found: true, acknowledged: false, closed: true, alreadyClosed: true, request });
+        }
+        if (String(request.selected_responder_id || "").trim() !== userId) {
+          return Response.json({ ok: false, error: "Подтверждать может только выбранный заменяющий." }, { status: 403 });
+        }
+        request.status = "closed";
+        request.acknowledged_at = (/* @__PURE__ */ new Date()).toISOString();
+        request.closed_at = request.acknowledged_at;
+        announcementState.replacementRequests[id] = request;
+        await this.saveState(announcementState);
+        console.log("request acknowledged", { request_id: id, user_id: userId });
+        return Response.json({ ok: true, found: true, acknowledged: true, closed: true, request });
+      }
+      if (action === "close_replacement_request") {
+        const id = String(payload.id || "").trim();
+        const userId = String(payload.userId || "").trim();
+        const request = id ? announcementState.replacementRequests[id] ?? null : null;
+        if (!request) {
+          return Response.json({ ok: true, found: false, closed: false, request: null });
+        }
+        if (request.status !== "open") {
+          console.log("duplicate click", { request_id: id, user_id: userId, action: "close_already_closed" });
+          return Response.json({ ok: true, found: true, closed: false, alreadyClosed: true, request });
+        }
+        if (userId && String(request.original_user_id || "").trim() !== userId) {
+          return Response.json({ ok: false, error: "Закрыть запрос может только служащий, который его открыл." }, { status: 403 });
+        }
+        request.status = "closed";
+        request.closed_at = (/* @__PURE__ */ new Date()).toISOString();
+        announcementState.replacementRequests[id] = request;
+        await this.saveState(announcementState);
+        console.log("request closed", { request_id: id, user_id: userId });
+        return Response.json({ ok: true, found: true, closed: true, alreadyClosed: false, request });
+      }
+      return Response.json({ ok: false, error: "Неизвестное действие объявления." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+};
+function getAuthorLabel(message) {
+  const first = message.from?.first_name ?? "";
+  const last = message.from?.last_name ?? "";
+  const fullName = `${first} ${last}`.trim();
+  const username = message.from?.username ? `@${message.from.username}` : "";
+  if (fullName && username) {
+    return `${fullName} (${username})`;
+  }
+  if (fullName) {
+    return fullName;
+  }
+  if (username) {
+    return username;
+  }
+  if (message.sender_chat?.title) {
+    return `\u043E\u0442 \u0438\u043C\u0435\u043D\u0438 \u0447\u0430\u0442\u0430: ${message.sender_chat.title}`;
+  }
+  return "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
+}
+__name(getAuthorLabel, "getAuthorLabel");
+async function applyQueueResponse(env, result) {
+  if (result.publishQueue) {
+    let deletedPreviousMessage = true;
+    if (result.previousMessageId) {
+      const deleted = await deleteMessageSafe(env, CHAT_GROUP_ID, result.previousMessageId);
+      deletedPreviousMessage = deleted;
+      if (!deleted) {
+        console.warn("queue previous message delete skipped", {
+          chatId: CHAT_GROUP_ID,
+          messageId: result.previousMessageId
+        });
+      }
+    }
+    const sent = await sendMessage(
+      env,
+      CHAT_GROUP_ID,
+      result.queueText,
+      null,
+      null,
+      buildQueuePublicKeyboard(),
+      result.parseMode ?? "HTML",
+      true
+    );
+    const messageId = sent.result?.message_id ?? null;
+    if (!messageId && deletedPreviousMessage) {
+      console.error("queue publish failed after deleting previous message", {
+        chatId: CHAT_GROUP_ID,
+        previousMessageId: result.previousMessageId
+      });
+    }
+    await callQueueState(env, "set_message_id", {
+      messageId
+    });
+  }
+  if (result.closeMessage) {
+    await sendMessage(env, CHAT_GROUP_ID, result.closeMessage, null, null, null, null, true);
+  }
+  if (result.cleared && result.previousMessageId) {
+    const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, result.previousMessageId);
+    if (!deletion.ok) {
+      await notifyOwnerTechError(env, {
+        module: "\u043e\u0447\u0435\u0440\u0435\u0434\u044c",
+        operation: "\u043e\u0447\u0438\u0441\u0442\u043a\u0430: \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0442\u0430\u0440\u043e\u0433\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f",
+        error: deletion.error,
+        details: { chat_id: CHAT_GROUP_ID, message_id: result.previousMessageId },
+        hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430 \u043d\u0430 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0438 \u043e\u0447\u0438\u0441\u0442\u043a\u0443 \u043e\u0447\u0435\u0440\u0435\u0434\u0438."
+      });
+    }
+  }
+}
+__name(applyQueueResponse, "applyQueueResponse");
+async function sendAdminDigest(env, kind, author, originalText, tag) {
+  return sendMessage(env, INFO_CHAT_ID, buildAdminDigest(kind, author, originalText, tag), ADMIN_THREAD_ID, null, null, null, shouldSilenceBotChat(INFO_CHAT_ID));
+}
+__name(sendAdminDigest, "sendAdminDigest");
+async function sendAdminSignal(env, author, originalText, deleted = false) {
+  return sendMessage(env, INFO_CHAT_ID, buildAdminSignal(author, originalText, deleted), ADMIN_THREAD_ID, null, null, null, shouldSilenceBotChat(INFO_CHAT_ID));
+}
+__name(sendAdminSignal, "sendAdminSignal");
+async function sendAdminThreadMessage(env, text, disableNotification = true, replyMarkup = null) {
+  return sendMessage(env, INFO_CHAT_ID, text, ADMIN_THREAD_ID, null, replyMarkup, null, disableNotification || shouldSilenceBotChat(INFO_CHAT_ID));
+}
+__name(sendAdminThreadMessage, "sendAdminThreadMessage");
+async function isUserAdmin(env, userId, chatId = INFO_CHAT_ID, chatType = "") {
+  if (isPrivateChat(chatType)) {
+    const roles = await getPrivateRoles(env, userId);
+    return Boolean(roles.isAdmin);
+  }
+  const targetChatId = chatId ?? INFO_CHAT_ID;
+  try {
+    const data = await callTelegram(env, "getChatMember", {
+      chat_id: targetChatId,
+      user_id: userId
+    });
+    const status = data.result?.status;
+    return status === "creator" || status === "administrator";
+  } catch {
+    return false;
+  }
+}
+__name(isUserAdmin, "isUserAdmin");
+async function fetchJsonWithCache(url, cacheName) {
+  const now = Date.now();
+  if (cacheName === "yozhik" && yozhikCache && now - yozhikCacheTime < DATA_CACHE_TTL_MS) {
+    return yozhikCache;
+  }
+  if (cacheName === "bill" && billCache && now - billCacheTime < DATA_CACHE_TTL_MS) {
+    return billCache;
+  }
+  if (cacheName === "speaker_questions" && speakerQuestionsCache && now - speakerQuestionsCacheTime < DATA_CACHE_TTL_MS) {
+    return speakerQuestionsCache;
+  }
+  const candidates = [url];
+  const githubMatch = url.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+  if (githubMatch) {
+    const [, owner, repo, ref, filePath] = githubMatch;
+    candidates.push(`https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${filePath}`);
+  }
+  let lastError = null;
+  let data = null;
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate, {
+        headers: {
+          accept: "application/json"
+        }
+      });
+      if (!response.ok) {
+        lastError = new Error(`Не удалось загрузить ${cacheName}. HTTP ${response.status}`);
+        continue;
+      }
+      data = await response.json();
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!data) {
+    throw lastError || new Error(`Не удалось загрузить ${cacheName}.`);
+  }
+  if (cacheName === "yozhik") {
+    yozhikCache = data;
+    yozhikCacheTime = now;
+  }
+  if (cacheName === "bill") {
+    billCache = data;
+    billCacheTime = now;
+  }
+  if (cacheName === "speaker_questions") {
+    speakerQuestionsCache = data;
+    speakerQuestionsCacheTime = now;
+  }
+  return data;
+}
+__name(fetchJsonWithCache, "fetchJsonWithCache");
+function normalizeSpeakerQuestions(data) {
+  const map = /* @__PURE__ */ new Map();
+  if (Array.isArray(data)) {
+    data.forEach((value, index) => {
+      const question = compact(value || "");
+      if (question) map.set(index + 1, question);
+    });
+    return map;
+  }
+  if (data && typeof data === "object") {
+    for (const [key, value] of Object.entries(data)) {
+      const number = Number(key);
+      const question = compact(value || "");
+      if (Number.isInteger(number) && number > 0 && question) map.set(number, question);
+    }
+  }
+  return map;
+}
+__name(normalizeSpeakerQuestions, "normalizeSpeakerQuestions");
+async function getSpeakerQuestions() {
+  const data = await fetchJsonWithCache(SPEAKER_QUESTIONS_JSON_URL, "speaker_questions");
+  const map = normalizeSpeakerQuestions(data);
+  if (map.size) return map;
+  throw new Error("speaker questions are empty");
+}
+__name(getSpeakerQuestions, "getSpeakerQuestions");
+
+function getMoscowDateKey() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "2-digit",
+    month: "2-digit"
+  }).format(/* @__PURE__ */ new Date());
+}
+__name(getMoscowDateKey, "getMoscowDateKey");
+function getMoscowHumanDate() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "numeric",
+    month: "long"
+  }).format(/* @__PURE__ */ new Date());
+}
+__name(getMoscowHumanDate, "getMoscowHumanDate");
+function isMoscowTime(hour, minute) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(/* @__PURE__ */ new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(values.hour) === hour && Number(values.minute) === minute;
+}
+__name(isMoscowTime, "isMoscowTime");
+function getMoscowClock(date = /* @__PURE__ */ new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const hour = Number(values.hour);
+  const minute = Number(values.minute);
+  const weekday = new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day))).getUTCDay();
+  return {
+    dateKey: `${values.year}-${values.month}-${values.day}`,
+    hour,
+    minute,
+    weekday,
+    minutesOfDay: hour * 60 + minute
+  };
+}
+__name(getMoscowClock, "getMoscowClock");
+function isWithinMoscowWindow(clock, hour, minute, windowMinutes = 20) {
+  const target = hour * 60 + minute;
+  const delta = clock.minutesOfDay - target;
+  return delta >= 0 && delta < windowMinutes;
+}
+__name(isWithinMoscowWindow, "isWithinMoscowWindow");
+function getMoscowDateTimeText(date = /* @__PURE__ */ new Date()) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date).replace(",", "") + " \u041c\u0421\u041a";
+}
+__name(getMoscowDateTimeText, "getMoscowDateTimeText");
+function shortError(error) {
+  const text = String(error?.message || error || "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e").replace(/\s+/g, " ").trim();
+  return text.slice(0, 240);
+}
+__name(shortError, "shortError");
+function getErrorCode(error) {
+  const text = String(error?.message || error || "");
+  const code = text.match(/"error_code"\s*:\s*(\d+)/)?.[1] || text.match(/\b(400|403|429|500|502|503|504)\b/)?.[1] || "error";
+  return code;
+}
+__name(getErrorCode, "getErrorCode");
+function safeTechDetails(details = {}) {
+  return Object.entries(details).filter(([key]) => !/(?:text|message_text|body|content|personal|private)/iu.test(key)).map(([key, value]) => `${key}=${String(value ?? "").slice(0, 500)}`).join("\n") || "\u2014";
+}
+__name(safeTechDetails, "safeTechDetails");
+async function notifyOwnerTechError(env, { module, operation, error, details = {}, hint = "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043b\u043e\u0433\u0438, \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430 \u0438 \u0438\u0441\u0445\u043e\u0434\u043d\u044b\u0435 id." } = {}) {
+  const ownerChatId = env?.OWNER_PRIVATE_CHAT_ID || env?.OWNER_USER_ID;
+  if (!ownerChatId) return;
+  const errorCode = getErrorCode(error);
+  const noticeKey = `bot_error_notice:${module || "unknown"}:${operation || "unknown"}:${errorCode}`;
+  const now = Date.now();
+  try {
+    const previous = await callAnnouncementState(env, "get", { key: noticeKey }).catch(() => ({ messageId: null }));
+    if (previous?.messageId && now - Number(previous.messageId) < 30 * 60 * 1e3) {
+      return;
+    }
+    await callAnnouncementState(env, "set_message_id", { key: noticeKey, messageId: now }).catch(() => null);
+    const text = [
+      "\u26a0\ufe0f \u0421\u0431\u043e\u0439 \u041d\u0430\u0444\u0430\u043d\u0438",
+      "",
+      `\u041c\u043e\u0434\u0443\u043b\u044c: ${module || "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e"}`,
+      `\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u044f: ${operation || "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e"}`,
+      `\u0412\u0440\u0435\u043c\u044f: ${getMoscowDateTimeText()}`,
+      `\u041e\u0448\u0438\u0431\u043a\u0430: ${shortError(error)}`,
+      "",
+      "\u0414\u0435\u0442\u0430\u043b\u0438:",
+      safeTechDetails(details),
+      "",
+      "\u0427\u0442\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c:",
+      hint
+    ].join("\n");
+    await sendMessage(env, ownerChatId, text);
+  } catch (noticeError) {
+    console.error("owner tech notice failed", noticeError);
+  }
+}
+__name(notifyOwnerTechError, "notifyOwnerTechError");
+function normalizeServiceName(value) {
+  return String(value || "").toLowerCase().replace(/\u0451/g, "\u0435").replace(/[^\p{L}\p{N}@._-]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+__name(normalizeServiceName, "normalizeServiceName");
+function isMissingServicePerson(value) {
+  const text = normalizeServiceName(value);
+  return !text || /^(?:-|n\/a|n\/d|null|none|\u043d\u0435\u0442|\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d|\u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e|\u043d\/\u0434|\u0441\u0432\u043e\u0431\u043e\u0434\u043d\u043e)$/u.test(text);
+}
+__name(isMissingServicePerson, "isMissingServicePerson");
+function parseServicePersonMapEnv(env) {
+  const raw = String(env?.SERVICE_PERSON_MAP_JSON || "").trim();
+  if (!raw) return [];
+  try {
+    const data = JSON.parse(raw);
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === "object") {
+      return Object.entries(data).map(([displayName, item]) => ({
+        display_name: displayName,
+        ...(item && typeof item === "object" ? item : { telegram_user_id: item })
+      }));
+    }
+  } catch (error) {
+    console.error("service person map parse failed", error);
+  }
+  return [];
+}
+__name(parseServicePersonMapEnv, "parseServicePersonMapEnv");
+function serviceMapEntryFromSubscription(subscription) {
+  const firstName = String(subscription?.firstName || "").trim();
+  const lastName = String(subscription?.lastName || "").trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(" ");
+  return {
+    display_name: fullName || firstName || subscription?.username || subscription?.userId || "",
+    telegram_user_id: subscription?.userId || null,
+    private_chat_id: subscription?.chatId || subscription?.userId || null,
+    username: subscription?.username || ""
+  };
+}
+__name(serviceMapEntryFromSubscription, "serviceMapEntryFromSubscription");
+function entryMatchesServiceName(entry, name) {
+  const wanted = normalizeServiceName(name);
+  if (!wanted) return false;
+  const candidates = [
+    entry?.display_name,
+    entry?.displayName,
+    entry?.name,
+    entry?.firstName,
+    [entry?.firstName, entry?.lastName].filter(Boolean).join(" "),
+    entry?.username ? `@${entry.username}` : "",
+    entry?.username
+  ].map(normalizeServiceName).filter(Boolean);
+  return candidates.some((candidate) => candidate === wanted || candidate.includes(wanted) || wanted.includes(candidate));
+}
+__name(entryMatchesServiceName, "entryMatchesServiceName");
+async function buildServicePersonMap(env) {
+  const fromEnv = parseServicePersonMapEnv(env);
+  const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  return [...fromEnv, ...(subscriptions?.subscriptions || []).map(serviceMapEntryFromSubscription)];
+}
+__name(buildServicePersonMap, "buildServicePersonMap");
+function resolveServicePerson(map, name) {
+  const entry = map.find((item) => entryMatchesServiceName(item, name));
+  if (!entry) return null;
+  const username = String(entry.username || "").replace(/^@/u, "").trim();
+  const linkedEntry = username
+    ? map.find((item) => String(item?.username || "").replace(/^@/u, "").toLowerCase() === username.toLowerCase() && (item?.userId || item?.telegram_user_id || item?.chatId || item?.private_chat_id))
+    : null;
+  const source = linkedEntry || entry;
+  const userId = source.telegram_user_id || source.telegramUserId || source.userId || source.user_id || null;
+  const chatId = source.private_chat_id || source.privateChatId || source.chatId || source.chat_id || userId || null;
+  return {
+    displayName: source.display_name || source.displayName || source.name || entry.display_name || entry.displayName || entry.name || name,
+    userId,
+    chatId,
+    username: source.username || username || ""
+  };
+}
+__name(resolveServicePerson, "resolveServicePerson");
+function formatServicePersonLabel(personName, personMap) {
+  const raw = compact(personName || "");
+  if (!raw) return "";
+  const person = resolveServicePerson(personMap, raw);
+  const displayName = compact(person?.displayName || raw);
+  const username = String(person?.username || "").replace(/^@/u, "").trim();
+  const handle = username ? `@${username}` : "";
+  if (!handle) return displayName;
+  return displayName.toLowerCase().includes(handle.toLowerCase()) ? displayName : `${displayName} ${handle}`;
+}
+__name(formatServicePersonLabel, "formatServicePersonLabel");
+function normalizeServiceHeader(value) {
+  return normalizeServiceName(value);
+}
+__name(normalizeServiceHeader, "normalizeServiceHeader");
+function findServiceHeaderIndex(headerRow, variants) {
+  const expected = variants.map(normalizeServiceHeader);
+  for (let i = 0; i < headerRow.length; i += 1) {
+    const header = normalizeServiceHeader(headerRow[i]);
+    if (expected.some((variant) => header.includes(variant))) return i;
+  }
+  return -1;
+}
+__name(findServiceHeaderIndex, "findServiceHeaderIndex");
+function parseScheduleDateKey(value, fallbackYear) {
+  const text = String(value || "").trim();
+  let match = text.match(/\b(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  match = text.match(/\b(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?\b/);
+  if (!match) return null;
+  const day = String(match[1]).padStart(2, "0");
+  const month = String(match[2]).padStart(2, "0");
+  const year = match[3] || fallbackYear;
+  return year ? `${year}-${month}-${day}` : null;
+}
+__name(parseScheduleDateKey, "parseScheduleDateKey");
+function formatRuDate(dateKey) {
+  const match = String(dateKey || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : String(dateKey || "");
+}
+__name(formatRuDate, "formatRuDate");
+function findTodayServiceRow(schedule, dateKey) {
+  const rows = schedule?.rows || [];
+  if (rows.length < 2) return null;
+  const headerRow = rows[0] || [];
+  const year = String(dateKey || "").slice(0, 4);
+  const idx = {
+    date: findServiceHeaderIndex(headerRow, ["\u0414\u0430\u0442\u0430"]),
+    weekday: findServiceHeaderIndex(headerRow, ["\u0414\u0435\u043d\u044c \u043d\u0435\u0434\u0435\u043b\u0438", "\u0414\u0435\u043d\u044c"]),
+    topic: findServiceHeaderIndex(headerRow, ["\u0422\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", "\u0422\u0435\u043c\u0430"]),
+    leader: findServiceHeaderIndex(headerRow, SERVICE_REMINDER_ROLES.leader.headerVariants),
+    tech: findServiceHeaderIndex(headerRow, SERVICE_REMINDER_ROLES.tech.headerVariants)
+  };
+  if (idx.date < 0) return null;
+  const row = rows.slice(1).find((item) => parseScheduleDateKey(item?.[idx.date], year) === dateKey);
+  return row ? { row, idx } : null;
+}
+__name(findTodayServiceRow, "findTodayServiceRow");
+function serviceScheduleHasRows(schedule) {
+  return Array.isArray(schedule?.rows) && schedule.rows.length >= 2;
+}
+__name(serviceScheduleHasRows, "serviceScheduleHasRows");
+function buildServiceReminderKeyboard(dateKey, roleKey) {
+  const callbackKey = SERVICE_REMINDER_ROLES[roleKey]?.callbackKey;
+  return {
+    inline_keyboard: [[
+      { text: "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u044e", callback_data: `srv:ok:${dateKey}:${callbackKey}` },
+      { text: "\u041d\u0443\u0436\u043d\u0430 \u0437\u0430\u043c\u0435\u043d\u0430", callback_data: `srv:replace:${dateKey}:${callbackKey}` }
+    ]]
+  };
+}
+__name(buildServiceReminderKeyboard, "buildServiceReminderKeyboard");
+async function sendCoordinatorServiceNotice(env, text, replyMarkup = null) {
+  let coordinatorChatId = env?.COORDINATOR_PRIVATE_CHAT_ID || env?.COORDINATOR_USER_ID;
+  const coordinatorUsername = String(env?.COORDINATOR_USERNAME || "").replace(/^@/u, "").trim().toLowerCase();
+  if (!coordinatorChatId && coordinatorUsername) {
+    const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+    const coordinator = (subscriptions?.subscriptions || []).find((item) => String(item?.username || "").replace(/^@/u, "").toLowerCase() === coordinatorUsername);
+    coordinatorChatId = coordinator?.chatId || coordinator?.userId || null;
+  }
+  if (coordinatorChatId) {
+    const result = await sendMessage(env, coordinatorChatId, text, null, null, replyMarkup).catch((error) => notifyOwnerTechError(env, {
+      module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
+      operation: "\u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435 \u043a\u043e\u043e\u0440\u0434\u0438\u043d\u0430\u0442\u043e\u0440\u0443",
+      error,
+      details: { coordinator_chat_id: coordinatorChatId },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c COORDINATOR_PRIVATE_CHAT_ID/COORDINATOR_USER_ID."
+    }));
+    if (!result?.ok) return null;
+    return { chatId: coordinatorChatId, result };
+  }
+  return null;
+}
+__name(sendCoordinatorServiceNotice, "sendCoordinatorServiceNotice");
+async function isCoordinatorUser(env, userId) {
+  const wantedId = String(userId || "").trim();
+  if (!wantedId) return false;
+  const configuredId = String(env?.COORDINATOR_USER_ID || env?.COORDINATOR_PRIVATE_CHAT_ID || "").trim();
+  if (configuredId) return wantedId === configuredId;
+  const coordinatorUsername = String(env?.COORDINATOR_USERNAME || "").replace(/^@/u, "").trim().toLowerCase();
+  if (!coordinatorUsername) return false;
+  const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  return (subscriptions?.subscriptions || []).some((item) => (
+    String(item?.userId || item?.chatId || "").trim() === wantedId
+    && String(item?.username || "").replace(/^@/u, "").trim().toLowerCase() === coordinatorUsername
+  ));
+}
+__name(isCoordinatorUser, "isCoordinatorUser");
+async function notifyServiceIssue(env, text) {
+  await Promise.all([
+    sendCoordinatorServiceNotice(env, text),
+    sendAdminThreadMessage(env, text, true).catch((error) => notifyOwnerTechError(env, {
+      module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
+      operation: "\u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435 \u0432 \u0410\u0434\u043c\u0438\u043d\u043a\u0443",
+      error,
+      details: { thread_id: ADMIN_THREAD_ID },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c INFO_CHAT_ID, ADMIN_THREAD_ID \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+    }))
+  ]);
+}
+__name(notifyServiceIssue, "notifyServiceIssue");
+function buildCoordinatorServiceSummary(today, dateKey, personMap) {
+  const row = today?.row || [];
+  const idx = today?.idx || {};
+  const leader = idx.leader >= 0 ? formatServicePersonLabel(row[idx.leader], personMap) : "";
+  const tech = idx.tech >= 0 ? formatServicePersonLabel(row[idx.tech], personMap) : "";
+  return [
+    `\u0414\u0430\u0442\u0430: ${formatRuDate(dateKey)}`,
+    `\u0414\u0435\u043d\u044c \u043d\u0435\u0434\u0435\u043b\u0438: ${idx.weekday >= 0 ? compact(row[idx.weekday] || "") : ""}`,
+    `\u0422\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f: ${idx.topic >= 0 ? compact(row[idx.topic] || "") : ""}`,
+    `\u0412\u0435\u0434\u0443\u0449\u0438\u0439: ${leader}`,
+    `\u0422\u0435\u0445\u0432\u0435\u0434: ${tech}`
+  ].join("\n");
+}
+__name(buildCoordinatorServiceSummary, "buildCoordinatorServiceSummary");
+async function sendCoordinatorTodayServiceSummary(env, today, dateKey, personMap) {
+  const key = `service_coordinator_summary_sent:${dateKey}`;
+  const previous = await callAnnouncementState(env, "get", { key }).catch(() => ({ messageId: null }));
+  if (previous?.messageId) return;
+  const sent = await sendCoordinatorServiceNotice(env, buildCoordinatorServiceSummary(today, dateKey, personMap));
+  if (!sent) {
+    throw new Error("coordinator Telegram user_id not found");
+  }
+  await callAnnouncementState(env, "set_message_id", { key, messageId: Date.now() });
+}
+__name(sendCoordinatorTodayServiceSummary, "sendCoordinatorTodayServiceSummary");
+function serviceReminderSentKey(dateKey, roleKey, personName) {
+  return `service_reminder_sent:${dateKey}:${SERVICE_REMINDER_ROLES[roleKey]?.label || roleKey}:${personName}`;
+}
+__name(serviceReminderSentKey, "serviceReminderSentKey");
+async function sendOneServiceReminder(env, dateKey, roleKey, personName, personMap) {
+  const role = SERVICE_REMINDER_ROLES[roleKey];
+  if (!role || isMissingServicePerson(personName)) {
+    const vacancyText = roleKey === "leader"
+      ? "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u043d\u0435\u0442 \u0432\u0435\u0434\u0443\u0449\u0435\u0433\u043e. \u0414\u043e\u0431\u0440\u043e\u0432\u043e\u043b\u044c\u0446\u044b?"
+      : "\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u043d\u0435\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430. \u0414\u043e\u0431\u0440\u043e\u0432\u043e\u043b\u044c\u0446\u044b?";
+    await createVacancyReplacementRequest(env, {
+      dateKey,
+      roleKey: role?.callbackKey || roleKey,
+      service: role?.label || roleKey,
+      vacancyText
+    }, callbackHandlerDeps);
+    return;
+  }
+  const sentKey = serviceReminderSentKey(dateKey, roleKey, personName);
+  const previous = await callAnnouncementState(env, "get", { key: sentKey }).catch(() => ({ messageId: null }));
+  if (previous?.messageId) return;
+  const person = resolveServicePerson(personMap, personName);
+  if (!person?.chatId && !person?.userId) {
+    const text = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0435: \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d Telegram user_id \u0434\u043b\u044f {NAME}.".replace("{NAME}", personName);
+    await notifyOwnerTechError(env, {
+      module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
+      operation: "service_person_map",
+      error: new Error("service person not found"),
+      details: { display_name: personName, date: dateKey, service: role.label },
+      hint: "\u0414\u043e\u0431\u0430\u0432\u044c \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0430 \u0432 SERVICE_PERSON_MAP_JSON \u0438\u043b\u0438 \u043f\u043e\u043f\u0440\u043e\u0441\u0438 \u0435\u0433\u043e \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c \u0431\u043e\u0442\u0443 /start."
+    });
+    await sendAdminThreadMessage(env, text, true).catch(() => null);
+    return;
+  }
+  const chatId = person.chatId || person.userId;
+  try {
+    await sendMessage(env, chatId, role.message, null, null, buildServiceReminderKeyboard(dateKey, roleKey));
+    await callAnnouncementState(env, "set_message_id", { key: sentKey, messageId: Date.now() });
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
+      operation: "\u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 \u043b\u0438\u0447\u043d\u043e\u0433\u043e \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f",
+      error,
+      details: { display_name: personName, user_id: person.userId, chat_id: chatId, date: dateKey, service: role.label },
+      hint: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043c\u043e\u0433 \u043d\u0435 \u043d\u0430\u0436\u0430\u0442\u044c /start, \u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0431\u043e\u0442\u0430 \u0438\u043b\u0438 private_chat_id \u0443\u0441\u0442\u0430\u0440\u0435\u043b."
+    });
+  }
+}
+__name(sendOneServiceReminder, "sendOneServiceReminder");
+async function sendManualServiceReminder(env, targetName, roleKey) {
+  const role = SERVICE_REMINDER_ROLES[roleKey] || SERVICE_REMINDER_ROLES.leader;
+  const clock = getMoscowClock();
+  const personMap = await buildServicePersonMap(env);
+  const person = resolveServicePerson(personMap, targetName);
+  if (!person?.chatId && !person?.userId) {
+    throw new Error(`service reminder test target not found: ${targetName}`);
+  }
+  await sendMessage(env, person.chatId || person.userId, role.message, null, null, buildServiceReminderKeyboard(clock.dateKey, role.key));
+  return { dateKey: clock.dateKey, role: role.label, target: person.displayName || targetName };
+}
+__name(sendManualServiceReminder, "sendManualServiceReminder");
+async function resetManualReplacementRequest(env, targetName, roleKey) {
+  const role = SERVICE_REMINDER_ROLES[roleKey] || SERVICE_REMINDER_ROLES.leader;
+  const clock = getMoscowClock();
+  const personMap = await buildServicePersonMap(env);
+  const person = resolveServicePerson(personMap, targetName);
+  if (!person?.userId) {
+    throw new Error(`replacement test target not found: ${targetName}`);
+  }
+  const dedupeKey = `${clock.dateKey}:${role.callbackKey}:${person.userId}`;
+  const result = await callAnnouncementState(env, "close_open_replacement_request_by_dedupe", { dedupeKey });
+  return { ...result, dateKey: clock.dateKey, role: role.label, target: person.displayName || targetName };
+}
+__name(resetManualReplacementRequest, "resetManualReplacementRequest");
+async function getTodayServiceContext(env, { required = true } = {}) {
+  const clock = getMoscowClock();
+  const snapshot = await knowledgeRuntime.getSnapshot?.(env);
+  if (!serviceScheduleHasRows(snapshot?.schedule)) {
+    throw new Error("service schedule unavailable");
+  }
+  const today = findTodayServiceRow(snapshot?.schedule, clock.dateKey);
+  if (!today) {
+    if (!required) return null;
+    throw new Error("today service schedule row not found");
+  }
+  const personMap = await buildServicePersonMap(env);
+  return { clock, today, personMap };
+}
+__name(getTodayServiceContext, "getTodayServiceContext");
+async function sendManualCoordinatorServiceSummary(env) {
+  const { clock, today, personMap } = await getTodayServiceContext(env);
+  await sendCoordinatorServiceNotice(env, buildCoordinatorServiceSummary(today, clock.dateKey, personMap));
+  return { dateKey: clock.dateKey };
+}
+__name(sendManualCoordinatorServiceSummary, "sendManualCoordinatorServiceSummary");
+async function sendTodayServiceReminders(env) {
+  const context = await getTodayServiceContext(env, { required: false });
+  if (!context) return false;
+  const { clock, today, personMap } = context;
+  await Promise.all([
+    sendCoordinatorTodayServiceSummary(env, today, clock.dateKey, personMap),
+    sendOneServiceReminder(env, clock.dateKey, "leader", compact(today.row[today.idx.leader] || ""), personMap),
+    sendOneServiceReminder(env, clock.dateKey, "tech", compact(today.row[today.idx.tech] || ""), personMap)
+  ]);
+  return true;
+}
+__name(sendTodayServiceReminders, "sendTodayServiceReminders");
+async function runScheduledTaskOncePerDay(env, taskKey, hour, minute, task, windowMinutes = 20) {
+  const clock = getMoscowClock();
+  if (!isWithinMoscowWindow(clock, hour, minute, windowMinutes)) {
+    return false;
+  }
+  const stateKey = `scheduled_${taskKey}`;
+  const previous = await callAnnouncementState(env, "get", { key: stateKey }).catch(() => ({ messageId: null }));
+  if (previous?.messageId === clock.dateKey) {
+    return false;
+  }
+  try {
+    await task();
+    await callAnnouncementState(env, "set_message_id", {
+      key: stateKey,
+      messageId: clock.dateKey
+    });
+    return true;
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "cron",
+      operation: taskKey,
+      error,
+      details: { taskKey, hour, minute },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c cron-\u0437\u0430\u0434\u0430\u0447\u0443, Telegram API, \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u044b\u0435 message_id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+    });
+    return false;
+  }
+}
+__name(runScheduledTaskOncePerDay, "runScheduledTaskOncePerDay");
+async function runScheduledTaskOncePerWeekday(env, taskKey, weekday, hour, minute, task, windowMinutes = 20) {
+  const clock = getMoscowClock();
+  if (clock.weekday !== weekday) return false;
+  return runScheduledTaskOncePerDay(env, taskKey, hour, minute, task, windowMinutes);
+}
+__name(runScheduledTaskOncePerWeekday, "runScheduledTaskOncePerWeekday");
+function splitTitleAndBody(text) {
+  const normalized = String(text || "").trim();
+  const parts = normalized.split(/\n\s*\n/);
+  const title = (parts.shift() || "").trim();
+  const body = parts.join("\n\n").trim();
+  return { title, body };
+}
+__name(splitTitleAndBody, "splitTitleAndBody");
+async function sendYozhikToGroup(env, { disableNotification = true } = {}) {
+  const data = await fetchJsonWithCache(YOZHIK_JSON_URL, "yozhik");
+  const key = getMoscowDateKey();
+  const text = data[key];
+  if (!text) {
+    throw new Error(`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0401\u0436\u0438\u043A \u043D\u0430 \u0434\u0430\u0442\u0443 ${key}`);
+  }
+  const humanDate = getMoscowHumanDate();
+  const messageText = `\u0415\u0436\u0435\u0434\u043D\u0435\u0432\u043D\u044B\u0435 \u0440\u0430\u0437\u043C\u044B\u0448\u043B\u0435\u043D\u0438\u044F \u043D\u0430 ${humanDate}
+
+${text}`;
+  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+}
+__name(sendYozhikToGroup, "sendYozhikToGroup");
+function getAnnouncementKey(sourceMessageId) {
+  if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID) {
+    return "info_channel_announcement";
+  }
+  if (sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID) {
+    return "free_services_announcement";
+  }
+  if (sourceMessageId === MORNING_ANNOUNCEMENT_ID) {
+    return "morning_announcement";
+  }
+  if (sourceMessageId === EVENING_ANNOUNCEMENT_ID) {
+    return "evening_announcement";
+  }
+  return sourceMessageId ? `message_${sourceMessageId}` : null;
+}
+__name(getAnnouncementKey, "getAnnouncementKey");
+function getLegacyAnnouncementKeys(sourceMessageId) {
+  if (sourceMessageId === MORNING_ANNOUNCEMENT_ID) {
+    return ["only_today_announcement"];
+  }
+  return [];
+}
+__name(getLegacyAnnouncementKeys, "getLegacyAnnouncementKeys");
+function shouldSilenceAnnouncement(sourceMessageId) {
+  return true;
+}
+__name(shouldSilenceAnnouncement, "shouldSilenceAnnouncement");
+function parseUserIdSet(value) {
+  return new Set(String(value || "").split(/[,\s]+/u).map((item) => item.trim()).filter(Boolean));
+}
+__name(parseUserIdSet, "parseUserIdSet");
+function parseUsernameSet(value) {
+  return new Set(String(value || "").split(/[,\s]+/u).map((item) => item.replace(/^@/u, "").trim().toLowerCase()).filter(Boolean));
+}
+__name(parseUsernameSet, "parseUsernameSet");
+function isOwner(env, userId) {
+  return String(env?.OWNER_USER_ID || "").trim() === String(userId || "").trim();
+}
+__name(isOwner, "isOwner");
+function isAdminDmUser(env, userId, username = "") {
+  const id = String(userId || "").trim();
+  const name = String(username || "").replace(/^@/u, "").trim().toLowerCase();
+  return Boolean(id) && (isOwner(env, id) || parseUserIdSet(env?.ADMIN_DM_USER_IDS).has(id) || Boolean(name && parseUsernameSet(env?.ADMIN_DM_USERNAMES).has(name)));
+}
+__name(isAdminDmUser, "isAdminDmUser");
+function isPrivateSubscriber(env, userId) {
+  return Boolean(String(userId || "").trim());
+}
+__name(isPrivateSubscriber, "isPrivateSubscriber");
+async function isDynamicAdminDmUser(env, userId) {
+  const id = String(userId || "").trim();
+  if (!id) return false;
+  const result = await callPersonalDayState(env, "get_admin_dm_user", { userId: id }).catch(() => ({ admin: null }));
+  return Boolean(result?.admin);
+}
+__name(isDynamicAdminDmUser, "isDynamicAdminDmUser");
+async function getPrivateRoles(env, userId) {
+  const id = String(userId || "").trim();
+  const owner = isOwner(env, id);
+  const admin = owner || isAdminDmUser(env, id) || await isDynamicAdminDmUser(env, id);
+  return {
+    isOwner: owner,
+    isAdmin: admin,
+    isSubscriber: Boolean(id)
+  };
+}
+__name(getPrivateRoles, "getPrivateRoles");
+async function isPersonalDayAllowed(env, userId) {
+  const roles = await getPrivateRoles(env, userId);
+  return roles.isSubscriber || roles.isAdmin;
+}
+__name(isPersonalDayAllowed, "isPersonalDayAllowed");
+function buildPersonalDayUserSnapshot(message) {
+  const from = message?.from || {};
+  const chat = message?.chat || {};
+  const userId = String(from.id || chat.id || "").trim();
+  const chatId = chat.id ?? null;
+  const username = from.username ? String(from.username) : "";
+  const firstName = from.first_name ? String(from.first_name) : "";
+  const lastName = from.last_name ? String(from.last_name) : "";
+  return { userId, chatId, username, firstName, lastName };
+}
+__name(buildPersonalDayUserSnapshot, "buildPersonalDayUserSnapshot");
+function isPersonalDayDeliveryFatal(error) {
+  const text = String(error?.message || error || "");
+  return /(?:bot was blocked|bot can't initiate conversation|chat not found|user is deactivated|Forbidden|blocked by the user)/iu.test(text);
+}
+__name(isPersonalDayDeliveryFatal, "isPersonalDayDeliveryFatal");
+function buildPersonalDayAdminError(subscription, error) {
+  const userId = subscription?.userId || "unknown";
+  const chatId = subscription?.chatId || "unknown";
+  const username = subscription?.username ? `@${subscription.username}` : "";
+  return [
+    "\u041b\u0438\u0447\u043d\u0430\u044f \u0440\u0430\u0441\u0441\u044b\u043b\u043a\u0430 10-11 \u0448\u0430\u0433\u0430 \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u0430.",
+    `user_id: ${userId}`,
+    `chat_id: ${chatId}`,
+    username ? `username: ${username}` : null,
+    `error: ${String(error?.message || error || "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e")}`
+  ].filter(Boolean).join("\n");
+}
+__name(buildPersonalDayAdminError, "buildPersonalDayAdminError");
+async function disablePersonalDaySubscription(env, subscription, error = null) {
+  if (!subscription?.userId) return;
+  const next = {
+    ...subscription,
+    enabled: false,
+    disabledAt: Date.now(),
+    disableReason: error ? String(error?.message || error) : null
+  };
+  await callPersonalDayState(env, "set_personal_subscription", {
+    userId: subscription.userId,
+    subscription: next
+  });
+  if (error) {
+    console.error("personal day delivery failed", { subscription, error });
+    await notifyOwnerTechError(env, {
+      module: "\u043b\u0438\u0447\u043d\u0430\u044f 10-11",
+      operation: "\u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 \u0438 \u0430\u0432\u0442\u043e\u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435",
+      error,
+      details: { user_id: subscription.userId, chat_id: subscription.chatId },
+      hint: "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043c\u043e\u0433 \u043d\u0435 \u043d\u0430\u0436\u0430\u0442\u044c /start, \u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0431\u043e\u0442\u0430 \u0438\u043b\u0438 \u0447\u0430\u0442 \u0441\u0442\u0430\u043b \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d."
+    });
+  }
+}
+__name(disablePersonalDaySubscription, "disablePersonalDaySubscription");
+async function copyPersonalDayAnnouncement(env, subscription, sourceMessageId, silent) {
+  return copyTechMessageToChat(env, subscription.chatId, INFO_CHAT_ID, sourceMessageId, silent);
+}
+__name(copyPersonalDayAnnouncement, "copyPersonalDayAnnouncement");
+async function sendPersonalDayAnnouncement(env, sourceMessageId, silent = false) {
+  const result = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  const subscriptions = (result.subscriptions || []).filter((subscription) => subscription?.enabled && subscription?.chatId);
+  await Promise.all(subscriptions.map(async (subscription) => {
+    try {
+      await copyPersonalDayAnnouncement(env, subscription, sourceMessageId, silent);
+    } catch (error) {
+      if (isPersonalDayDeliveryFatal(error)) {
+        await disablePersonalDaySubscription(env, subscription, error);
+        return;
+      }
+      console.error("personal day delivery transient error", { subscription, error });
+      await notifyOwnerTechError(env, {
+        module: "\u043b\u0438\u0447\u043d\u0430\u044f 10-11",
+        operation: "\u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 copyMessage",
+        error,
+        details: { user_id: subscription.userId, chat_id: subscription.chatId, source_message_id: sourceMessageId },
+        hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c private_chat_id, \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u043e\u0435 message_id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+      });
+    }
+  }));
+}
+__name(sendPersonalDayAnnouncement, "sendPersonalDayAnnouncement");
+async function listAdminDmRecipients(env) {
+  const result = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  const checks = await Promise.all((result.subscriptions || []).map(async (subscription) => {
+    const roles = await getPrivateRoles(env, subscription?.userId);
+    return subscription?.chatId && (roles.isAdmin || isAdminDmUser(env, subscription?.userId, subscription?.username)) ? subscription : null;
+  }));
+  return checks.filter(Boolean);
+}
+__name(listAdminDmRecipients, "listAdminDmRecipients");
+async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
+  const key = getAnnouncementKey(sourceMessageId);
+  const allKeys = [key, ...getLegacyAnnouncementKeys(sourceMessageId)].filter(Boolean);
+  const previousItems = await Promise.all(
+    allKeys.map(async (itemKey) => ({
+      key: itemKey,
+      messageId: (await callAnnouncementState(env, "get", { key: itemKey }).catch(() => ({ messageId: null })))?.messageId ?? null
+    }))
+  );
+  let copied;
+  try {
+    copied = await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, shouldSilenceAnnouncement(sourceMessageId) || shouldSilenceBotChat(CHAT_GROUP_ID));
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
+      operation: "copyMessage \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u043e\u0433\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f",
+      error,
+      details: { source_chat_id: INFO_CHAT_ID, source_message_id: sourceMessageId, target_chat_id: CHAT_GROUP_ID },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435, message_id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+    });
+    throw error;
+  }
+  const nextMessageId = copied?.result?.message_id ?? null;
+  if (key) {
+    await callAnnouncementState(env, "set_message_id", {
+      key,
+      messageId: nextMessageId
+    });
+  }
+  for (const item of previousItems) {
+    if (item.key !== key) {
+      await callAnnouncementState(env, "set_message_id", { key: item.key, messageId: null }).catch(() => null);
+    }
+    if (item.messageId && item.messageId !== nextMessageId) {
+      const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, item.messageId);
+      if (!deletion.ok) {
+        await notifyOwnerTechError(env, {
+          module: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
+          operation: "\u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0442\u0430\u0440\u043e\u0433\u043e \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u044f",
+          error: deletion.error,
+          details: { chat_id: CHAT_GROUP_ID, message_id: item.messageId, key: item.key },
+          hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c, \u0435\u0441\u0442\u044c \u043b\u0438 \u0443 \u0431\u043e\u0442\u0430 \u043f\u0440\u0430\u0432\u043e \u0443\u0434\u0430\u043b\u044f\u0442\u044c \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435."
+        });
+      }
+    }
+  }
+  return copied;
+}
+__name(sendAnnouncementCopyToGroup, "sendAnnouncementCopyToGroup");
+async function sendTechMessageCopyToInfoThread(env, sourceMessageId, targetThreadId, disableNotification = false) {
+  try {
+    return await callTelegram(env, "copyMessage", {
+      chat_id: INFO_CHAT_ID,
+      from_chat_id: INFO_CHAT_ID,
+      message_id: sourceMessageId,
+      message_thread_id: targetThreadId,
+      disable_notification: disableNotification || shouldSilenceBotChat(INFO_CHAT_ID)
+    });
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
+      operation: "copyMessage \u0432 \u0442\u0435\u043c\u0443 \u0418\u041d\u0424\u041e",
+      error,
+      details: { source_chat_id: INFO_CHAT_ID, source_message_id: sourceMessageId, target_chat_id: INFO_CHAT_ID, target_thread_id: targetThreadId },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c message_id, id \u0442\u0435\u043c\u044b \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+    });
+    throw error;
+  }
+}
+__name(sendTechMessageCopyToInfoThread, "sendTechMessageCopyToInfoThread");
+async function sendBillToGroup(env, billNumber, { disableNotification = true } = {}) {
+  if (!Number.isInteger(billNumber) || billNumber < 1 || billNumber > 332) {
+    throw new Error("\u041D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430 \u0434\u043E\u043B\u0436\u0435\u043D \u0431\u044B\u0442\u044C \u043E\u0442 1 \u0434\u043E 332.");
+  }
+  const data = await fetchJsonWithCache(BILL_JSON_URL, "bill");
+  const text = data[String(billNumber)];
+  if (!text) {
+    throw new Error(`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u043E\u0442\u0440\u044B\u0432\u043E\u043A \u0411\u0438\u043B\u043B\u0430 \u2116${billNumber}`);
+  }
+  const { title, body } = splitTitleAndBody(text);
+  const header = title ? `\u041A\u0430\u043A \u044D\u0442\u043E \u0432\u0438\u0434\u0438\u0442 \u0411\u0438\u043B\u043B. \u2116${billNumber}. ${title}` : `\u041A\u0430\u043A \u044D\u0442\u043E \u0432\u0438\u0434\u0438\u0442 \u0411\u0438\u043B\u043B. \u2116${billNumber}`;
+  const messageText = body ? `${header}
+
+${body}` : `${header}
+
+${text}`;
+  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+}
+__name(sendBillToGroup, "sendBillToGroup");
+function okResponse() {
+  return new Response("ok");
+}
+__name(okResponse, "okResponse");
+function textResponse(text, status = 200) {
+  return new Response(text, {
+    status,
+    headers: { "content-type": "text/plain; charset=UTF-8" }
+  });
+}
+__name(textResponse, "textResponse");
+async function handleRootRequest(env) {
+  const tokenStatus = env.BOT_TOKEN ? "\u0435\u0441\u0442\u044C" : "\u043D\u0435\u0442";
+  const speakerQuestions = await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map());
+  const text = buildRootStatusText(tokenStatus, speakerQuestions.size);
+  return textResponse(text);
+}
+__name(handleRootRequest, "handleRootRequest");
+const knowledgeRuntime = createKnowledgeRuntime({
+  QUERY_HINT,
+  FAQ_HINT,
+  sysPrompt,
+  ROLE_ALIASES,
+  looksLikeBlockedProgramQuestion,
+  scoreChunkBonus
+});
+const callbackHandlerDeps = {
+  isUserAdmin,
+  isTechThread,
+  isChatGroup,
+  answerCallback,
+  editMessageText,
+  sendAdminSignal,
+  sendAdminThreadMessage,
+  sendCoordinatorServiceNotice,
+  sendManualServiceReminder,
+  resetManualReplacementRequest,
+  sendManualCoordinatorServiceSummary,
+  QUEUE_CALLBACK_TEXTS,
+  TIMER_CALLBACK_TEXTS,
+  sendMessage: sendMessageWithInfoSilence,
+  callPersonalDayState,
+  isAdminDmUser,
+  getPrivateRoles,
+  isCoordinatorUser,
+  notifyOwnerTechError,
+  deleteMessageSafe,
+  listAdminDmRecipients,
+  callTelegram,
+  sendYozhikToGroup,
+  INFO_CHAT_ID,
+  TECH_THREAD_ID,
+  TECH_MESSAGES,
+  INFO_CHANNEL_ANNOUNCEMENT_ID,
+  FREE_SERVICES_ANNOUNCEMENT_ID,
+  sendAnnouncementCopyToGroup,
+  copyTechMessageToGroup: copyTechMessageToGroupSilent,
+  callAnnouncementState,
+  CHAT_GROUP_ID,
+  callQueueState,
+  applyQueueResponse,
+  callTimerState,
+  TIMER_DEFAULT_SECONDS,
+  getTodayTopicSourceMessageId
+};
+const messageHandlerDeps = {
+  sendMessage: sendMessageWithInfoSilence,
+  callTelegram,
+  INFO_CHAT_ID,
+  ADMIN_THREAD_ID,
+  isIdCommand,
+  isChatGroup,
+  isPrepThread,
+  hasFixMarker,
+  getAuthorLabel,
+  sendAdminDigest,
+  FIX_CONFIRMATION,
+  hasHelpMarker,
+  HELP_CONFIRMATION,
+  CHAT_GROUP_ID,
+  callPersonalDayState,
+  buildPersonalDayUserSnapshot,
+  isPersonalDayAllowed,
+  getPrivateRoles,
+  setMyCommands,
+  hasServiceRequest,
+  SERVICE_CONFIRMATION,
+  sendManualServiceReminder,
+  resetManualReplacementRequest,
+  sendManualCoordinatorServiceSummary,
+  isTimerPanelCommand,
+  TIMER_PANEL_TEXT,
+  buildTimerKeyboard,
+  isTechThread,
+  isMeetingPanelCommand,
+  MEETING_PANEL_TEXT,
+  TECH_THREAD_ID,
+  buildMeetingKeyboard,
+  isQueuePanelCommand,
+  QUEUE_PANEL_TEXT,
+  buildQueueKeyboard,
+  isYozhikCommand,
+  sendYozhikToGroup,
+  isBillPromptCommand,
+  sendBillToGroup,
+  parseBillInput,
+  isUserAdmin,
+  callAnnouncementState,
+  shouldUseLightConversation,
+  getLightTalkKey,
+  callLightTalkState,
+  isMainMeetingWindow,
+  isGameCommandWindow,
+  looksLikeBlockedProgramQuestion,
+  looksLikeGroupQuestion,
+  normalizeLightText,
+  answerFixedMeetingQuestion,
+  answerKnowledgeQuestion: knowledgeRuntime.answerKnowledgeQuestion,
+  findKnowledgeAnswer: knowledgeRuntime.findKnowledgeAnswer,
+  findKnowledgeAnswerDetailed: knowledgeRuntime.findKnowledgeAnswerDetailed,
+  answerLightConversation,
+  copyTechMessageToGroup: copyTechMessageToGroupSilent,
+  TECH_MESSAGES,
+  isPrivateChat,
+  parseNafanyaQuestion,
+  callQueueState,
+  notifyOwnerTechError,
+  classifyModeration,
+  getModerationWarningText,
+  getModerationDeleteText,
+  deleteMessageSafe,
+  sendAdminSignal,
+  sleep,
+  parseGameCommand,
+  getBillQuestionNumber,
+  parseQueueEntry,
+  makeManualQueueEntry,
+  getSpeakerQuestions,
+  getTodayTopicSourceMessageId,
+  applyQueueResponse
+};
+  async function handleWebhookUpdate(request, env) {
+    try {
+      const update = await request.json();
+      if (update.message_reaction || update.message_reaction_count) {
+        return okResponse();
+      }
+      const callbackResponse = update.callback_query ? await routeCallbackQuery(env, update.callback_query, callbackHandlerDeps) : null;
+      if (callbackResponse) {
+        return callbackResponse;
+      }
+      const message = update.message || update.edited_message || update.channel_post || update.edited_channel_post || update.business_message || update.edited_business_message;
+    return routeWebhookMessage(env, message, messageHandlerDeps);
+  } catch (error) {
+    await notifyOwnerTechError(env, {
+      module: "webhook",
+      operation: "\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430 update",
+      error,
+      details: { path: "/webhook" },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u043b\u043e\u0433\u0438 Worker \u0438 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 Telegram update. \u041b\u0438\u0447\u043d\u044b\u0435 \u0442\u0435\u043a\u0441\u0442\u044b \u0432 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435 \u043d\u0435 \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u044b."
+    });
+    return textResponse(`Webhook error: ${error.message}`, 500);
+  }
+}
+__name(handleWebhookUpdate, "handleWebhookUpdate");
+var worker_default = {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/") {
+      return handleRootRequest(env);
+    }
+    if (request.method === "POST" && url.pathname === "/webhook") {
+      return handleWebhookUpdate(request, env);
+    }
+    return textResponse("Not found", 404);
+  },
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(Promise.all([
+      runScheduledTaskOncePerDay(env, "morning_07_00", 7, 0, () => sendAnnouncementCopyToGroup(env, MORNING_ANNOUNCEMENT_ID)),
+      runScheduledTaskOncePerDay(env, "yozhik_08_00", 8, 0, () => sendYozhikToGroup(env, { disableNotification: false })),
+      runScheduledTaskOncePerDay(env, "info_channel_09_00", 9, 0, () => sendAnnouncementCopyToGroup(env, INFO_CHANNEL_ANNOUNCEMENT_ID)),
+      runScheduledTaskOncePerDay(env, "service_reminders_12_00", 12, 0, () => sendTodayServiceReminders(env)),
+      runScheduledTaskOncePerDay(env, "announce_thread_11_00", 11, 0, () => sendTechMessageCopyToInfoThread(env, DAILY_ANNOUNCE_THREAD_MESSAGE_ID, ANNOUNCE_THREAD_ID)),
+      runScheduledTaskOncePerDay(env, "daily_15_00", 15, 0, () => sendAnnouncementCopyToGroup(env, DAILY_15_ANNOUNCEMENT_ID)),
+      runScheduledTaskOncePerDay(env, "announce_thread_18_00", 18, 0, () => sendTechMessageCopyToInfoThread(env, DAILY_ANNOUNCE_THREAD_MESSAGE_ID, ANNOUNCE_THREAD_ID)),
+      ...WEEKDAY_TECH_ANNOUNCEMENTS.flatMap((item) => [
+        runScheduledTaskOncePerWeekday(env, `${item.key}_tech_11_00`, item.weekday, 11, 0, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId)),
+        runScheduledTaskOncePerWeekday(env, `${item.key}_tech_21_20`, item.weekday, 21, 20, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId))
+      ]),
+      runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
+      runScheduledTaskOncePerDay(env, "evening_23_00", 23, 0, () => sendAnnouncementCopyToGroup(env, EVENING_ANNOUNCEMENT_ID)),
+      ...PERSONAL_DAY_SCHEDULE.map((item) => runScheduledTaskOncePerDay(
+        env,
+        item.key,
+        item.hour,
+        item.minute,
+        () => sendPersonalDayAnnouncement(env, item.sourceMessageId, item.silent)
+      )),
+      callTimerState(env, "tick").catch((error) => notifyOwnerTechError(env, {
+        module: "\u0442\u0430\u0439\u043c\u0435\u0440",
+        operation: "cron tick",
+        error,
+        details: { action: "tick" },
+        hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c Durable Object \u0442\u0430\u0439\u043c\u0435\u0440\u0430."
+      })),
+      runScheduledTaskOncePerDay(env, "queue_clear_23_55", 23, 55, async () => {
+        const result = await callQueueState(env, "clear");
+        await applyQueueResponse(env, result);
+      })
+    ]));
+  }
+};
+export {
+  AnnouncementStateDurableObject,
+  LightTalkStateDurableObject,
+  getQueue111Note,
+  isChatGroup,
+  parseGameCommand,
+  parseQueueEntry,
+  QueueStateDurableObject,
+  TimerStateDurableObject,
+  worker_default as default
+};
+//# sourceMappingURL=worker.js.map
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,7 @@
+.wrangler/
+__pycache__/
+*.pyc
+*.bak
+*.mojibake.bak
+google-service-account.js
+node_modules/

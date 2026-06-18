@@ -1,0 +1,22 @@
+# Secrets and local access files
+Доступы/
+.env
+.env.*
+*.pem
+*.key
+*secret*
+*Secret*
+*SECRET*
+*token*
+*Token*
+*TOKEN*
+
+# Local dependency and tool caches
+node_modules/
+.wrangler/
+__pycache__/
+*.pyc
+
+# Local editor/system noise
+.DS_Store
+Thumbs.db

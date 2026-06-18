@@ -1,0 +1,1508 @@
+import { QUESTIONS, QUESTIONS_COUNT } from "./questions.js";
+import { answerKnowledgeQuestion, parseNafanyaQuestion } from "./knowledge.js";
+import {
+  buildAdminDigest,
+  buildAdminSignal,
+  buildRootStatusText,
+  FIX_CONFIRMATION,
+  HELP_CONFIRMATION,
+  MEETING_PANEL_TEXT,
+  MODERATION_DELETE_TEXT,
+  MODERATION_WARNING_TEXT,
+  QUEUE_CALLBACK_TEXTS,
+  QUEUE_CLOSED_LABEL,
+  QUEUE_HEADER,
+  QUEUE_MODE_TEXT,
+  QUEUE_OPEN_LABEL,
+  QUEUE_PANEL_TEXT,
+} from "./messages.js";
+
+const CHAT_GROUP_ID = -1003547823625;
+const INFO_CHAT_ID = -1003835668674;
+
+const PREP_THREAD_ID = 29;      // ÐÐÐ§ÐÐÐ: Ð¾Ð±ÑÑÐ¶Ð´ÐµÐ½Ð¸Ðµ
+const TECH_THREAD_ID = 440;     // Ð¢ÐÐ¥ÐÐÐ
+const ADMIN_THREAD_ID = 453;    // ÐÐ´Ð¼Ð¸Ð½ÐºÐ°
+
+const TECH_MESSAGES = {
+  minute_silence: 1695,
+  prayer: 1696,
+  preambula: 1697,
+  newcomer: 1698,
+  steps12: 1699,
+  traditions12: 1700,
+  meeting_rules: 1701,
+  speaker_questions: 1705,
+  seventh_tradition: 1708,
+  promises9: 1710,
+  tea_rules: 1711,
+  chat_cleanliness: 1712,
+  chat_rules: 1856,
+};
+
+const TOPICS_MEETING_URL = "https://t.me/c/3835668674/440/1702";
+const YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
+const BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
+
+const DATA_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// TODO: ÐºÐ¾Ð³Ð´Ð° Ð±ÑÐ´ÐµÐ¼ Ð´ÐµÐ»Ð°ÑÑ Ð¾Ð±ÑÑÐ²Ð»ÐµÐ½Ð¸Ñ, Ð½ÑÐ¶ÐµÐ½ Ð°Ð²ÑÐ¾Ð¿Ð¾ÑÑ ÐÐ¶Ð¸ÐºÐ° Ð² 07:00 Ð¿Ð¾ ÐÐ¡Ð Ð² ÑÐ°Ñ Ð³ÑÑÐ¿Ð¿Ñ.
+
+let yozhikCache = null;
+let billCache = null;
+let yozhikCacheTime = 0;
+let billCacheTime = 0;
+
+function isChatGroup(chatId, threadId) {
+  return chatId === CHAT_GROUP_ID && (threadId === undefined || threadId === null);
+}
+
+function isPrepThread(chatId, threadId) {
+  return chatId === INFO_CHAT_ID && threadId === PREP_THREAD_ID;
+}
+
+function isTechThread(chatId, threadId) {
+  return chatId === INFO_CHAT_ID && threadId === TECH_THREAD_ID;
+}
+
+function isPrivateChat(chatType) {
+  return chatType === "private";
+}
+
+function hasFixMarker(text) {
+  const lower = text.toLowerCase().trim();
+  return (
+    lower === "фикс" ||
+    lower.startsWith("фикс ") ||
+    lower === "фиксирую" ||
+    lower.startsWith("фиксирую ") ||
+    lower.includes("#фикс") ||
+    lower.includes("#фиксирую")
+  );
+}
+
+function hasHelpMarker(text) {
+  const lower = text.toLowerCase().trim();
+  return (
+    lower === "help" ||
+    lower.startsWith("help ") ||
+    lower.includes("#help") ||
+    lower === "хелп" ||
+    lower.startsWith("хелп ") ||
+    lower.includes("#хелп") ||
+    lower === "хэлп" ||
+    lower.startsWith("хэлп ") ||
+    lower.includes("#хэлп")
+  );
+}
+
+function isIdCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "id" || normalized === "/id" || normalized === "бот";
+}
+
+function parseGameCommand(text) {
+  const match = text.trim().match(/^игра\s+(\d{1,3})$/i);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function isMeetingPanelCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "собрание" || normalized === "/собрание";
+}
+
+function isQueuePanelCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "очередь" || normalized === "/очередь";
+}
+
+function isYozhikCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "ёжик" || normalized === "ежик" || normalized === "/ёжик" || normalized === "/ежик";
+}
+
+function isBillPromptCommand(text) {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "билл" || normalized === "/билл";
+}
+
+function parseBillInput(text) {
+  const normalized = text.trim();
+  const match = normalized.match(/^(\d{1,3})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return Number(match[1]);
+}
+
+function normalizeText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .trim();
+}
+
+const MODERATION_WARNING_PHRASES = [
+  "ты дебил",
+  "ты идиот",
+  "ты придурок",
+  "ты дурак",
+  "ты тупой",
+  "ты тупая",
+  "ты задолбал",
+  "ты достал",
+  "что ты несешь",
+  "ты несешь херню",
+  "вы несете херню",
+  "какую хуйню ты пишешь",
+  "иди нахер",
+  "иди на хер",
+  "заткнись",
+  "отвали",
+];
+
+const MODERATION_DELETE_PHRASES = [
+  "иди нахуй",
+  "иди на хуй",
+  "пошел нахуй",
+  "пошла нахуй",
+  "пошли вы нахуй",
+  "пошли вы все нахуй",
+  "пиздуйте на хуй",
+  "пиздуйте нахуй",
+  "ты тупая мразь",
+  "ты тупой мудак",
+  "ты ебанутый",
+  "ты ебанутая",
+  "ты мразь",
+  "ты тварь",
+  "вы ебанутые",
+  "мудаки ебаные",
+];
+
+const MODERATION_WARNING_WORDS = [
+  "дебил",
+  "идиот",
+  "придурок",
+  "дурак",
+  "тупой",
+  "тупая",
+  "задолбал",
+  "достал",
+  "херня",
+  "херню",
+  "хуйню",
+];
+
+const MODERATION_DELETE_WORDS = [
+  "мразь",
+  "тварь",
+  "тварина",
+  "сука",
+  "ебанутый",
+  "ебанутая",
+  "конченый",
+  "конченая",
+  "урод",
+  "мудак",
+];
+
+function containsAnyPhrase(text, phrases) {
+  return phrases.some((phrase) => text.includes(phrase));
+}
+
+function containsAnyWord(text, words) {
+  return words.some((word) => new RegExp(`(^|\\s)${word}($|\\s)`).test(text));
+}
+
+function isDirectedAtOther(text) {
+  return /\b(ты|тебя|тебе|твой|твоя|твои|твое|вы|вас|вам|пошел|пошла|пошли)\b/.test(text);
+}
+
+function isDirectedAtSelf(text) {
+  return /\b(я|мне|меня|у меня|сам|сама|самого|саму себя)\b/.test(text);
+}
+
+function getModerationWarningText() {
+  return MODERATION_WARNING_TEXT;
+}
+
+function getModerationDeleteText() {
+  return MODERATION_DELETE_TEXT;
+}
+
+function classifyModeration(text) {
+  const normalized = normalizeText(text)
+    .replace(/[^а-яa-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) {
+    return "none";
+  }
+
+  const selfDirected = isDirectedAtSelf(normalized);
+  const directedAtOther = isDirectedAtOther(normalized);
+
+  if (selfDirected && !directedAtOther) {
+    return "none";
+  }
+
+  const hasDeletePhrase = containsAnyPhrase(normalized, MODERATION_DELETE_PHRASES);
+  const hasWarningPhrase = containsAnyPhrase(normalized, MODERATION_WARNING_PHRASES);
+  const hasDeleteWord = containsAnyWord(normalized, MODERATION_DELETE_WORDS);
+  const hasWarningWord = containsAnyWord(normalized, MODERATION_WARNING_WORDS);
+  const hasHardImperativeAttack = /\b(пиздуйте|съебите|уебывайте)\b/.test(normalized) && /\b(нахуй|на хуй)\b/.test(normalized);
+  const hasPluralHardInsult = /\b(мудаки|пидоры|долбоебы|ебаные|ебанутые)\b/.test(normalized);
+
+  if (hasDeletePhrase || hasHardImperativeAttack || (hasPluralHardInsult && (hasDeleteWord || hasHardImperativeAttack)) || (directedAtOther && hasDeleteWord)) {
+    return "delete";
+  }
+
+  if (hasWarningPhrase || (directedAtOther && hasWarningWord)) {
+    return "warn";
+  }
+
+  if (hasDeleteWord || hasWarningWord) {
+    return "review";
+  }
+
+  return "none";
+}
+
+function getCurrentTimestamp() {
+  return Date.now() + Math.floor(Math.random() * 1000);
+}
+
+function makeQueueEntry(message, block, label, rawText, extra = {}) {
+  return {
+    id: `${message.chat.id}_${message.message_id}_${Math.random().toString(36).slice(2, 8)}`,
+    author: getAuthorLabel(message),
+    rawText,
+    label,
+    block,
+    createdAt: getCurrentTimestamp(),
+    isActive: false,
+    status: "pending",
+    kind: extra.kind ?? null,
+  };
+}
+
+function getBillQuestionNumber(text) {
+  const normalized = normalizeText(text);
+  const standalone = normalized.match(/^\d{1,3}$/);
+
+  if (standalone) {
+    const number = Number(standalone[0]);
+    if (number >= 1 && number <= 500 && ![111, 222, 333, 444].includes(number)) {
+      return number;
+    }
+  }
+
+  const explicit = normalized.match(/(?:игра[а-я]*|ирга[а-я]*|вопрос[а-я]*)\s*(\d{1,3})/i);
+  if (explicit) {
+    const number = Number(explicit[1]);
+    if (number >= 1 && number <= 500) {
+      return number;
+    }
+  }
+
+  const anyNumber = normalized.match(/\b(\d{1,3})\b/g);
+  if (!anyNumber) {
+    return null;
+  }
+
+  for (const candidate of anyNumber) {
+    const number = Number(candidate);
+    if (number >= 1 && number <= 500 && ![111, 222, 333, 444].includes(number)) {
+      return number;
+    }
+  }
+
+  return null;
+}
+
+function createEmptyQueueState() {
+  return {
+    isOpen: false,
+    mode: null,
+    entries: [],
+    history: [],
+    queueMessageId: null,
+  };
+}
+
+function cloneQueueState(state) {
+  return JSON.parse(JSON.stringify(state));
+}
+
+function pushQueueHistory(state) {
+  state.history.push(cloneQueueState({
+    isOpen: state.isOpen,
+    mode: state.mode,
+    entries: state.entries,
+    history: [],
+    queueMessageId: state.queueMessageId,
+  }));
+
+  if (state.history.length > 50) {
+    state.history.shift();
+  }
+}
+
+function getQueueHeader() {
+  return QUEUE_HEADER;
+}
+
+function getQueueModeTitle(mode) {
+  return QUEUE_MODE_TEXT[mode]?.title || "Очередь";
+}
+
+function getQueueInstruction(mode) {
+  return QUEUE_MODE_TEXT[mode]?.instruction || "";
+}
+
+function ensureSingleActiveEntry(state) {
+  const pendingEntries = state.entries.filter((entry) => entry.status === "pending");
+
+  if (pendingEntries.length === 0) {
+    state.entries.forEach((entry) => {
+      entry.isActive = false;
+    });
+    return;
+  }
+
+  const alreadyActive = pendingEntries.find((entry) => entry.isActive);
+  if (alreadyActive) {
+    state.entries.forEach((entry) => {
+      if (entry.id !== alreadyActive.id) {
+        entry.isActive = false;
+      }
+    });
+    return;
+  }
+
+  const firstPending = pendingEntries[0];
+  state.entries.forEach((entry) => {
+    entry.isActive = entry.id === firstPending.id;
+  });
+}
+
+function buildQueueText(state) {
+  const lines = [
+    `<b>${getQueueModeTitle(state.mode)}</b>`,
+    state.isOpen ? `<b>${QUEUE_OPEN_LABEL}</b>` : `<b>${QUEUE_CLOSED_LABEL}</b>`,
+    `<i>${getQueueInstruction(state.mode)}</i>`,
+    "",
+    getQueueHeader(),
+    "",
+  ];
+
+  if (state.entries.length === 0) {
+    lines.push("Пока пусто.");
+    return lines.join("\n");
+  }
+
+  for (const entry of state.entries) {
+    let marker = "•";
+    if (entry.status === "done") {
+      marker = "✅";
+    } else if (entry.isActive) {
+      marker = "▶";
+    }
+
+    lines.push(`${marker} ${entry.author} — ${entry.label}`);
+  }
+
+  return lines.join("\n");
+}
+
+function getEntryBlock(state, entry) {
+  if (state.mode === "bill") {
+    return entry.block;
+  }
+
+  return "single";
+}
+
+function addQueueEntryToState(state, entry) {
+  state.entries.push(entry);
+
+  if (state.mode === "bill") {
+    const priorityOrder = { first: 1, "222": 2, "333": 3, "444": 4 };
+    state.entries.sort((a, b) => {
+      const diff = (priorityOrder[a.block] ?? 99) - (priorityOrder[b.block] ?? 99);
+      if (diff !== 0) {
+        return diff;
+      }
+
+      return a.createdAt - b.createdAt;
+    });
+  } else {
+    state.entries.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  ensureSingleActiveEntry(state);
+}
+
+function getNextPendingIndex(state, startIndex = 0) {
+  for (let i = startIndex; i < state.entries.length; i += 1) {
+    if (state.entries[i].status === "pending") {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function getCurrentActiveIndex(state) {
+  return state.entries.findIndex((entry) => entry.isActive && entry.status === "pending");
+}
+
+function activateNextPendingFrom(state, index) {
+  state.entries.forEach((entry) => {
+    entry.isActive = false;
+  });
+
+  const nextIndex = getNextPendingIndex(state, index);
+  if (nextIndex !== -1) {
+    state.entries[nextIndex].isActive = true;
+  }
+}
+
+function activateFirstPending(state) {
+  state.entries.forEach((entry) => {
+    entry.isActive = false;
+  });
+
+  const firstIndex = getNextPendingIndex(state, 0);
+  if (firstIndex !== -1) {
+    state.entries[firstIndex].isActive = true;
+  }
+}
+
+function getNextBillSpeechCode(state, author) {
+  const count = state.entries.filter((entry) =>
+    entry.author === author &&
+    ["111", "222", "333", "444"].includes(entry.label)
+  ).length;
+
+  if (count <= 0) return "111";
+  if (count === 1) return "222";
+  if (count === 2) return "333";
+  return "444";
+}
+
+function getBillSpeechBlock(label) {
+  if (label === "111") return "first";
+  return label;
+}
+
+function parseBillQueueEntry(message, state) {
+  const rawText = String(message.text || "").trim();
+  const normalized = normalizeText(rawText);
+  const has111 = /\b111\b/.test(normalized);
+  const has222 = /\b222\b/.test(normalized);
+  const has333 = /\b333\b/.test(normalized);
+  const has444 = /\b444\b/.test(normalized);
+  const questionNumber = getBillQuestionNumber(rawText);
+
+  if (questionNumber !== null) {
+    if (has111) {
+      return makeQueueEntry(message, "first", `111 + игра ${questionNumber}`, rawText);
+    }
+
+    return makeQueueEntry(message, "first", `игра ${questionNumber}`, rawText);
+  }
+
+  if (has111 || has222 || has333 || has444) {
+    return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech" });
+  }
+
+  return null;
+}
+
+function parseBkQueueEntry(message) {
+  const rawText = String(message.text || "").trim();
+  const normalized = normalizeText(rawText);
+
+  if (/\b222\b|\b333\b|\b444\b/.test(normalized)) {
+    return null;
+  }
+
+  const has111 = /\b111\b/.test(normalized);
+  const wantsRead = /чит|почитаю/.test(normalized);
+  const wantsSpeak = /высказ|выксаз|говор|скажу/.test(normalized);
+
+  if (!has111 && !wantsRead && !wantsSpeak) {
+    return null;
+  }
+
+  let label = "111";
+
+  if (wantsRead && !wantsSpeak) {
+    label = "111 читать";
+  } else if (wantsSpeak && !wantsRead) {
+    label = "111 высказаться";
+  } else if (rawText && rawText !== "111") {
+    label = rawText;
+  }
+
+  return makeQueueEntry(message, "bk", label, rawText);
+}
+
+function parseRsQueueEntry(message) {
+  const rawText = String(message.text || "").trim();
+  const normalized = normalizeText(rawText);
+
+  if (!/^111(?:[\s!.,?:;#-]*)$/.test(normalized)) {
+    return null;
+  }
+
+  return makeQueueEntry(message, "rs", "111", rawText);
+}
+
+function parseQueueEntry(message, state) {
+  if (!state?.isOpen || !state?.mode) {
+    return null;
+  }
+
+  if (state.mode === "bill") {
+    return parseBillQueueEntry(message, state);
+  }
+
+  if (state.mode === "bk") {
+    return parseBkQueueEntry(message);
+  }
+
+  if (state.mode === "rs") {
+    return parseRsQueueEntry(message);
+  }
+
+  return null;
+}
+
+function buildQueueKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🟢 ON Билл", callback_data: "queue:open_bill" },
+        { text: "🟢 ON БК", callback_data: "queue:open_bk" }
+      ],
+      [
+        { text: "🟢 ON Рабочка", callback_data: "queue:open_rs" }
+      ],
+      [{ text: "✅ Высказался", callback_data: "queue:done" }],
+      [
+        { text: "⏭ Пропускает", callback_data: "queue:skip" },
+        { text: "❌ Удалить из очереди", callback_data: "queue:remove" }
+      ],
+      [
+        { text: "↩ Отменить действие", callback_data: "queue:undo" },
+        { text: "🔴 OFF Закрыть очередь", callback_data: "queue:close" }
+      ],
+    ],
+  };
+}
+
+export class QueueStateDurableObject {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async loadState() {
+    return (await this.state.storage.get("queue-state")) || createEmptyQueueState();
+  }
+
+  async saveState(queueState) {
+    await this.state.storage.put("queue-state", queueState);
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let queueState = await this.loadState();
+
+    try {
+      if (action === "get") {
+        return Response.json({ ok: true, state: queueState });
+      }
+
+      if (action === "set_message_id") {
+        queueState.queueMessageId = payload.messageId ?? null;
+        await this.saveState(queueState);
+        return Response.json({ ok: true });
+      }
+
+      if (action === "clear") {
+        const previousMessageId = queueState.queueMessageId;
+        queueState = createEmptyQueueState();
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          cleared: true,
+          previousMessageId,
+        });
+      }
+
+      if (action === "open") {
+        const previousMessageId = queueState.queueMessageId;
+        pushQueueHistory(queueState);
+        queueState.isOpen = true;
+        queueState.mode = payload.mode;
+        queueState.entries = [];
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "close") {
+        pushQueueHistory(queueState);
+        queueState.isOpen = false;
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "add") {
+        pushQueueHistory(queueState);
+        if (payload.entry?.kind === "bill_speech") {
+          const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
+          payload.entry.label = nextCode;
+          payload.entry.block = getBillSpeechBlock(nextCode);
+          payload.entry.kind = null;
+        }
+        addQueueEntryToState(queueState, payload.entry);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "done") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("РќРµРєРѕРіРѕ РѕС‚РјРµС‡Р°С‚СЊ: Р°РєС‚РёРІРЅРѕР№ СЃС‚СЂРѕРєРё СЃРµР№С‡Р°СЃ РЅРµС‚.");
+        }
+
+        pushQueueHistory(queueState);
+        queueState.entries[activeIndex].status = "done";
+        queueState.entries[activeIndex].isActive = false;
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "remove") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("РќРµРєРѕРіРѕ РѕС‚РјРµС‡Р°С‚СЊ: Р°РєС‚РёРІРЅРѕР№ СЃС‚СЂРѕРєРё СЃРµР№С‡Р°СЃ РЅРµС‚.");
+        }
+
+        pushQueueHistory(queueState);
+        queueState.entries.splice(activeIndex, 1);
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "skip") {
+        const activeIndex = getCurrentActiveIndex(queueState);
+        if (activeIndex === -1) {
+          throw new Error("РќРµРєРѕРіРѕ РѕС‚РјРµС‡Р°С‚СЊ: Р°РєС‚РёРІРЅРѕР№ СЃС‚СЂРѕРєРё СЃРµР№С‡Р°СЃ РЅРµС‚.");
+        }
+
+        const currentEntry = queueState.entries[activeIndex];
+        const block = getEntryBlock(queueState, currentEntry);
+        let targetIndex = -1;
+
+        for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
+          if (
+            queueState.entries[i].status === "pending" &&
+            getEntryBlock(queueState, queueState.entries[i]) === block
+          ) {
+            targetIndex = i;
+            break;
+          }
+        }
+
+        if (targetIndex === -1) {
+          for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
+            if (queueState.entries[i].status === "pending") {
+              targetIndex = i;
+              break;
+            }
+          }
+        }
+
+        if (targetIndex === -1) {
+          throw new Error("РќРёР¶Рµ РІ РѕС‡РµСЂРµРґРё Р±РѕР»СЊС€Рµ РЅРёРєРѕРіРѕ РЅРµС‚.");
+        }
+
+        pushQueueHistory(queueState);
+        const nextEntry = queueState.entries[targetIndex];
+        queueState.entries[activeIndex] = nextEntry;
+        queueState.entries[targetIndex] = currentEntry;
+        activateFirstPending(queueState);
+        const previousMessageId = queueState.queueMessageId;
+        queueState.queueMessageId = null;
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      if (action === "undo") {
+        if (!queueState.history.length) {
+          throw new Error("РћС‚РєР°С‚С‹РІР°С‚СЊ РїРѕРєР° РЅРµС‡РµРіРѕ.");
+        }
+
+        const previousMessageId = queueState.queueMessageId;
+        const snapshot = queueState.history.pop();
+        queueState = {
+          ...snapshot,
+          history: queueState.history,
+          queueMessageId: null,
+        };
+        await this.saveState(queueState);
+        return Response.json({
+          ok: true,
+          publishQueue: true,
+          queueText: buildQueueText(queueState),
+          previousMessageId,
+        });
+      }
+
+      return Response.json({ ok: false, error: "РќРµРёР·РІРµСЃС‚РЅРѕРµ РґРµР№СЃС‚РІРёРµ РѕС‡РµСЂРµРґРё." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+}
+
+function getAuthorLabel(message) {
+  const first = message.from?.first_name ?? "";
+  const last = message.from?.last_name ?? "";
+  const fullName = `${first} ${last}`.trim();
+  const username = message.from?.username ? `@${message.from.username}` : "";
+
+  if (fullName && username) {
+    return `${fullName} (${username})`;
+  }
+
+  if (fullName) {
+    return fullName;
+  }
+
+  if (username) {
+    return username;
+  }
+
+  if (message.sender_chat?.title) {
+    return `от имени чата: ${message.sender_chat.title}`;
+  }
+
+  return "не удалось определить";
+}
+
+function buildMeetingKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🤫 Минута тишины", callback_data: "meeting:minute_silence" },
+        { text: "🙏 Молитва", callback_data: "meeting:prayer" }
+      ],
+      [
+        { text: "📜 Преамбула", callback_data: "meeting:preambula" },
+        { text: "👋 Новичку", callback_data: "meeting:newcomer" }
+      ],
+      [
+        { text: "12 Шагов", callback_data: "meeting:steps12" },
+        { text: "12 Традиций", callback_data: "meeting:traditions12" }
+      ],
+      [
+        { text: "📘 Правила собрания", callback_data: "meeting:meeting_rules" },
+        { text: "🗂 Темы собрания", url: TOPICS_MEETING_URL }
+      ],
+      [
+        { text: "🦔 Ёжик", callback_data: "meeting:yozhik" },
+        { text: "📙 Билл", callback_data: "meeting:bill_prompt" }
+      ],
+      [
+        { text: "💰 7-я Традиция", callback_data: "meeting:seventh_tradition" },
+        { text: "✨ Обещания 9-го шага", callback_data: "meeting:promises9" }
+      ],
+      [
+        { text: "☕ Правила чайной", callback_data: "meeting:tea_rules" },
+        { text: "❓ Вопросы спикеру", callback_data: "meeting:speaker_questions" }
+      ],
+      [
+        { text: "‼️ Чистота чата", callback_data: "meeting:chat_cleanliness" },
+        { text: "📌 Правила чата", callback_data: "meeting:chat_rules" }
+      ]
+    ]
+  };
+}
+
+async function callTelegram(env, method, payload) {
+  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!data.ok) {
+    throw new Error(`${method} failed: ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+async function deleteMessageSafe(env, chatId, messageId) {
+  if (!messageId) {
+    return;
+  }
+
+  try {
+    await callTelegram(env, "deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch {
+    // РµСЃР»Рё СЃРѕРѕР±С‰РµРЅРёРµ СѓР¶Рµ СѓРґР°Р»РµРЅРѕ, РїСЂРѕСЃС‚Рѕ РёРґС‘Рј РґР°Р»СЊС€Рµ
+  }
+}
+
+async function callQueueState(env, action, payload = {}) {
+  const stub = env.QUEUE_STATE.getByName("main");
+  const response = await stub.fetch(`https://queue/${action}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error(data.error || "РћС€РёР±РєР° РѕС‡РµСЂРµРґРё.");
+  }
+
+  return data;
+}
+
+async function applyQueueResponse(env, result) {
+  if (result.publishQueue) {
+    const sent = await sendMessage(
+      env,
+      CHAT_GROUP_ID,
+      result.queueText,
+      null,
+      null,
+      null,
+      result.parseMode ?? "HTML"
+    );
+
+    if (result.previousMessageId) {
+      await deleteMessageSafe(env, CHAT_GROUP_ID, result.previousMessageId);
+    }
+
+    await callQueueState(env, "set_message_id", {
+      messageId: sent.result?.message_id ?? null,
+    });
+  }
+
+  if (result.closeMessage) {
+    await sendMessage(env, CHAT_GROUP_ID, result.closeMessage);
+  }
+
+  if (result.cleared && result.previousMessageId) {
+    await deleteMessageSafe(env, CHAT_GROUP_ID, result.previousMessageId);
+  }
+}
+
+async function sendMessage(env, chatId, text, messageThreadId = null, replyToMessageId = null, replyMarkup = null, parseMode = null) {
+  const payload = {
+    chat_id: chatId,
+    text
+  };
+
+  if (messageThreadId) {
+    payload.message_thread_id = messageThreadId;
+  }
+
+  if (replyToMessageId) {
+    payload.reply_to_message_id = replyToMessageId;
+  }
+
+  if (replyMarkup) {
+    payload.reply_markup = replyMarkup;
+  }
+
+  if (parseMode) {
+    payload.parse_mode = parseMode;
+  }
+
+  return callTelegram(env, "sendMessage", payload);
+}
+
+async function sendAdminDigest(env, kind, author, originalText, tag) {
+  return sendMessage(env, INFO_CHAT_ID, buildAdminDigest(kind, author, originalText, tag), ADMIN_THREAD_ID);
+}
+
+async function sendAdminSignal(env, author, originalText, deleted = false) {
+  return sendMessage(env, INFO_CHAT_ID, buildAdminSignal(author, originalText, deleted), ADMIN_THREAD_ID);
+}
+
+async function copyTechMessageToGroup(env, sourceMessageId) {
+  return callTelegram(env, "copyMessage", {
+    chat_id: CHAT_GROUP_ID,
+    from_chat_id: INFO_CHAT_ID,
+    message_id: sourceMessageId
+  });
+}
+
+async function answerCallback(env, callbackQueryId, text, showAlert = false) {
+  return callTelegram(env, "answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: showAlert
+  });
+}
+
+async function isUserAdmin(env, userId) {
+  try {
+    const data = await callTelegram(env, "getChatMember", {
+      chat_id: INFO_CHAT_ID,
+      user_id: userId
+    });
+
+    const status = data.result?.status;
+    return status === "creator" || status === "administrator";
+  } catch {
+    return false;
+  }
+}
+
+async function fetchJsonWithCache(url, cacheName) {
+  const now = Date.now();
+
+  if (cacheName === "yozhik" && yozhikCache && now - yozhikCacheTime < DATA_CACHE_TTL_MS) {
+    return yozhikCache;
+  }
+
+  if (cacheName === "bill" && billCache && now - billCacheTime < DATA_CACHE_TTL_MS) {
+    return billCache;
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Не удалось загрузить ${cacheName}. HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (cacheName === "yozhik") {
+    yozhikCache = data;
+    yozhikCacheTime = now;
+  }
+
+  if (cacheName === "bill") {
+    billCache = data;
+    billCacheTime = now;
+  }
+
+  return data;
+}
+
+function getMoscowDateKey() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "2-digit",
+    month: "2-digit"
+  }).format(new Date());
+}
+
+function getMoscowHumanDate() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "numeric",
+    month: "long"
+  }).format(new Date());
+}
+
+function isMoscowTime(hour, minute) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(values.hour) === hour && Number(values.minute) === minute;
+}
+
+function splitTitleAndBody(text) {
+  const normalized = String(text || "").trim();
+  const parts = normalized.split(/\n\s*\n/);
+
+  const title = (parts.shift() || "").trim();
+  const body = parts.join("\n\n").trim();
+
+  return { title, body };
+}
+
+async function sendYozhikToGroup(env) {
+  const data = await fetchJsonWithCache(YOZHIK_JSON_URL, "yozhik");
+  const key = getMoscowDateKey();
+  const text = data[key];
+
+  if (!text) {
+    throw new Error(`Не нашёл Ёжик на дату ${key}`);
+  }
+
+  const humanDate = getMoscowHumanDate();
+  const messageText = `Ежедневные размышления на ${humanDate}
+
+${text}`;
+
+  await sendMessage(env, CHAT_GROUP_ID, messageText);
+}
+
+async function sendBillToGroup(env, billNumber) {
+  if (!Number.isInteger(billNumber) || billNumber < 1 || billNumber > 332) {
+    throw new Error("Номер отрывка Билла должен быть от 1 до 332.");
+  }
+
+  const data = await fetchJsonWithCache(BILL_JSON_URL, "bill");
+  const text = data[String(billNumber)];
+
+  if (!text) {
+    throw new Error(`Не нашёл отрывок Билла №${billNumber}`);
+  }
+
+  const { title, body } = splitTitleAndBody(text);
+
+  const header = title
+    ? `Как это видит Билл. №${billNumber}. ${title}`
+    : `Как это видит Билл. №${billNumber}`;
+
+  const messageText = body
+    ? `${header}
+
+${body}`
+    : `${header}
+
+${text}`;
+
+  await sendMessage(env, CHAT_GROUP_ID, messageText);
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/") {
+      const tokenStatus = env.BOT_TOKEN ? "есть" : "нет";
+      const text = buildRootStatusText(tokenStatus, QUESTIONS_COUNT);
+
+      return new Response(text, {
+        headers: { "content-type": "text/plain; charset=UTF-8" }
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/webhook") {
+      try {
+        const update = await request.json();
+
+        const callbackQuery = update.callback_query;
+        if (callbackQuery) {
+          const data = callbackQuery.data ?? "";
+          const userId = callbackQuery.from?.id;
+          const message = callbackQuery.message;
+          const chatId = message?.chat?.id ?? null;
+          const threadId = message?.message_thread_id ?? null;
+
+          if (data.startsWith("meeting:")) {
+            const isAdmin = await isUserAdmin(env, userId);
+
+            if (!isAdmin) {
+              await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.onlyAdmins);
+              return new Response("ok");
+            }
+
+            if (!isTechThread(chatId, threadId)) {
+              await answerCallback(env, callbackQuery.id, "Этот пульт работает только в теме ТЕХВЕД.");
+              return new Response("ok");
+            }
+
+            const key = data.replace("meeting:", "");
+
+            if (key === "yozhik") {
+              try {
+                await sendYozhikToGroup(env);
+                await answerCallback(env, callbackQuery.id, "Ёжик отправлен в чат группы.");
+              } catch (error) {
+                await answerCallback(env, callbackQuery.id, `Ошибка: ${error.message}`, true);
+              }
+
+              return new Response("ok");
+            }
+
+            if (key === "bill_prompt") {
+              await sendMessage(
+                env,
+                INFO_CHAT_ID,
+                "Введи номер отрывка Билла.\n\nНапример: 17\n\nДопустимые номера: от 1 до 332.",
+                TECH_THREAD_ID
+              );
+              await answerCallback(env, callbackQuery.id, "Жду номер отрывка Билла в теме ТЕХВЕД.");
+              return new Response("ok");
+            }
+
+            const sourceMessageId = TECH_MESSAGES[key];
+
+            if (!sourceMessageId) {
+              await answerCallback(env, callbackQuery.id, "Не нашёл эталонное сообщение.");
+              return new Response("ok");
+            }
+
+            await copyTechMessageToGroup(env, sourceMessageId);
+            await answerCallback(env, callbackQuery.id, "Сообщение отправлено в чат группы.");
+            return new Response("ok");
+          }
+
+          if (data.startsWith("queue:")) {
+            const isAdmin = await isUserAdmin(env, userId);
+
+            if (!isAdmin) {
+              await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.onlyAdmins);
+              return new Response("ok");
+            }
+
+            if (!isTechThread(chatId, threadId)) {
+              await answerCallback(env, callbackQuery.id, "Этот пульт работает только в теме ТЕХВЕД.");
+              return new Response("ok");
+            }
+
+            const key = data.replace("queue:", "");
+
+            try {
+              if (key === "open_bill") {
+                const result = await callQueueState(env, "open", { mode: "bill" });
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, "Открыл очередь Билл.");
+                return new Response("ok");
+              }
+
+              if (key === "open_bk") {
+                const result = await callQueueState(env, "open", { mode: "bk" });
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, "Открыл очередь БК.");
+                return new Response("ok");
+              }
+
+              if (key === "open_rs") {
+                const result = await callQueueState(env, "open", { mode: "rs" });
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, "Открыл очередь Рабочка.");
+                return new Response("ok");
+              }
+
+              if (key === "done") {
+                const result = await callQueueState(env, "done");
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.markedDone);
+                return new Response("ok");
+              }
+
+              if (key === "skip") {
+                const result = await callQueueState(env, "skip");
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.skipped);
+                return new Response("ok");
+              }
+
+              if (key === "remove") {
+                const result = await callQueueState(env, "remove");
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.removed);
+                return new Response("ok");
+              }
+
+              if (key === "undo") {
+                const result = await callQueueState(env, "undo");
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.undone);
+                return new Response("ok");
+              }
+
+              if (key === "close") {
+                const result = await callQueueState(env, "close");
+                await applyQueueResponse(env, result);
+                await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.queueClosed);
+                return new Response("ok");
+              }
+
+              await answerCallback(env, callbackQuery.id, QUEUE_CALLBACK_TEXTS.unknownQueueButton);
+            } catch (error) {
+              await answerCallback(env, callbackQuery.id, `${QUEUE_CALLBACK_TEXTS.queueErrorPrefix}: ${error.message}`, true);
+            }
+
+            return new Response("ok");
+          }
+        }
+
+        const message = update.message || update.edited_message;
+        if (!message || !message.text) {
+          return new Response("ok");
+        }
+
+        const text = message.text.trim();
+        const chatId = message.chat.id;
+        const userId = message.from?.id ?? "неизвестно";
+        const threadId = message.message_thread_id ?? null;
+        const chatType = message.chat?.type ?? "неизвестно";
+
+        if (isIdCommand(text)) {
+          const replyText = [
+            "Принято.",
+            `chat_id: ${chatId}`,
+            `user_id: ${userId}`,
+            `message_thread_id: ${threadId ?? "нет"}`,
+            `chat_type: ${chatType}`,
+            "",
+            "Это тестовое сообщение от бота."
+          ].join("\n");
+
+          await sendMessage(env, chatId, replyText, threadId, message.message_id);
+          return new Response("ok");
+        }
+
+        if (isTechThread(chatId, threadId) && isMeetingPanelCommand(text)) {
+          await sendMessage(env, INFO_CHAT_ID, MEETING_PANEL_TEXT, TECH_THREAD_ID, null, buildMeetingKeyboard());
+          return new Response("ok");
+        }
+
+        if (isTechThread(chatId, threadId) && isQueuePanelCommand(text)) {
+          await sendMessage(env, INFO_CHAT_ID, QUEUE_PANEL_TEXT, TECH_THREAD_ID, null, buildQueueKeyboard());
+          return new Response("ok");
+        }
+
+        if (isTechThread(chatId, threadId) && isYozhikCommand(text)) {
+          try {
+            await sendYozhikToGroup(env);
+            await sendMessage(env, INFO_CHAT_ID, "Ёжик отправлен в чат группы.", TECH_THREAD_ID, message.message_id);
+          } catch (error) {
+            await sendMessage(env, INFO_CHAT_ID, `Ошибка Ёжика: ${error.message}`, TECH_THREAD_ID, message.message_id);
+          }
+
+          return new Response("ok");
+        }
+
+        if (isTechThread(chatId, threadId) && isBillPromptCommand(text)) {
+          await sendMessage(
+            env,
+            INFO_CHAT_ID,
+            "Введи номер отрывка Билла.\n\nНапример: 17\n\nДопустимые номера: от 1 до 332.",
+            TECH_THREAD_ID,
+            message.message_id
+          );
+
+          return new Response("ok");
+        }
+
+        if (isTechThread(chatId, threadId)) {
+          const billNumber = parseBillInput(text);
+
+          if (billNumber !== null) {
+            try {
+              await sendBillToGroup(env, billNumber);
+              await sendMessage(env, INFO_CHAT_ID, `Отрывок Билла №${billNumber} отправлен в чат группы.`, TECH_THREAD_ID, message.message_id);
+            } catch (error) {
+              await sendMessage(env, INFO_CHAT_ID, `Ошибка Билла: ${error.message}`, TECH_THREAD_ID, message.message_id);
+            }
+
+            return new Response("ok");
+          }
+        }
+
+        if ((isChatGroup(chatId, threadId) || isPrepThread(chatId, threadId)) && hasFixMarker(text)) {
+          const author = getAuthorLabel(message);
+          await sendAdminDigest(env, "ФИКСИРУЮ", author, text, "#фиксирую");
+          await sendMessage(env, chatId, FIX_CONFIRMATION, threadId, message.message_id);
+          return new Response("ok");
+        }
+
+        if (isChatGroup(chatId, threadId) && hasHelpMarker(text)) {
+          const author = getAuthorLabel(message);
+          await sendAdminDigest(env, "HELP", author, text, "#help");
+          await sendMessage(env, chatId, HELP_CONFIRMATION, null, message.message_id);
+          return new Response("ok");
+        }
+
+        if ((isPrivateChat(chatType) || isChatGroup(chatId, threadId)) && parseNafanyaQuestion(text) !== null) {
+          const question = parseNafanyaQuestion(text);
+          let restrained = false;
+
+          if (isChatGroup(chatId, threadId)) {
+            const queueInfo = await callQueueState(env, "get");
+            restrained = Boolean(queueInfo.state?.isOpen);
+          }
+
+          const answer = await answerKnowledgeQuestion(env, question, { restrained });
+          await sendMessage(env, chatId, answer, threadId, message.message_id);
+          return new Response("ok");
+        }
+
+        if (isChatGroup(chatId, threadId)) {
+          const moderationLevel = classifyModeration(text);
+          const author = getAuthorLabel(message);
+
+          if (moderationLevel === "warn") {
+            await sendMessage(env, chatId, getModerationWarningText(), null, message.message_id);
+            return new Response("ok");
+          }
+
+          if (moderationLevel === "delete") {
+            await deleteMessageSafe(env, chatId, message.message_id);
+            await sendAdminSignal(env, author, text, true);
+            await sendMessage(env, chatId, getModerationDeleteText());
+            return new Response("ok");
+          }
+
+          if (moderationLevel === "review") {
+            await sendAdminSignal(env, author, text, false);
+            return new Response("ok");
+          }
+        }
+
+        if (isChatGroup(chatId, threadId)) {
+          const queueInfo = await callQueueState(env, "get");
+          const gameNumber = parseGameCommand(text);
+          const inlineQuestionNumber = getBillQuestionNumber(text);
+          const queueEntry = parseQueueEntry(message, queueInfo.state);
+
+          if (gameNumber !== null) {
+            if (gameNumber >= 1 && gameNumber <= 500) {
+              const question = QUESTIONS.get(gameNumber);
+
+              if (question) {
+                await sendMessage(env, chatId, `Вопрос ${gameNumber}:
+
+${question}`, null, message.message_id);
+              } else {
+                await sendMessage(env, chatId, `Не нашёл вопрос ${gameNumber}. Проверь номер.`, null, message.message_id);
+              }
+            } else {
+              await sendMessage(env, chatId, "Нужен номер вопроса от 1 до 500.", null, message.message_id);
+            }
+
+            if (queueEntry) {
+              const result = await callQueueState(env, "add", { entry: queueEntry });
+              await applyQueueResponse(env, result);
+            }
+
+            return new Response("ok");
+          }
+
+          if (inlineQuestionNumber !== null) {
+            const question = QUESTIONS.get(inlineQuestionNumber);
+
+            if (question) {
+              await sendMessage(env, chatId, `Вопрос ${inlineQuestionNumber}:
+
+${question}`, null, message.message_id);
+
+              if (queueEntry) {
+                const result = await callQueueState(env, "add", { entry: queueEntry });
+                await applyQueueResponse(env, result);
+              }
+
+              return new Response("ok");
+            }
+          }
+
+          if (queueEntry) {
+            const result = await callQueueState(env, "add", { entry: queueEntry });
+            await applyQueueResponse(env, result);
+          }
+        }
+
+        return new Response("ok");
+      } catch (error) {
+        return new Response(`Webhook error: ${error.message}`, {
+          status: 500,
+          headers: { "content-type": "text/plain; charset=UTF-8" }
+        });
+      }
+    }
+
+    return new Response("Not found", {
+      status: 404,
+      headers: { "content-type": "text/plain; charset=UTF-8" }
+    });
+  },
+
+async scheduled(controller, env, ctx) {
+    if (isMoscowTime(7, 0)) {
+      ctx.waitUntil(sendYozhikToGroup(env));
+      return;
+    }
+
+    if (isMoscowTime(23, 55)) {
+      ctx.waitUntil((async () => {
+        const result = await callQueueState(env, "clear");
+        await applyQueueResponse(env, result);
+      })());
+    }
+  },
+};
+

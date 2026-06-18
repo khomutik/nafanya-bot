@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "pochti-normalnye-bot" generated at 2026-06-04T20:08:50.158Z.
