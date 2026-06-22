@@ -520,10 +520,10 @@ async function handleOwnerAdminCallback(env, callbackQuery, action, targetUserId
     callPersonalDayState,
     getPrivateRoles
   } = deps;
-  const ownerId = String(callbackQuery.from?.id || "").trim();
-  const ownerRoles = await getPrivateRoles(env, ownerId);
-  if (!ownerRoles.isOwner) {
-    await answerCallback(env, callbackQuery.id, "\u042d\u0442\u0430 \u043a\u043d\u043e\u043f\u043a\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0434\u043b\u044f \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430.", true);
+  const managerId = String(callbackQuery.from?.id || "").trim();
+  const managerRoles = await getPrivateRoles(env, managerId);
+  if (!managerRoles.canManageAdmins) {
+    await answerCallback(env, callbackQuery.id, "\u042d\u0442\u0430 \u043a\u043d\u043e\u043f\u043a\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0434\u043b\u044f \u0442\u0435\u0445, \u043a\u0442\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u0442 \u0430\u0434\u043c\u0438\u043d\u0430\u043c\u0438.", true);
     return okResponse();
   }
   const target = await callPersonalDayState(env, "get_personal_subscription", { userId: targetUserId }).catch(() => ({ subscription: null }));

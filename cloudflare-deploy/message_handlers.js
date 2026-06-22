@@ -221,7 +221,7 @@ const TEXT = {
   adminAnnouncePrompt: "\u041f\u0440\u0438\u0448\u043b\u0438 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435, \u043a\u043e\u0442\u043e\u0440\u043e\u0435 \u043d\u0443\u0436\u043d\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432\u0441\u0435\u043c \u0430\u0434\u043c\u0438\u043d\u0430\u043c.",
   adminDraftReady: "\u0427\u0435\u0440\u043d\u043e\u0432\u0438\u043a \u0433\u043e\u0442\u043e\u0432. \u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0443 \u0430\u0434\u043c\u0438\u043d\u0430\u043c.",
   adminDenied: "\u042d\u0442\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0430\u0434\u043c\u0438\u043d\u0430\u043c.",
-  ownerDenied: "\u042d\u0442\u0430 \u043a\u043d\u043e\u043f\u043a\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0443.",
+  adminManagerDenied: "\u042d\u0442\u0430 \u043a\u043d\u043e\u043f\u043a\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u0435\u043c, \u043a\u0442\u043e \u0443\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u0442 \u0430\u0434\u043c\u0438\u043d\u0430\u043c\u0438.",
   chooseAddAdmin: "\u0412\u044b\u0431\u0435\u0440\u0438, \u043a\u043e\u043c\u0443 \u0434\u0430\u0442\u044c \u0430\u0434\u043c\u0438\u043d\u0441\u043a\u0438\u0435 \u043a\u043d\u043e\u043f\u043a\u0438:",
   chooseRemoveAdmin: "\u0412\u044b\u0431\u0435\u0440\u0438, \u0443 \u043a\u043e\u0433\u043e \u0443\u0431\u0440\u0430\u0442\u044c \u0430\u0434\u043c\u0438\u043d\u0441\u043a\u0438\u0435 \u043a\u043d\u043e\u043f\u043a\u0438:",
   noAdminCandidates: "\u041f\u043e\u043a\u0430 \u043d\u0435\u043a\u043e\u0433\u043e \u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c. \u0427\u0435\u043b\u043e\u0432\u0435\u043a \u0441\u043d\u0430\u0447\u0430\u043b\u0430 \u0434\u043e\u043b\u0436\u0435\u043d \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c \u0431\u043e\u0442\u0443 /start.",
@@ -414,7 +414,7 @@ function isRemoveAdminButton(text) {
   return normalizeButtonText(text) === normalizeButtonText(DM_BUTTONS.removeAdmin);
 }
 
-function buildPrivateMenuKeyboard({ isOwner = false, isAdmin = false, isSubscriber = false } = {}) {
+function buildPrivateMenuKeyboard({ isOwner = false, canManageAdmins = false, isAdmin = false, isSubscriber = false } = {}) {
   if (!isAdmin && !isSubscriber) {
     return { remove_keyboard: true };
   }
@@ -422,7 +422,7 @@ function buildPrivateMenuKeyboard({ isOwner = false, isAdmin = false, isSubscrib
   if (isAdmin) {
     keyboard.push([DM_BUTTONS.adminAnnounce]);
   }
-  if (isOwner) {
+  if (isOwner || canManageAdmins) {
     keyboard.push([DM_BUTTONS.addAdmin, DM_BUTTONS.removeAdmin]);
   }
   return {
@@ -554,8 +554,8 @@ async function handleAdminDraftMessage(env, message, text, chatId, user, roles, 
 
 async function handleOwnerAddAdmin(env, message, chatId, roles, deps) {
   const { callPersonalDayState, sendMessage, getPrivateRoles } = deps;
-  if (!roles.isOwner) {
-    await sendMessage(env, chatId, TEXT.ownerDenied, null, message.message_id);
+  if (!roles.canManageAdmins) {
+    await sendMessage(env, chatId, TEXT.adminManagerDenied, null, message.message_id);
     return okResponse();
   }
   const result = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
@@ -576,8 +576,8 @@ async function handleOwnerAddAdmin(env, message, chatId, roles, deps) {
 
 async function handleOwnerRemoveAdmin(env, message, chatId, roles, deps) {
   const { callPersonalDayState, sendMessage, getPrivateRoles } = deps;
-  if (!roles.isOwner) {
-    await sendMessage(env, chatId, TEXT.ownerDenied, null, message.message_id);
+  if (!roles.canManageAdmins) {
+    await sendMessage(env, chatId, TEXT.adminManagerDenied, null, message.message_id);
     return okResponse();
   }
   const result = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));

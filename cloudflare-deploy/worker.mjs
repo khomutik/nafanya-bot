@@ -2424,6 +2424,12 @@ function isAdminDmUser(env, userId, username = "") {
   return Boolean(id) && (isOwner(env, id) || parseUserIdSet(env?.ADMIN_DM_USER_IDS).has(id) || Boolean(name && parseUsernameSet(env?.ADMIN_DM_USERNAMES).has(name)));
 }
 __name(isAdminDmUser, "isAdminDmUser");
+function isAdminManagerUser(env, userId, username = "") {
+  const id = String(userId || "").trim();
+  const name = String(username || "").replace(/^@/u, "").trim().toLowerCase();
+  return Boolean(id) && (isOwner(env, id) || parseUserIdSet(env?.ADMIN_MANAGER_USER_IDS).has(id) || Boolean(name && parseUsernameSet(env?.ADMIN_MANAGER_USERNAMES).has(name)));
+}
+__name(isAdminManagerUser, "isAdminManagerUser");
 function isPrivateSubscriber(env, userId) {
   return Boolean(String(userId || "").trim());
 }
@@ -2438,9 +2444,16 @@ __name(isDynamicAdminDmUser, "isDynamicAdminDmUser");
 async function getPrivateRoles(env, userId) {
   const id = String(userId || "").trim();
   const owner = isOwner(env, id);
-  const admin = owner || isAdminDmUser(env, id) || await isDynamicAdminDmUser(env, id);
+  const [dynamicAdmin, subscriptionResult] = await Promise.all([
+    isDynamicAdminDmUser(env, id),
+    callPersonalDayState(env, "get_personal_subscription", { userId: id }).catch(() => ({ subscription: null }))
+  ]);
+  const username = subscriptionResult?.subscription?.username || "";
+  const admin = owner || isAdminDmUser(env, id, username) || dynamicAdmin;
+  const adminManager = owner || isAdminManagerUser(env, id, username);
   return {
     isOwner: owner,
+    canManageAdmins: adminManager,
     isAdmin: admin,
     isSubscriber: Boolean(id)
   };

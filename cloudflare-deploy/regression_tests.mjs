@@ -231,6 +231,10 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /handleServiceMessages[\s\S]*isTechThread,[\s\S]*TECH_THREAD_ID,[\s\S]*callTelegram,/u, "Service handler should receive all dependencies used by the timer panel");
   assert.match(messageHandlers, /isChatGroup\(chatId, threadId\) \|\| isTechThread\(chatId, threadId\) \|\| isPrivateChat\(chatType\)\) && isTimerPanelCommand\(text\)/u, "Timer panel should open in TECHVED, group chat, and private chats");
   assert.match(worker, /async function isUserAdmin\(env, userId, chatId = INFO_CHAT_ID, chatType = ""\)[\s\S]*isPrivateChat\(chatType\)[\s\S]*getPrivateRoles/u, "Private callback permissions should use bot admin roles");
+  assert.match(worker, /ADMIN_MANAGER_USERNAMES/u, "Admin manager usernames should be configurable");
+  assert.match(worker, /get_personal_subscription[\s\S]*subscription\?\.username[\s\S]*isAdminDmUser\(env, id, username\)/u, "Private roles should recognize saved usernames from /start");
+  assert.match(messageHandlers, /canManageAdmins = false[\s\S]*if \(isOwner \|\| canManageAdmins\)/u, "Admin manager role should show add/remove admin buttons");
+  assert.match(callbackHandlers, /managerRoles\.canManageAdmins/u, "Admin manager role should be allowed to confirm add/remove admin callbacks");
   assert.match(worker, /chat_id: targetChatId/u, "Chat callback permissions should check the chat where the button was pressed");
   assert.match(worker, /function isChatGroup\(chatId, threadId\) \{\s*return chatId === CHAT_GROUP_ID;/u, "Any Telegram topic id in the main group should count as the group chat for queue messages");
   assert.match(callbackHandlers, /isUserAdmin\(env, userId, chatId, chatType\)/u, "Panel callbacks should pass chat context into admin checks");
