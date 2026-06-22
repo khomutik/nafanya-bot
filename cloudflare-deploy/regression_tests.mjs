@@ -202,7 +202,7 @@ function testWorkerStaticRules() {
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
-  assert.match(worker, /QUEUE_FOOTER_LINES[\s\S]*t\.me\/\+mta_CKQY2c05ODRi[\s\S]*us06web\.zoom\.us\/j\/5487249245/u, "Every queue text should include Telegram and Zoom links");
+  assert.match(worker, /QUEUE_FOOTER_LINES[\s\S]*t\.me\/\+mta_CKQY2c05ODRi[\s\S]*us06web\.zoom\.us\/j\/5487249245\?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt\.1/u, "Every queue text should include Telegram and Zoom links");
   assert.match(worker, /if \(action === "remove_by_number"\)[\s\S]*queueState\.entries\.splice\(visibleNumber - 1, 1\)/u, "Queue state should remove entries by visible row number");
   assert.match(worker, /result\.queueText,[\s\S]*buildQueuePublicKeyboard\(\),[\s\S]*result\.parseMode/u, "Published queue messages should include public queue control buttons");
   assert.match(botPanels, /function buildQueuePublicKeyboard\(\)[\s\S]*queue:done[\s\S]*queue:skip[\s\S]*queue:remove[\s\S]*queue:undo[\s\S]*queue:close/u, "Public queue keyboard should keep only active queue controls");
