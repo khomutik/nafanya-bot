@@ -1232,17 +1232,7 @@ function cleanManualQueueAuthor(value) {
   return String(value || "").replace(/^[\s!.,?:;#-]+|[\s!.,?:;#-]+$/gu, "").trim();
 }
 
-function parseManualQueueCommand(text) {
-  const source = stripManualQueueAddress(text);
-  const removeMatch = source.match(/^(?:\u0443\u0434\u0430\u043b\u0438|\u0443\u0434\u0430\u043b\u0438\u0442\u044c|\u0443\u0431\u0435\u0440\u0438)\s+\u0438\u0437\s+\u043e\u0447\u0435\u0440\u0435\u0434\u0438\s+(\d{1,3})$/iu);
-  if (removeMatch) {
-    return { action: "remove", index: Number(removeMatch[1]) };
-  }
-  const addMatch = source.match(/^(?:\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u0432\u043d\u0435\u0441\u0438|\u0432\u043d\u0435\u0441\u0442\u0438)(?:\s+\u0432\s+\u043e\u0447\u0435\u0440\u0435\u0434\u044c)?\s+(.+)$/iu);
-  if (!addMatch) {
-    return null;
-  }
-  const body = addMatch[1].trim();
+function parseManualQueueAddBody(body) {
   const gameMatch = body.match(/^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043e\u043f\u0440\u043e\u0441)\s+(\d{1,3})(?:[\s!.,?:;#-]+)(.+)$/iu);
   if (gameMatch) {
     return {
@@ -1260,6 +1250,19 @@ function parseManualQueueCommand(text) {
     return { action: "add_111", author: cleanManualQueueAuthor(reverse111[1]) };
   }
   return { action: "invalid_add" };
+}
+
+function parseManualQueueCommand(text) {
+  const source = stripManualQueueAddress(text);
+  const removeMatch = source.match(/^(?:\u0443\u0434\u0430\u043b\u0438|\u0443\u0434\u0430\u043b\u0438\u0442\u044c|\u0443\u0431\u0435\u0440\u0438)\s+\u0438\u0437\s+\u043e\u0447\u0435\u0440\u0435\u0434\u0438\s+(\d{1,3})$/iu);
+  if (removeMatch) {
+    return { action: "remove", index: Number(removeMatch[1]) };
+  }
+  const addMatch = source.match(/^(?:\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u0432\u043d\u0435\u0441\u0438|\u0432\u043d\u0435\u0441\u0442\u0438)(?:\s+\u0432\s+\u043e\u0447\u0435\u0440\u0435\u0434\u044c)?\s+(.+)$/iu);
+  if (!addMatch) {
+    return null;
+  }
+  return parseManualQueueAddBody(addMatch[1].trim());
 }
 
 async function handleManualQueueAdminCommand(env, message, text, chatId, threadId, chatType, deps) {

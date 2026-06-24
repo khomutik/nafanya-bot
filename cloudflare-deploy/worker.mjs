@@ -639,6 +639,17 @@ function formatQueue111Label(note, code = "111") {
   return note ? `${code} ${note}` : code;
 }
 __name(formatQueue111Label, "formatQueue111Label");
+function getQueueBlockDividerTitle(block) {
+  const titleByBlock = {
+    first: "111 / \u0418\u0413\u0420\u0410",
+    "222": "222",
+    "333": "333",
+    "444": "444"
+  };
+  const title = titleByBlock[block] ?? "\u041E\u0427\u0415\u0420\u0415\u0414\u042C";
+  return `\u2501\u2501\u2501\u2501 ${title} \u2501\u2501\u2501\u2501`;
+}
+__name(getQueueBlockDividerTitle, "getQueueBlockDividerTitle");
 function getBillQuestionNumber(text) {
   const normalized = normalizeText2(text);
   const explicit = normalized.match(/(?:\u0438\u0433\u0440\u0430[\u0430-\u044f]*|\u0438\u0440\u0433\u0430[\u0430-\u044f]*|\u0432\u043e\u043f\u0440\u043e\u0441[\u0430-\u044f]*)\s*(\d{1,3})/i);
@@ -744,7 +755,16 @@ function buildQueueText(state) {
     lines.push(...QUEUE_FOOTER_LINES);
     return lines.join("\n");
   }
+  let previousBlock = null;
   for (const [index, entry] of state.entries.entries()) {
+    const block = state.mode === "bill" ? getEntryBlock(state, entry) : "single";
+    if (state.mode === "bill" && block !== previousBlock) {
+      if (previousBlock !== null) {
+        lines.push("");
+      }
+      lines.push(`<b>${getQueueBlockDividerTitle(block)}</b>`);
+      previousBlock = block;
+    }
     let marker = "\u2022";
     if (entry.status === "done") {
       marker = "\u2705";

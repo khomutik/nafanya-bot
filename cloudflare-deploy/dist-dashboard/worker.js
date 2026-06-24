@@ -792,21 +792,25 @@ async function sendSticker(env, chatId, sticker, messageThreadId = null, emoji =
 }
 __name(sendSticker, "sendSticker");
 async function deleteMessageSafe(env, chatId, messageId) {
+  return (await deleteMessageResult(env, chatId, messageId)).ok;
+}
+__name(deleteMessageSafe, "deleteMessageSafe");
+async function deleteMessageResult(env, chatId, messageId) {
   if (!messageId) {
-    return false;
+    return { ok: false, error: new Error("deleteMessage skipped: message_id is empty") };
   }
   try {
     await callTelegram(env, "deleteMessage", {
       chat_id: chatId,
       message_id: messageId
     });
-    return true;
+    return { ok: true, error: null };
   } catch (error) {
     console.error("deleteMessageSafe failed", { chatId, messageId, error });
-    return false;
+    return { ok: false, error };
   }
 }
-__name(deleteMessageSafe, "deleteMessageSafe");
+__name(deleteMessageResult, "deleteMessageResult");
 async function copyTechMessageToChat(env, targetChatId, infoChatId, sourceMessageId, disableNotification = false) {
   const payload = {
     chat_id: targetChatId,
@@ -967,6 +971,17 @@ function buildReplacementOkKeyboard(requestId) {
 }
 __name(buildReplacementOkKeyboard, "buildReplacementOkKeyboard");
 function buildAdminReplacementRequestText(request) {
+  if (request.request_kind === "vacancy") {
+    return [
+      request.vacancy_text || `\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u043D\u0435\u0442 ${request.service}. \u0414\u043E\u0431\u0440\u043E\u0432\u043E\u043B\u044C\u0446\u044B?`,
+      "",
+      `\u0421\u043B\u0443\u0436\u0435\u043D\u0438\u0435: ${request.service}`,
+      `\u0413\u0440\u0443\u043F\u043F\u0430: \xAB${request.group_name}\xBB`,
+      `\u0412\u0440\u0435\u043C\u044F: ${request.time}`,
+      "",
+      "\u0415\u0441\u043B\u0438 \u043C\u043E\u0436\u0435\u0448\u044C \u043F\u043E\u0434\u043C\u0435\u043D\u0438\u0442\u044C \u2014 \u043D\u0430\u0436\u043C\u0438 \u043A\u043D\u043E\u043F\u043A\u0443."
+    ].join("\n");
+  }
   const original = formatPersonDisplayName(request.original_person_name, request.original_username, request.original_user_id);
   return [
     "\u041D\u0443\u0436\u043D\u0430 \u043F\u043E\u0434\u043C\u0435\u043D\u0430.",
@@ -987,10 +1002,10 @@ function responderName(from) {
 }
 __name(responderName, "responderName");
 function buildRespondersListText(request) {
-  const original = formatPersonDisplayName(request.original_person_name, request.original_username, request.original_user_id);
   const names = (request.responders || []).map((item) => formatPersonDisplayName(item?.name || "", item?.username || "", item?.user_id)).filter(Boolean);
+  const target = request.request_kind === "vacancy" ? request.service : formatPersonDisplayName(request.original_person_name, request.original_username, request.original_user_id);
   return [
-    `\u0413\u043E\u0442\u043E\u0432\u044B \u043F\u043E\u0434\u043C\u0435\u043D\u0438\u0442\u044C ${original}:`,
+    `\u0413\u043E\u0442\u043E\u0432\u044B \u043F\u043E\u0434\u043C\u0435\u043D\u0438\u0442\u044C ${target}:`,
     `${names.join("\n")}.`,
     "",
     `\u0421\u043B\u0443\u0436\u0435\u043D\u0438\u0435: ${request.service}`,
@@ -1000,11 +1015,11 @@ function buildRespondersListText(request) {
 }
 __name(buildRespondersListText, "buildRespondersListText");
 function buildReplacementSelectionText(request, responderNameText) {
-  const original = formatPersonDisplayName(request.original_person_name, request.original_username, request.original_user_id);
+  const replacementLine = request.request_kind === "vacancy" ? `${responderNameText} \u0431\u0443\u0434\u0435\u0442 \u043D\u0435\u0441\u0442\u0438 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u0435` : `${responderNameText} \u043F\u043E\u0434\u043C\u0435\u043D\u0438\u0442 ${formatPersonDisplayName(request.original_person_name, request.original_username, request.original_user_id)}`;
   return [
     "\u0417\u0410\u041C\u0415\u041D\u0410:",
     "",
-    `${responderNameText} \u043F\u043E\u0434\u043C\u0435\u043D\u0438\u0442 ${original}`,
+    replacementLine,
     `\u0421\u043B\u0443\u0436\u0435\u043D\u0438\u0435: ${request.service}`,
     `\u0414\u0430\u0442\u0430: ${formatRuDate(request.date)}`,
     `\u0412\u0440\u0435\u043C\u044F: ${request.time}`,
@@ -1055,7 +1070,7 @@ async function sendReplacementCoordinatorStage(env, request, text, replyMarkup, 
   return sent;
 }
 __name(sendReplacementCoordinatorStage, "sendReplacementCoordinatorStage");
-async function sendReplacementAdminStage(env, request, text, deps) {
+async function sendReplacementAdminStage(env, request, text, deps, replyMarkup = null) {
   const {
     callPersonalDayState: callPersonalDayState2,
     deleteMessageSafe: deleteMessageSafe2,
@@ -1067,7 +1082,7 @@ async function sendReplacementAdminStage(env, request, text, deps) {
   if (previousChatId && previousMessageId && deleteMessageSafe2) {
     await deleteMessageSafe2(env, previousChatId, previousMessageId).catch(() => null);
   }
-  const sent = await sendAdminThreadMessage2(env, text, true).catch(() => null);
+  const sent = await sendAdminThreadMessage2(env, text, true, replyMarkup).catch(() => null);
   const chatId = sent?.result?.result?.chat?.id || sent?.result?.chat?.id || null;
   const messageId = sent?.result?.result?.message_id || sent?.result?.message_id || null;
   if (chatId && messageId && callPersonalDayState2) {
@@ -1084,12 +1099,14 @@ async function notifyReplacementAdmins(env, request, deps) {
   const {
     sendMessage: sendMessage2,
     listAdminDmRecipients: listAdminDmRecipients2,
+    isCoordinatorUser: isCoordinatorUser2,
     notifyOwnerTechError: notifyOwnerTechError2
   } = deps;
   const recipients = await listAdminDmRecipients2(env);
   const text = buildAdminReplacementRequestText(request);
   await Promise.all(recipients.map(async (recipient) => {
     if (!recipient?.chatId) return;
+    if (isCoordinatorUser2 && await isCoordinatorUser2(env, recipient.userId || recipient.chatId)) return;
     try {
       await sendMessage2(env, recipient.chatId, text, null, null, buildReplacementOfferKeyboard(request.id));
       console.log("admin notified", { request_id: request.id, user_id: recipient.userId });
@@ -1103,20 +1120,45 @@ async function notifyReplacementAdmins(env, request, deps) {
       });
     }
   }));
-  await sendReplacementAdminStage(env, request, buildAdminReplacementRequestText(request), deps);
+  await Promise.all([
+    sendReplacementAdminStage(env, request, text, deps, buildReplacementOfferKeyboard(request.id)),
+    sendReplacementCoordinatorStage(env, request, text, buildReplacementOfferKeyboard(request.id), deps)
+  ]);
 }
 __name(notifyReplacementAdmins, "notifyReplacementAdmins");
+async function createVacancyReplacementRequest(env, { dateKey, roleKey, service, vacancyText }, deps) {
+  const createResult = await deps.callPersonalDayState(env, "create_replacement_request", {
+    dedupeKey: `${dateKey}:${roleKey}:vacancy`,
+    request: {
+      id: `rr_${String(dateKey || "").replace(/-/g, "")}_${roleKey}_vacancy_${Date.now().toString(36)}`,
+      date: dateKey,
+      time: "21:30",
+      group_name: "\u041F\u043E\u0447\u0442\u0438 \u043D\u043E\u0440\u043C\u0430\u043B\u044C\u043D\u044B\u0435",
+      service,
+      request_kind: "vacancy",
+      vacancy_text: vacancyText
+    }
+  });
+  const request = createResult?.request;
+  if (!request || createResult?.duplicateOpen) return createResult;
+  await notifyReplacementAdmins(env, request, deps);
+  return createResult;
+}
+__name(createVacancyReplacementRequest, "createVacancyReplacementRequest");
 async function handleReplacementOfferCallback(env, callbackQuery, requestId, deps) {
   const {
     answerCallback: answerCallback2,
     callPersonalDayState: callPersonalDayState2,
     getPrivateRoles: getPrivateRoles2,
+    isUserAdmin: isUserAdmin2,
     sendCoordinatorServiceNotice: sendCoordinatorServiceNotice2,
     sendAdminThreadMessage: sendAdminThreadMessage2
   } = deps;
   const userId = String(callbackQuery.from?.id || "").trim();
-  const roles = await getPrivateRoles2(env, userId);
-  if (!roles.isAdmin) {
+  const sourceChat = callbackQuery.message?.chat || {};
+  const isPrivate = sourceChat.type === "private";
+  const isAdmin = isPrivate ? Boolean((await getPrivateRoles2(env, userId)).isAdmin) : Boolean(await isUserAdmin2(env, userId, sourceChat.id, sourceChat.type));
+  if (!isAdmin) {
     await answerCallback2(env, callbackQuery.id, "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0430\u0434\u043C\u0438\u043D\u043E\u0432.", true);
     return okResponse();
   }
@@ -1124,7 +1166,7 @@ async function handleReplacementOfferCallback(env, callbackQuery, requestId, dep
     id: requestId,
     responder: {
       user_id: userId,
-      private_chat_id: callbackQuery.message?.chat?.id || userId,
+      private_chat_id: callbackQuery.message?.chat?.type === "private" ? callbackQuery.message.chat.id : userId,
       username: callbackQuery.from?.username || "",
       name: responderName(callbackQuery.from)
     }
@@ -1134,7 +1176,8 @@ async function handleReplacementOfferCallback(env, callbackQuery, requestId, dep
     return okResponse();
   }
   if (result.closed) {
-    await answerCallback2(env, callbackQuery.id, "\u0417\u0430\u043F\u0440\u043E\u0441 \u0443\u0436\u0435 \u0437\u0430\u043A\u0440\u044B\u0442.");
+    const closedText = result.request?.status === "selected" ? "\u0417\u0430\u043C\u0435\u043D\u0430 \u0443\u0436\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430." : "\u0417\u0430\u043F\u0440\u043E\u0441 \u0443\u0436\u0435 \u0437\u0430\u043A\u0440\u044B\u0442.";
+    await answerCallback2(env, callbackQuery.id, closedText);
     return okResponse();
   }
   if (result.duplicate) {
@@ -1154,14 +1197,13 @@ async function handleReplacementSelectCallback(env, callbackQuery, requestId, re
   const {
     answerCallback: answerCallback2,
     callPersonalDayState: callPersonalDayState2,
-    getPrivateRoles: getPrivateRoles2,
+    isCoordinatorUser: isCoordinatorUser2,
     sendAdminThreadMessage: sendAdminThreadMessage2,
     sendMessage: sendMessage2
   } = deps;
   const coordinatorUserId = String(callbackQuery.from?.id || "").trim();
-  const coordinatorRoles = await getPrivateRoles2(env, coordinatorUserId);
-  if (!coordinatorRoles.isAdmin) {
-    await answerCallback2(env, callbackQuery.id, "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u043E\u0440\u0430.", true);
+  if (!isCoordinatorUser2 || !await isCoordinatorUser2(env, coordinatorUserId)) {
+    await answerCallback2(env, callbackQuery.id, "\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0437\u0430\u043C\u0435\u043D\u044F\u044E\u0449\u0435\u0433\u043E \u043C\u043E\u0436\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u043E\u0440.", true);
     return okResponse();
   }
   const selection = await callPersonalDayState2(env, "select_replacement_responder", {
@@ -1344,10 +1386,10 @@ async function handleOwnerAdminCallback(env, callbackQuery, action, targetUserId
     callPersonalDayState: callPersonalDayState2,
     getPrivateRoles: getPrivateRoles2
   } = deps;
-  const ownerId = String(callbackQuery.from?.id || "").trim();
-  const ownerRoles = await getPrivateRoles2(env, ownerId);
-  if (!ownerRoles.isOwner) {
-    await answerCallback2(env, callbackQuery.id, "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0432\u043B\u0430\u0434\u0435\u043B\u044C\u0446\u0430.", true);
+  const managerId = String(callbackQuery.from?.id || "").trim();
+  const managerRoles = await getPrivateRoles2(env, managerId);
+  if (!managerRoles.canManageAdmins) {
+    await answerCallback2(env, callbackQuery.id, "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0442\u0435\u0445, \u043A\u0442\u043E \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442 \u0430\u0434\u043C\u0438\u043D\u0430\u043C\u0438.", true);
     return okResponse();
   }
   const target = await callPersonalDayState2(env, "get_personal_subscription", { userId: targetUserId }).catch(() => ({ subscription: null }));
@@ -1455,7 +1497,7 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     sendMessage: sendMessage2,
     callAnnouncementState: callAnnouncementState2,
     INFO_CHAT_ID: INFO_CHAT_ID2,
-    TECH_THREAD_ID: TECH_THREAD_ID3,
+    TECH_THREAD_ID: TECH_THREAD_ID2,
     TECH_MESSAGES: TECH_MESSAGES2,
     INFO_CHANNEL_ANNOUNCEMENT_ID: INFO_CHANNEL_ANNOUNCEMENT_ID2,
     FREE_SERVICES_ANNOUNCEMENT_ID: FREE_SERVICES_ANNOUNCEMENT_ID2,
@@ -1474,15 +1516,14 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     return okResponse();
   }
   if (key === "bill_prompt") {
-    const targetThreadId = TECH_THREAD_ID3;
     const prompt = await sendMessage2(
       env,
-      INFO_CHAT_ID2,
+      chatId,
       "\u0412\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430.\n\n\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440: 17\n\n\u0414\u043E\u043F\u0443\u0441\u0442\u0438\u043C\u044B\u0435 \u043D\u043E\u043C\u0435\u0440\u0430: \u043E\u0442 1 \u0434\u043E 332.",
-      targetThreadId
+      threadId
     );
     await callAnnouncementState2(env, "set_message_id", {
-      key: "bill_prompt_waiting",
+      key: `bill_prompt_waiting:${chatId}:${threadId || 0}`,
       messageId: prompt?.result?.message_id ?? 1
     });
     await answerCallback2(env, callbackQuery.id, "\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430, \u043F\u043E\u0442\u043E\u043C \u043A\u043E\u043C\u0430\u043D\u0434\u0443\u0439.");
@@ -1855,7 +1896,7 @@ var TEXT = {
   adminAnnouncePrompt: "\u041F\u0440\u0438\u0448\u043B\u0438 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435, \u043A\u043E\u0442\u043E\u0440\u043E\u0435 \u043D\u0443\u0436\u043D\u043E \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0432\u0441\u0435\u043C \u0430\u0434\u043C\u0438\u043D\u0430\u043C.",
   adminDraftReady: "\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A \u0433\u043E\u0442\u043E\u0432. \u041F\u043E\u0434\u0442\u0432\u0435\u0440\u0434\u0438 \u043E\u0442\u043F\u0440\u0430\u0432\u043A\u0443 \u0430\u0434\u043C\u0438\u043D\u0430\u043C.",
   adminDenied: "\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0430\u0434\u043C\u0438\u043D\u0430\u043C.",
-  ownerDenied: "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043B\u0430\u0434\u0435\u043B\u044C\u0446\u0443.",
+  adminManagerDenied: "\u042D\u0442\u0430 \u043A\u043D\u043E\u043F\u043A\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0442\u0435\u043C, \u043A\u0442\u043E \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442 \u0430\u0434\u043C\u0438\u043D\u0430\u043C\u0438.",
   chooseAddAdmin: "\u0412\u044B\u0431\u0435\u0440\u0438, \u043A\u043E\u043C\u0443 \u0434\u0430\u0442\u044C \u0430\u0434\u043C\u0438\u043D\u0441\u043A\u0438\u0435 \u043A\u043D\u043E\u043F\u043A\u0438:",
   chooseRemoveAdmin: "\u0412\u044B\u0431\u0435\u0440\u0438, \u0443 \u043A\u043E\u0433\u043E \u0443\u0431\u0440\u0430\u0442\u044C \u0430\u0434\u043C\u0438\u043D\u0441\u043A\u0438\u0435 \u043A\u043D\u043E\u043F\u043A\u0438:",
   noAdminCandidates: "\u041F\u043E\u043A\u0430 \u043D\u0435\u043A\u043E\u0433\u043E \u043F\u043E\u043A\u0430\u0437\u0430\u0442\u044C. \u0427\u0435\u043B\u043E\u0432\u0435\u043A \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u0434\u043E\u043B\u0436\u0435\u043D \u043D\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u043E\u0442\u0443 /start.",
@@ -1884,9 +1925,32 @@ var TEXT = {
   moderationFallback: "\u041D\u0430\u0444\u0430\u043D\u044F \u0431\u0443\u0440\u043A\u043D\u0443\u043B: \u043D\u0435 \u0448\u0430\u043B\u0438, \u0442\u0443\u0442 \u043D\u0435 \u0431\u0430\u0437\u0430\u0440.",
   questionsLoadError: "\u0412\u043E\u043F\u0440\u043E\u0441\u044B \u0434\u043B\u044F \u0438\u0433\u0440\u044B \u0432\u0440\u0435\u043C\u0435\u043D\u043D\u043E \u043D\u0435 \u043F\u043E\u0434\u0433\u0440\u0443\u0437\u0438\u043B\u0438\u0441\u044C \u0438\u0437 GitHub. \u042F \u0442\u0443\u0442 \u043D\u0435 \u043A\u043E\u0441\u044E \u043F\u043E\u0434 \u0433\u0435\u043D\u0438\u044F, \u043F\u0440\u043E\u0441\u0442\u043E \u0438\u0441\u0442\u043E\u0447\u043D\u0438\u043A \u043D\u0435 \u043E\u0442\u0434\u0430\u043B\u0441\u044F. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439 \u0435\u0449\u0451 \u0440\u0430\u0437 \u0447\u0443\u0442\u044C \u043F\u043E\u0437\u0436\u0435."
 };
+async function sendPanelMessage(env, sendMessage2, callTelegram2, chatId, text, threadId, replyToMessageId, keyboard) {
+  try {
+    return await sendMessage2(env, chatId, text, threadId, replyToMessageId, keyboard);
+  } catch (error) {
+    const closedTopic = threadId && /TOPIC_CLOSED|topic.*closed/i.test(String(error?.message || ""));
+    if (!closedTopic || !callTelegram2) {
+      throw error;
+    }
+    await callTelegram2(env, "reopenForumTopic", {
+      chat_id: chatId,
+      message_thread_id: threadId
+    });
+    try {
+      return await sendMessage2(env, chatId, text, threadId, replyToMessageId, keyboard);
+    } finally {
+      await callTelegram2(env, "closeForumTopic", {
+        chat_id: chatId,
+        message_thread_id: threadId
+      }).catch((closeError) => console.error("closeForumTopic failed after panel send", closeError));
+    }
+  }
+}
+__name(sendPanelMessage, "sendPanelMessage");
 async function handleTechThreadMessage(env, message, text, chatId, threadId, deps) {
   const {
-    isTechThread: isTechThread3,
+    isTechThread: isTechThread2,
     isChatGroup: isChatGroup2,
     isPrivateChat: isPrivateChat2,
     isMeetingPanelCommand: isMeetingPanelCommand2,
@@ -1894,10 +1958,11 @@ async function handleTechThreadMessage(env, message, text, chatId, threadId, dep
     getPrivateRoles: getPrivateRoles2,
     buildPersonalDayUserSnapshot: buildPersonalDayUserSnapshot2,
     sendMessage: sendMessage2,
+    callTelegram: callTelegram2,
     INFO_CHAT_ID: INFO_CHAT_ID2,
     CHAT_GROUP_ID: CHAT_GROUP_ID2,
     MEETING_PANEL_TEXT: MEETING_PANEL_TEXT2,
-    TECH_THREAD_ID: TECH_THREAD_ID3,
+    TECH_THREAD_ID: TECH_THREAD_ID2,
     buildMeetingKeyboard: buildMeetingKeyboard2,
     isQueuePanelCommand: isQueuePanelCommand2,
     QUEUE_PANEL_TEXT: QUEUE_PANEL_TEXT2,
@@ -1910,11 +1975,14 @@ async function handleTechThreadMessage(env, message, text, chatId, threadId, dep
     sendBillToGroup: sendBillToGroup2
   } = deps;
   const chatType = message.chat?.type ?? TEXT.unknown;
-  const isPanelPlace = isTechThread3(chatId, threadId) || isChatGroup2(chatId, threadId) || isPrivateChat2(chatType);
+  const isPanelPlace = isTechThread2(chatId, threadId) || isChatGroup2(chatId, threadId) || isPrivateChat2(chatType);
   const panelTargetChatId = isPrivateChat2(chatType) ? chatId : isChatGroup2(chatId, threadId) ? CHAT_GROUP_ID2 : INFO_CHAT_ID2;
-  const panelTargetThreadId = isPrivateChat2(chatType) || isChatGroup2(chatId, threadId) ? null : TECH_THREAD_ID3;
+  const panelTargetThreadId = isPrivateChat2(chatType) || isChatGroup2(chatId, threadId) ? null : TECH_THREAD_ID2;
   const panelReplyId = isPrivateChat2(chatType) ? message.message_id : null;
   const canUsePanel = /* @__PURE__ */ __name(async () => {
+    if (Number(message?.sender_chat?.id) === Number(chatId)) {
+      return true;
+    }
     if (isPrivateChat2(chatType)) {
       const user = buildPersonalDayUserSnapshot2(message);
       const roles = await getPrivateRoles2(env, user.userId);
@@ -1927,7 +1995,7 @@ async function handleTechThreadMessage(env, message, text, chatId, threadId, dep
       await sendMessage2(env, chatId, "\u041F\u0443\u043B\u044C\u0442\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0430\u0434\u043C\u0438\u043D\u043E\u0432.", threadId, message.message_id);
       return okResponse2();
     }
-    await sendMessage2(env, panelTargetChatId, MEETING_PANEL_TEXT2, panelTargetThreadId, panelReplyId, buildMeetingKeyboard2());
+    await sendPanelMessage(env, sendMessage2, callTelegram2, panelTargetChatId, MEETING_PANEL_TEXT2, panelTargetThreadId, panelReplyId, buildMeetingKeyboard2());
     return okResponse2();
   }
   if (isPanelPlace && isQueuePanelCommand2(text)) {
@@ -1935,46 +2003,52 @@ async function handleTechThreadMessage(env, message, text, chatId, threadId, dep
       await sendMessage2(env, chatId, "\u041F\u0443\u043B\u044C\u0442\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0430\u0434\u043C\u0438\u043D\u043E\u0432.", threadId, message.message_id);
       return okResponse2();
     }
-    await sendMessage2(env, panelTargetChatId, QUEUE_PANEL_TEXT2, panelTargetThreadId, panelReplyId, buildQueueKeyboard2());
+    await sendPanelMessage(env, sendMessage2, callTelegram2, panelTargetChatId, QUEUE_PANEL_TEXT2, panelTargetThreadId, panelReplyId, buildQueueKeyboard2());
     return okResponse2();
   }
-  if (isTechThread3(chatId, threadId) && isYozhikCommand2(text)) {
+  if (isTechThread2(chatId, threadId) && isYozhikCommand2(text)) {
     try {
       await sendYozhikToGroup2(env);
-      await sendMessage2(env, INFO_CHAT_ID2, TEXT.yozhikOk, TECH_THREAD_ID3, message.message_id);
+      await sendMessage2(env, INFO_CHAT_ID2, TEXT.yozhikOk, TECH_THREAD_ID2, message.message_id);
     } catch (error) {
-      await sendMessage2(env, INFO_CHAT_ID2, `${TEXT.yozhikError}: ${error.message}`, TECH_THREAD_ID3, message.message_id);
+      await sendMessage2(env, INFO_CHAT_ID2, `${TEXT.yozhikError}: ${error.message}`, TECH_THREAD_ID2, message.message_id);
     }
     return okResponse2();
   }
-  if (isTechThread3(chatId, threadId) && isBillPromptCommand2(text)) {
-    const prompt = await sendMessage2(env, INFO_CHAT_ID2, TEXT.billPrompt, TECH_THREAD_ID3, message.message_id);
+  const billPromptStateKey = `bill_prompt_waiting:${chatId}:${threadId || 0}`;
+  const billLastRequestKey = `bill_last_request:${chatId}:${threadId || 0}`;
+  if (isPanelPlace && isBillPromptCommand2(text)) {
+    if (!await canUsePanel()) return null;
+    const prompt = await sendMessage2(env, chatId, TEXT.billPrompt, threadId, message.message_id);
     await callAnnouncementState2(env, "set_message_id", {
-      key: "bill_prompt_waiting",
+      key: billPromptStateKey,
       messageId: prompt?.result?.message_id ?? 1
     });
     return okResponse2();
   }
-  if (isTechThread3(chatId, threadId)) {
+  if (isPanelPlace) {
     const billNumber = parseBillInput2(text);
     if (billNumber !== null) {
+      if (!await canUsePanel()) return null;
       const explicitBillCommand = /^билл\s+\d{1,3}$/i.test(text.trim());
-      const lastProcessed = await callAnnouncementState2(env, "get", { key: "bill_last_request" }).catch(() => ({ messageId: null }));
+      const lastProcessed = await callAnnouncementState2(env, "get", { key: billLastRequestKey }).catch(() => ({ messageId: null }));
       if (Number(lastProcessed?.messageId) === Number(message.message_id)) {
         return okResponse2();
       }
-      const waiting = explicitBillCommand ? { messageId: 1 } : await callAnnouncementState2(env, "get", { key: "bill_prompt_waiting" }).catch(() => ({ messageId: null }));
+      const waiting = explicitBillCommand ? { messageId: 1 } : await callAnnouncementState2(env, "get", { key: billPromptStateKey }).catch(() => ({ messageId: null }));
       if (!waiting?.messageId) {
         return null;
       }
       try {
-        await callAnnouncementState2(env, "set_message_id", { key: "bill_last_request", messageId: message.message_id });
-        await callAnnouncementState2(env, "set_message_id", { key: "bill_prompt_waiting", messageId: null });
+        await callAnnouncementState2(env, "set_message_id", { key: billLastRequestKey, messageId: message.message_id });
+        await callAnnouncementState2(env, "set_message_id", { key: billPromptStateKey, messageId: null });
         await sendBillToGroup2(env, billNumber);
-        await sendMessage2(env, INFO_CHAT_ID2, `${TEXT.billSent} \u2116${billNumber} ${TEXT.billSentTail}`, TECH_THREAD_ID3, message.message_id);
+        if (!isChatGroup2(chatId, threadId)) {
+          await sendMessage2(env, chatId, `${TEXT.billSent} \u2116${billNumber} ${TEXT.billSentTail}`, threadId, message.message_id);
+        }
       } catch (error) {
-        await callAnnouncementState2(env, "set_message_id", { key: "bill_prompt_waiting", messageId: 1 });
-        await sendMessage2(env, INFO_CHAT_ID2, `${TEXT.billError}: ${error.message}`, TECH_THREAD_ID3, message.message_id);
+        await callAnnouncementState2(env, "set_message_id", { key: billPromptStateKey, messageId: 1 });
+        await sendMessage2(env, chatId, `${TEXT.billError}: ${error.message}`, threadId, message.message_id);
       }
       return okResponse2();
     }
@@ -2006,7 +2080,7 @@ function isRemoveAdminButton(text) {
   return normalizeButtonText(text) === normalizeButtonText(DM_BUTTONS.removeAdmin);
 }
 __name(isRemoveAdminButton, "isRemoveAdminButton");
-function buildPrivateMenuKeyboard({ isOwner: isOwner2 = false, isAdmin = false, isSubscriber = false } = {}) {
+function buildPrivateMenuKeyboard({ isOwner: isOwner2 = false, canManageAdmins = false, isAdmin = false, isSubscriber = false } = {}) {
   if (!isAdmin && !isSubscriber) {
     return { remove_keyboard: true };
   }
@@ -2014,7 +2088,7 @@ function buildPrivateMenuKeyboard({ isOwner: isOwner2 = false, isAdmin = false, 
   if (isAdmin) {
     keyboard.push([DM_BUTTONS.adminAnnounce]);
   }
-  if (isOwner2) {
+  if (isOwner2 || canManageAdmins) {
     keyboard.push([DM_BUTTONS.addAdmin, DM_BUTTONS.removeAdmin]);
   }
   return {
@@ -2146,8 +2220,8 @@ async function handleAdminDraftMessage(env, message, text, chatId, user, roles, 
 __name(handleAdminDraftMessage, "handleAdminDraftMessage");
 async function handleOwnerAddAdmin(env, message, chatId, roles, deps) {
   const { callPersonalDayState: callPersonalDayState2, sendMessage: sendMessage2, getPrivateRoles: getPrivateRoles2 } = deps;
-  if (!roles.isOwner) {
-    await sendMessage2(env, chatId, TEXT.ownerDenied, null, message.message_id);
+  if (!roles.canManageAdmins) {
+    await sendMessage2(env, chatId, TEXT.adminManagerDenied, null, message.message_id);
     return okResponse2();
   }
   const result = await callPersonalDayState2(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
@@ -2168,8 +2242,8 @@ async function handleOwnerAddAdmin(env, message, chatId, roles, deps) {
 __name(handleOwnerAddAdmin, "handleOwnerAddAdmin");
 async function handleOwnerRemoveAdmin(env, message, chatId, roles, deps) {
   const { callPersonalDayState: callPersonalDayState2, sendMessage: sendMessage2, getPrivateRoles: getPrivateRoles2 } = deps;
-  if (!roles.isOwner) {
-    await sendMessage2(env, chatId, TEXT.ownerDenied, null, message.message_id);
+  if (!roles.canManageAdmins) {
+    await sendMessage2(env, chatId, TEXT.adminManagerDenied, null, message.message_id);
     return okResponse2();
   }
   const result = await callPersonalDayState2(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
@@ -2194,6 +2268,7 @@ async function handleServiceMessages(env, message, text, chatId, threadId, chatT
     sendMessage: sendMessage2,
     isPrivateChat: isPrivateChat2,
     isChatGroup: isChatGroup2,
+    isTechThread: isTechThread2,
     isUserAdmin: isUserAdmin2,
     isTimerPanelCommand: isTimerPanelCommand2,
     CHAT_GROUP_ID: CHAT_GROUP_ID2,
@@ -2203,7 +2278,9 @@ async function handleServiceMessages(env, message, text, chatId, threadId, chatT
     getPrivateRoles: getPrivateRoles2,
     setMyCommands: setMyCommands2,
     TIMER_PANEL_TEXT: TIMER_PANEL_TEXT2,
+    TECH_THREAD_ID: TECH_THREAD_ID2,
     buildTimerKeyboard: buildTimerKeyboard2,
+    callTelegram: callTelegram2,
     isPrepThread: isPrepThread2,
     hasFixMarker: hasFixMarker2,
     getAuthorLabel: getAuthorLabel2,
@@ -2336,7 +2413,7 @@ ${result.target}, ${result.role}, ${result.dateKey}.`, null, message.message_id)
     await sendMessage2(env, chatId, replyText, threadId, message.message_id);
     return okResponse2();
   }
-  if ((isChatGroup2(chatId, threadId) || isTechThread(chatId, threadId) || isPrivateChat2(chatType)) && isTimerPanelCommand2(text)) {
+  if ((isChatGroup2(chatId, threadId) || isTechThread2(chatId, threadId) || isPrivateChat2(chatType)) && isTimerPanelCommand2(text)) {
     let allowed = false;
     if (isPrivateChat2(chatType)) {
       const user = buildPersonalDayUserSnapshot2(message);
@@ -2350,9 +2427,9 @@ ${result.target}, ${result.role}, ${result.dateKey}.`, null, message.message_id)
       return okResponse2();
     }
     const targetChatId = isPrivateChat2(chatType) ? chatId : isChatGroup2(chatId, threadId) ? CHAT_GROUP_ID2 : INFO_CHAT_ID2;
-    const targetThreadId = isPrivateChat2(chatType) || isChatGroup2(chatId, threadId) ? null : TECH_THREAD_ID;
+    const targetThreadId = isPrivateChat2(chatType) || isChatGroup2(chatId, threadId) ? null : TECH_THREAD_ID2;
     const replyToMessageId = isPrivateChat2(chatType) ? message.message_id : null;
-    await sendMessage2(env, targetChatId, TIMER_PANEL_TEXT2, targetThreadId, replyToMessageId, buildTimerKeyboard2());
+    await sendPanelMessage(env, sendMessage2, callTelegram2, targetChatId, TIMER_PANEL_TEXT2, targetThreadId, replyToMessageId, buildTimerKeyboard2());
     return okResponse2();
   }
   const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, { isPrivateChat: isPrivateChat2, CHAT_GROUP_ID: CHAT_GROUP_ID2, INFO_CHAT_ID: INFO_CHAT_ID2, normalizeLightText: normalizeLightText2, parseNafanyaQuestion: parseNafanyaQuestion2 });
@@ -2777,17 +2854,7 @@ function cleanManualQueueAuthor(value) {
   return String(value || "").replace(/^[\s!.,?:;#-]+|[\s!.,?:;#-]+$/gu, "").trim();
 }
 __name(cleanManualQueueAuthor, "cleanManualQueueAuthor");
-function parseManualQueueCommand(text) {
-  const source = stripManualQueueAddress(text);
-  const removeMatch = source.match(/^(?:\u0443\u0434\u0430\u043b\u0438|\u0443\u0434\u0430\u043b\u0438\u0442\u044c|\u0443\u0431\u0435\u0440\u0438)\s+\u0438\u0437\s+\u043e\u0447\u0435\u0440\u0435\u0434\u0438\s+(\d{1,3})$/iu);
-  if (removeMatch) {
-    return { action: "remove", index: Number(removeMatch[1]) };
-  }
-  const addMatch = source.match(/^(?:\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u0432\u043d\u0435\u0441\u0438|\u0432\u043d\u0435\u0441\u0442\u0438)(?:\s+\u0432\s+\u043e\u0447\u0435\u0440\u0435\u0434\u044c)?\s+(.+)$/iu);
-  if (!addMatch) {
-    return null;
-  }
-  const body = addMatch[1].trim();
+function parseManualQueueAddBody(body) {
   const gameMatch = body.match(/^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043e\u043f\u0440\u043e\u0441)\s+(\d{1,3})(?:[\s!.,?:;#-]+)(.+)$/iu);
   if (gameMatch) {
     return {
@@ -2805,6 +2872,19 @@ function parseManualQueueCommand(text) {
     return { action: "add_111", author: cleanManualQueueAuthor(reverse111[1]) };
   }
   return { action: "invalid_add" };
+}
+__name(parseManualQueueAddBody, "parseManualQueueAddBody");
+function parseManualQueueCommand(text) {
+  const source = stripManualQueueAddress(text);
+  const removeMatch = source.match(/^(?:\u0443\u0434\u0430\u043b\u0438|\u0443\u0434\u0430\u043b\u0438\u0442\u044c|\u0443\u0431\u0435\u0440\u0438)\s+\u0438\u0437\s+\u043e\u0447\u0435\u0440\u0435\u0434\u0438\s+(\d{1,3})$/iu);
+  if (removeMatch) {
+    return { action: "remove", index: Number(removeMatch[1]) };
+  }
+  const addMatch = source.match(/^(?:\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u0432\u043d\u0435\u0441\u0438|\u0432\u043d\u0435\u0441\u0442\u0438)(?:\s+\u0432\s+\u043e\u0447\u0435\u0440\u0435\u0434\u044c)?\s+(.+)$/iu);
+  if (!addMatch) {
+    return null;
+  }
+  return parseManualQueueAddBody(addMatch[1].trim());
 }
 __name(parseManualQueueCommand, "parseManualQueueCommand");
 async function handleManualQueueAdminCommand(env, message, text, chatId, threadId, chatType, deps) {
@@ -4573,7 +4653,7 @@ var CHAT_GROUP_ID = -1003547823625;
 var INFO_CHAT_ID = -1003835668674;
 var PREP_THREAD_ID = 29;
 var ANNOUNCE_THREAD_ID = 447;
-var TECH_THREAD_ID2 = 440;
+var TECH_THREAD_ID = 440;
 var ADMIN_THREAD_ID = 453;
 var TIMER_DEFAULT_SECONDS = 5 * 60;
 var TIMER_DONE_STICKER_SET_NAME = "NafanyaPN";
@@ -4581,8 +4661,8 @@ var INFO_CHANNEL_ANNOUNCEMENT_ID = 1934;
 var FREE_SERVICES_ANNOUNCEMENT_ID = 1935;
 var MORNING_ANNOUNCEMENT_ID = 2374;
 var EVENING_ANNOUNCEMENT_ID = 2385;
-var DAILY_15_ANNOUNCEMENT_ID = 2864;
-var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 2864;
+var DAILY_15_ANNOUNCEMENT_ID = 3053;
+var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
 var WEEKDAY_TECH_ANNOUNCEMENTS = [
   { key: "monday", weekday: 1, sourceMessageId: 2893 },
   { key: "tuesday", weekday: 2, sourceMessageId: 2894 },
@@ -4655,7 +4735,7 @@ var TECH_MESSAGES = {
   chat_cleanliness: 1712,
   chat_rules: 1856,
   telemost_link: 2597,
-  meeting_schedule: 2864
+  meeting_schedule: 3053
 };
 var YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
 var BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
@@ -4677,11 +4757,11 @@ function isPrepThread(chatId, threadId) {
 }
 __name(isPrepThread, "isPrepThread");
 __name2(isPrepThread, "isPrepThread");
-function isTechThread2(chatId, threadId) {
-  return chatId === INFO_CHAT_ID && threadId === TECH_THREAD_ID2;
+function isTechThread(chatId, threadId) {
+  return chatId === INFO_CHAT_ID && threadId === TECH_THREAD_ID;
 }
-__name(isTechThread2, "isTechThread");
-__name2(isTechThread2, "isTechThread");
+__name(isTechThread, "isTechThread");
+__name2(isTechThread, "isTechThread");
 function isPrivateChat(chatType) {
   return chatType === "private";
 }
@@ -4808,9 +4888,7 @@ function isIdCommand(text) {
 __name(isIdCommand, "isIdCommand");
 __name2(isIdCommand, "isIdCommand");
 function parseGameCommand(text) {
-  const match = text.trim().match(/^\u0438\u0433\u0440\u0430\s+(\d{1,3})$/i);
-  if (!match) return null;
-  return Number(match[1]);
+  return getBillQuestionNumber(text);
 }
 __name(parseGameCommand, "parseGameCommand");
 __name2(parseGameCommand, "parseGameCommand");
@@ -4929,6 +5007,18 @@ function formatQueue111Label(note, code = "111") {
 }
 __name(formatQueue111Label, "formatQueue111Label");
 __name2(formatQueue111Label, "formatQueue111Label");
+function getQueueBlockDividerTitle(block) {
+  const titleByBlock = {
+    first: "111 / \u0418\u0413\u0420\u0410",
+    "222": "222",
+    "333": "333",
+    "444": "444"
+  };
+  const title = titleByBlock[block] ?? "\u041E\u0427\u0415\u0420\u0415\u0414\u042C";
+  return `\u2501\u2501\u2501\u2501 ${title} \u2501\u2501\u2501\u2501`;
+}
+__name(getQueueBlockDividerTitle, "getQueueBlockDividerTitle");
+__name2(getQueueBlockDividerTitle, "getQueueBlockDividerTitle");
 function getBillQuestionNumber(text) {
   const normalized = normalizeText2(text);
   const explicit = normalized.match(/(?:\u0438\u0433\u0440\u0430[\u0430-\u044f]*|\u0438\u0440\u0433\u0430[\u0430-\u044f]*|\u0432\u043e\u043f\u0440\u043e\u0441[\u0430-\u044f]*)\s*(\d{1,3})/i);
@@ -5041,7 +5131,16 @@ function buildQueueText(state) {
     lines.push(...QUEUE_FOOTER_LINES);
     return lines.join("\n");
   }
+  let previousBlock = null;
   for (const [index, entry] of state.entries.entries()) {
+    const block = state.mode === "bill" ? getEntryBlock(state, entry) : "single";
+    if (state.mode === "bill" && block !== previousBlock) {
+      if (previousBlock !== null) {
+        lines.push("");
+      }
+      lines.push(`<b>${getQueueBlockDividerTitle(block)}</b>`);
+      previousBlock = block;
+    }
     let marker = "\u2022";
     if (entry.status === "done") {
       marker = "\u2705";
@@ -5843,6 +5942,8 @@ var AnnouncementStateDurableObject = class {
           time: request2.time || "21:30",
           group_name: request2.group_name || "\u041F\u043E\u0447\u0442\u0438 \u043D\u043E\u0440\u043C\u0430\u043B\u044C\u043D\u044B\u0435",
           service: String(request2.service || "").trim(),
+          request_kind: String(request2.request_kind || "replacement").trim(),
+          vacancy_text: String(request2.vacancy_text || "").trim(),
           original_person_name: String(request2.original_person_name || "").trim(),
           original_user_id: String(request2.original_user_id || "").trim(),
           original_username: String(request2.original_username || "").trim(),
@@ -6078,12 +6179,12 @@ async function applyQueueResponse(env, result) {
     await sendMessage(env, CHAT_GROUP_ID, result.closeMessage, null, null, null, null, true);
   }
   if (result.cleared && result.previousMessageId) {
-    const deleted = await deleteMessageSafe(env, CHAT_GROUP_ID, result.previousMessageId);
-    if (!deleted) {
+    const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, result.previousMessageId);
+    if (!deletion.ok) {
       await notifyOwnerTechError(env, {
         module: "\u043E\u0447\u0435\u0440\u0435\u0434\u044C",
         operation: "\u043E\u0447\u0438\u0441\u0442\u043A\u0430: \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0435 \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F",
-        error: new Error("deleteMessage failed"),
+        error: deletion.error,
         details: { chat_id: CHAT_GROUP_ID, message_id: result.previousMessageId },
         hint: "\u041F\u0440\u043E\u0432\u0435\u0440\u044C \u043F\u0440\u0430\u0432\u0430 \u0431\u043E\u0442\u0430 \u043D\u0430 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0435 \u0438 \u043E\u0447\u0438\u0441\u0442\u043A\u0443 \u043E\u0447\u0435\u0440\u0435\u0434\u0438."
       });
@@ -6102,8 +6203,8 @@ async function sendAdminSignal(env, author, originalText, deleted = false) {
 }
 __name(sendAdminSignal, "sendAdminSignal");
 __name2(sendAdminSignal, "sendAdminSignal");
-async function sendAdminThreadMessage(env, text, disableNotification = true) {
-  return sendMessage(env, INFO_CHAT_ID, text, ADMIN_THREAD_ID, null, null, null, disableNotification || shouldSilenceBotChat(INFO_CHAT_ID));
+async function sendAdminThreadMessage(env, text, disableNotification = true, replyMarkup = null) {
+  return sendMessage(env, INFO_CHAT_ID, text, ADMIN_THREAD_ID, null, replyMarkup, null, disableNotification || shouldSilenceBotChat(INFO_CHAT_ID));
 }
 __name(sendAdminThreadMessage, "sendAdminThreadMessage");
 __name2(sendAdminThreadMessage, "sendAdminThreadMessage");
@@ -6505,7 +6606,6 @@ async function sendCoordinatorServiceNotice(env, text, replyMarkup = null) {
     const coordinator = (subscriptions?.subscriptions || []).find((item) => String(item?.username || "").replace(/^@/u, "").toLowerCase() === coordinatorUsername);
     coordinatorChatId = coordinator?.chatId || coordinator?.userId || null;
   }
-  coordinatorChatId = coordinatorChatId || env?.OWNER_PRIVATE_CHAT_ID || env?.OWNER_USER_ID;
   if (coordinatorChatId) {
     const result = await sendMessage(env, coordinatorChatId, text, null, null, replyMarkup).catch((error) => notifyOwnerTechError(env, {
       module: "\u043B\u0438\u0447\u043D\u044B\u0435 \u043D\u0430\u043F\u043E\u043C\u0438\u043D\u0430\u043D\u0438\u044F \u0441\u043B\u0443\u0436\u0430\u0449\u0438\u043C",
@@ -6514,12 +6614,25 @@ async function sendCoordinatorServiceNotice(env, text, replyMarkup = null) {
       details: { coordinator_chat_id: coordinatorChatId },
       hint: "\u041F\u0440\u043E\u0432\u0435\u0440\u044C COORDINATOR_PRIVATE_CHAT_ID/COORDINATOR_USER_ID."
     }));
+    if (!result?.ok) return null;
     return { chatId: coordinatorChatId, result };
   }
   return null;
 }
 __name(sendCoordinatorServiceNotice, "sendCoordinatorServiceNotice");
 __name2(sendCoordinatorServiceNotice, "sendCoordinatorServiceNotice");
+async function isCoordinatorUser(env, userId) {
+  const wantedId = String(userId || "").trim();
+  if (!wantedId) return false;
+  const configuredId = String(env?.COORDINATOR_USER_ID || env?.COORDINATOR_PRIVATE_CHAT_ID || "").trim();
+  if (configuredId) return wantedId === configuredId;
+  const coordinatorUsername = String(env?.COORDINATOR_USERNAME || "").replace(/^@/u, "").trim().toLowerCase();
+  if (!coordinatorUsername) return false;
+  const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  return (subscriptions?.subscriptions || []).some((item) => String(item?.userId || item?.chatId || "").trim() === wantedId && String(item?.username || "").replace(/^@/u, "").trim().toLowerCase() === coordinatorUsername);
+}
+__name(isCoordinatorUser, "isCoordinatorUser");
+__name2(isCoordinatorUser, "isCoordinatorUser");
 async function notifyServiceIssue(env, text) {
   await Promise.all([
     sendCoordinatorServiceNotice(env, text),
@@ -6553,7 +6666,10 @@ async function sendCoordinatorTodayServiceSummary(env, today, dateKey, personMap
   const key = `service_coordinator_summary_sent:${dateKey}`;
   const previous = await callAnnouncementState(env, "get", { key }).catch(() => ({ messageId: null }));
   if (previous?.messageId) return;
-  await sendCoordinatorServiceNotice(env, buildCoordinatorServiceSummary(today, dateKey, personMap));
+  const sent = await sendCoordinatorServiceNotice(env, buildCoordinatorServiceSummary(today, dateKey, personMap));
+  if (!sent) {
+    throw new Error("coordinator Telegram user_id not found");
+  }
   await callAnnouncementState(env, "set_message_id", { key, messageId: Date.now() });
 }
 __name(sendCoordinatorTodayServiceSummary, "sendCoordinatorTodayServiceSummary");
@@ -6566,7 +6682,13 @@ __name2(serviceReminderSentKey, "serviceReminderSentKey");
 async function sendOneServiceReminder(env, dateKey, roleKey, personName, personMap) {
   const role = SERVICE_REMINDER_ROLES[roleKey];
   if (!role || isMissingServicePerson(personName)) {
-    await notifyServiceIssue(env, role?.missingText || "\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u043D\u0435 \u0443\u043A\u0430\u0437\u0430\u043D \u0441\u043B\u0443\u0436\u0430\u0449\u0438\u0439 \u0432 \u0433\u0440\u0430\u0444\u0438\u043A\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u0439.");
+    const vacancyText = roleKey === "leader" ? "\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u043D\u0435\u0442 \u0432\u0435\u0434\u0443\u0449\u0435\u0433\u043E. \u0414\u043E\u0431\u0440\u043E\u0432\u043E\u043B\u044C\u0446\u044B?" : "\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u043D\u0435\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430. \u0414\u043E\u0431\u0440\u043E\u0432\u043E\u043B\u044C\u0446\u044B?";
+    await createVacancyReplacementRequest(env, {
+      dateKey,
+      roleKey: role?.callbackKey || roleKey,
+      service: role?.label || roleKey,
+      vacancyText
+    }, callbackHandlerDeps);
     return;
   }
   const sentKey = serviceReminderSentKey(dateKey, roleKey, personName);
@@ -6777,6 +6899,13 @@ function isAdminDmUser(env, userId, username = "") {
 }
 __name(isAdminDmUser, "isAdminDmUser");
 __name2(isAdminDmUser, "isAdminDmUser");
+function isAdminManagerUser(env, userId, username = "") {
+  const id = String(userId || "").trim();
+  const name = String(username || "").replace(/^@/u, "").trim().toLowerCase();
+  return Boolean(id) && (isOwner(env, id) || parseUserIdSet(env?.ADMIN_MANAGER_USER_IDS).has(id) || Boolean(name && parseUsernameSet(env?.ADMIN_MANAGER_USERNAMES).has(name)));
+}
+__name(isAdminManagerUser, "isAdminManagerUser");
+__name2(isAdminManagerUser, "isAdminManagerUser");
 function isPrivateSubscriber(env, userId) {
   return Boolean(String(userId || "").trim());
 }
@@ -6793,9 +6922,16 @@ __name2(isDynamicAdminDmUser, "isDynamicAdminDmUser");
 async function getPrivateRoles(env, userId) {
   const id = String(userId || "").trim();
   const owner = isOwner(env, id);
-  const admin = owner || isAdminDmUser(env, id) || await isDynamicAdminDmUser(env, id);
+  const [dynamicAdmin, subscriptionResult] = await Promise.all([
+    isDynamicAdminDmUser(env, id),
+    callPersonalDayState(env, "get_personal_subscription", { userId: id }).catch(() => ({ subscription: null }))
+  ]);
+  const username = subscriptionResult?.subscription?.username || "";
+  const admin = owner || isAdminDmUser(env, id, username) || dynamicAdmin;
+  const adminManager = owner || isAdminManagerUser(env, id, username);
   return {
     isOwner: owner,
+    canManageAdmins: adminManager,
     isAdmin: admin,
     isSubscriber: Boolean(id)
   };
@@ -6938,12 +7074,12 @@ async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
       await callAnnouncementState(env, "set_message_id", { key: item.key, messageId: null }).catch(() => null);
     }
     if (item.messageId && item.messageId !== nextMessageId) {
-      const deleted = await deleteMessageSafe(env, CHAT_GROUP_ID, item.messageId);
-      if (!deleted) {
+      const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, item.messageId);
+      if (!deletion.ok) {
         await notifyOwnerTechError(env, {
           module: "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435",
           operation: "\u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0435 \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u043E\u0431\u044A\u044F\u0432\u043B\u0435\u043D\u0438\u044F",
-          error: new Error("deleteMessage failed"),
+          error: deletion.error,
           details: { chat_id: CHAT_GROUP_ID, message_id: item.messageId, key: item.key },
           hint: "\u041F\u0440\u043E\u0432\u0435\u0440\u044C, \u0435\u0441\u0442\u044C \u043B\u0438 \u0443 \u0431\u043E\u0442\u0430 \u043F\u0440\u0430\u0432\u043E \u0443\u0434\u0430\u043B\u044F\u0442\u044C \u044D\u0442\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435."
         });
@@ -7027,7 +7163,7 @@ var knowledgeRuntime = createKnowledgeRuntime({
 });
 var callbackHandlerDeps = {
   isUserAdmin,
-  isTechThread: isTechThread2,
+  isTechThread,
   isChatGroup,
   answerCallback,
   editMessageText,
@@ -7043,13 +7179,14 @@ var callbackHandlerDeps = {
   callPersonalDayState,
   isAdminDmUser,
   getPrivateRoles,
+  isCoordinatorUser,
   notifyOwnerTechError,
   deleteMessageSafe,
   listAdminDmRecipients,
   callTelegram,
   sendYozhikToGroup,
   INFO_CHAT_ID,
-  TECH_THREAD_ID: TECH_THREAD_ID2,
+  TECH_THREAD_ID,
   TECH_MESSAGES,
   INFO_CHANNEL_ANNOUNCEMENT_ID,
   FREE_SERVICES_ANNOUNCEMENT_ID,
@@ -7091,10 +7228,10 @@ var messageHandlerDeps = {
   isTimerPanelCommand,
   TIMER_PANEL_TEXT,
   buildTimerKeyboard,
-  isTechThread: isTechThread2,
+  isTechThread,
   isMeetingPanelCommand,
   MEETING_PANEL_TEXT,
-  TECH_THREAD_ID: TECH_THREAD_ID2,
+  TECH_THREAD_ID,
   buildMeetingKeyboard,
   isQueuePanelCommand,
   QUEUE_PANEL_TEXT,
@@ -7180,7 +7317,6 @@ var worker_default = {
       runScheduledTaskOncePerDay(env, "morning_07_00", 7, 0, () => sendAnnouncementCopyToGroup(env, MORNING_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "yozhik_08_00", 8, 0, () => sendYozhikToGroup(env, { disableNotification: false })),
       runScheduledTaskOncePerDay(env, "info_channel_09_00", 9, 0, () => sendAnnouncementCopyToGroup(env, INFO_CHANNEL_ANNOUNCEMENT_ID)),
-      runScheduledTaskOncePerDay(env, "free_services_10_00", 10, 0, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "service_reminders_12_00", 12, 0, () => sendTodayServiceReminders(env)),
       runScheduledTaskOncePerDay(env, "announce_thread_11_00", 11, 0, () => sendTechMessageCopyToInfoThread(env, DAILY_ANNOUNCE_THREAD_MESSAGE_ID, ANNOUNCE_THREAD_ID)),
       runScheduledTaskOncePerDay(env, "daily_15_00", 15, 0, () => sendAnnouncementCopyToGroup(env, DAILY_15_ANNOUNCEMENT_ID)),
@@ -7189,7 +7325,6 @@ var worker_default = {
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_11_00`, item.weekday, 11, 0, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId)),
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_21_20`, item.weekday, 21, 20, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId))
       ]),
-      runScheduledTaskOncePerDay(env, "info_channel_21_00", 21, 0, () => sendAnnouncementCopyToGroup(env, INFO_CHANNEL_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "evening_23_00", 23, 0, () => sendAnnouncementCopyToGroup(env, EVENING_ANNOUNCEMENT_ID)),
       ...PERSONAL_DAY_SCHEDULE.map((item) => runScheduledTaskOncePerDay(
@@ -7221,6 +7356,7 @@ export {
   worker_default as default,
   getQueue111Note,
   isChatGroup,
+  parseGameCommand,
   parseQueueEntry
 };
 //# sourceMappingURL=worker.js.map

@@ -202,6 +202,7 @@ function testWorkerStaticRules() {
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
+  assert.match(worker, /getQueueBlockDividerTitle[\s\S]*111 \/ \\u0418\\u0413\\u0420\\u0410[\s\S]*lines\.push\(`<b>\$\{getQueueBlockDividerTitle\(block\)\}<\/b>`\)/u, "Bill queue text should show visual block dividers");
   assert.match(worker, /QUEUE_FOOTER_LINES[\s\S]*t\.me\/\+mta_CKQY2c05ODRi[\s\S]*us06web\.zoom\.us\/j\/5487249245\?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt\.1/u, "Every queue text should include Telegram and Zoom links");
   assert.match(worker, /if \(action === "remove_by_number"\)[\s\S]*queueState\.entries\.splice\(visibleNumber - 1, 1\)/u, "Queue state should remove entries by visible row number");
   assert.match(worker, /result\.queueText,[\s\S]*buildQueuePublicKeyboard\(\),[\s\S]*result\.parseMode/u, "Published queue messages should include public queue control buttons");
@@ -219,7 +220,8 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0432\\u043e \\u0432\\u0440\\u0435\\u043c\\u044f \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f/u, "Bill game wording should explain that the game only works during the meeting");
   assert.match(worker, /const speechNote = getQueue111Note\(rawText\);\s*if \(speechNote === null\) \{\s*return null;\s*\}[\s\S]*const label = formatQueue111Label\(speechNote\);/u, "BK queue should keep text before or after 111 as the queue note");
   assert.match(worker, /function parseRsQueueEntry\(message\) \{[\s\S]*return makeQueueEntry\(message, "rs", formatQueue111Label\(speechNote\), rawText\);/u, "RS queue should keep text before or after 111 as the queue note");
-  assert.match(messageHandlers, /function parseManualQueueCommand\(text\)[\s\S]*action: "remove"[\s\S]*action: "add_game"[\s\S]*action: "add_111"/u, "Admin text commands should parse manual queue add/game/remove actions");
+  assert.match(messageHandlers, /function parseManualQueueAddBody\(body\)[\s\S]*action: "add_game"[\s\S]*action: "add_111"[\s\S]*function parseManualQueueCommand\(text\)[\s\S]*action: "remove"/u, "Admin text commands should parse manual queue add/game/remove actions");
+  assert.doesNotMatch(messageHandlers, /parseBareManualQueueCommand/u, "Bare 111 from admins should stay a normal self queue request");
   assert.match(messageHandlers, /\?:\\s\+\\u0432\\s\+\\u043e\\u0447\\u0435\\u0440\\u0435\\u0434\\u044c\)\?/u, "Manual add command should allow short 'add 111 name' form");
   assert.match(messageHandlers, /isPrivateChat\(chatType\)[\s\S]*getPrivateRoles[\s\S]*isUserAdmin\(env, message\.from\?\.id, chatId, chatType\)/u, "Manual queue commands should use group admin checks in chats");
   assert.match(messageHandlers, /if \(!roles\.isAdmin\) \{[\s\S]*\\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0434\\u043b\\u044f \\u0430\\u0434\\u043c\\u0438\\u043d\\u043e\\u0432/u, "Non-admins should not be able to change the queue manually");
