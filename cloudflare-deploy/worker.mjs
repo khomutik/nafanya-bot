@@ -3140,10 +3140,20 @@ function okResponse() {
   return new Response("ok");
 }
 __name(okResponse, "okResponse");
+var SECURITY_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+  "referrer-policy": "no-referrer"
+};
+function withSecurityHeaders(headers = {}) {
+  return { ...SECURITY_HEADERS, ...headers };
+}
+__name(withSecurityHeaders, "withSecurityHeaders");
 function textResponse(text, status = 200) {
   return new Response(text, {
     status,
-    headers: { "content-type": "text/plain; charset=UTF-8" }
+    headers: withSecurityHeaders({ "content-type": "text/plain; charset=UTF-8" })
   });
 }
 __name(textResponse, "textResponse");
@@ -3365,6 +3375,7 @@ export {
   buildZoomPayloadFromChatEvent,
   buildZoomValidationResponse,
   hmacSha256Hex,
+  handleRootRequest,
   handleZoomWebhookEvent,
   LightTalkStateDurableObject,
   getQueue111Note,

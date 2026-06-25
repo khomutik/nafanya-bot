@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
-import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
+import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
 import { handleServiceMessages, handleTechThreadMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
@@ -85,6 +85,14 @@ async function testZoomWebhookHelpers() {
   assert.equal(zoomPayload.user.isCoHost, true);
   assert.equal(zoomPayload.recipientType, "everyone");
   assert.equal(zoomPayload.recipientContext, "meeting");
+}
+
+async function testRootResponseHasZoomRequiredSecurityHeaders() {
+  const response = await handleRootRequest({});
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains; preload");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.ok(response.headers.get("content-security-policy")?.includes("default-src 'none'"));
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
 }
 
 function headerIndex(headers, names) {
@@ -734,6 +742,7 @@ await testOnlyCoordinatorCanSelectReplacement();
 await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
 await testZoomWebhookHelpers();
+await testRootResponseHasZoomRequiredSecurityHeaders();
 testQueueBehavior();
 await testBillPanelWorksInMainGroup();
 await testKnowledgeAnswers();
