@@ -144,15 +144,18 @@ export function buildMeetingKeyboard() {
       ],
       [
         { text: "\uD83D\uDCB0 7-\u044f \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044f", callback_data: "meeting:seventh_tradition" },
-        { text: "\u2615 \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", callback_data: "meeting:tea_rules" },
+        { text: "\uD83D\uDE4B \u0421\u043B\u0443\u0436\u0435\u043D\u0438\u044F", callback_data: "meeting:free_services" },
       ],
       [
-        { text: "\u2753 \u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", callback_data: "meeting:speaker_questions" },
+        { text: "\u2615 \u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439", callback_data: "meeting:tea_rules" },
+        { text: "\u2753 \u0412\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443", callback_data: "meeting:speaker_questions" },
+      ],
+      [
         { text: "\u203C\uFE0F \u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", callback_data: "meeting:chat_cleanliness" },
+        { text: "\uD83D\uDCCC \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", callback_data: "meeting:chat_rules" },
       ],
       [
-        { text: "\uD83D\uDCCC \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", callback_data: "meeting:chat_rules" },
-        { text: "\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 Zoom", callback_data: "meeting:telemost_link" }
+        { text: "\u0421\u0441\u044b\u043b\u043a\u0438", callback_data: "meeting:telemost_link" }
       ]
     ]
   };

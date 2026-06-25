@@ -187,9 +187,11 @@ function testWorkerStaticRules() {
   assert.doesNotMatch(botPanels, /promises9/u, "Meeting panel should not include the 9th-step promises button");
   assert.doesNotMatch(botPanels, /topicsMeetingUrl|url: topicsMeetingUrl/u, "Meeting topics button should not be a link");
   assert.match(botPanels, /callback_data: "meeting:today_topic"/u, "Meeting topics button should publish today's topic");
-  assert.match(botPanels, /meeting:seventh_tradition" \},\s*\n\s*\{ text: "\\u2615[\s\S]*callback_data: "meeting:tea_rules"/u, "Seventh tradition and tea rules should be on one meeting-panel row");
-  assert.match(botPanels, /meeting:speaker_questions" \},\s*\n\s*\{ text: "\\u203C\\uFE0F[\s\S]*callback_data: "meeting:chat_cleanliness"/u, "Speaker questions and chat cleanliness should be on one meeting-panel row");
-  assert.match(botPanels, /meeting:chat_rules" \}[\s\S]*callback_data: "meeting:telemost_link"/u, "Chat rules and Zoom link should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:seventh_tradition" \},\s*\n\s*\{ text: "\\uD83D\\uDE4B[\s\S]*callback_data: "meeting:free_services"/u, "Seventh tradition and free services should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:tea_rules" \},\s*\n\s*\{ text: "\\u2753[\s\S]*callback_data: "meeting:speaker_questions"/u, "Tea rules and speaker questions should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:chat_cleanliness" \},\s*\n\s*\{ text: "\\uD83D\\uDCCC[\s\S]*callback_data: "meeting:chat_rules"/u, "Chat cleanliness and chat rules should be on one meeting-panel row");
+  assert.match(botPanels, /text: "\\u0421\\u0441\\u044b\\u043b\\u043a\\u0438"[\s\S]*callback_data: "meeting:telemost_link"/u, "Meeting links button should be renamed to 'Links'");
+  assert.match(worker, /free_services: FREE_SERVICES_ANNOUNCEMENT_ID/u, "Free services meeting button should copy the free-services announcement");
   assert.match(worker, /function isMeetingPanelCommand\(text, \{ allowBare = true \} = \{\}\)[\s\S]*\\u043F\\u0443\\u043B\\u044C\\u0442 \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F[\s\S]*allowBare && bare/u, "Meeting panel command should support strict 'panel meeting' mode");
   assert.match(messageHandlers, /isMeetingPanelCommand\(text, \{ allowBare: !isChatGroup\(chatId, threadId\) \}\)/u, "Group chat should require 'panel meeting' to open meeting panel");
   assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*WEEKDAY_TECH_ANNOUNCEMENTS\.find/u, "Today's topic should be selected from weekday tech announcements");
@@ -198,7 +200,7 @@ function testWorkerStaticRules() {
   assert.match(worker, /tech_11_00`, item\.weekday, 11, 0, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 11:00");
   assert.match(worker, /tech_21_20`, item\.weekday, 21, 20, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 21:20");
   assert.match(worker, /\\u041f\\u043e\\u0434\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0430\\u044e/u, "service reminder OK button should say 'Confirm'");
-  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);[\s\S]*return makeQueueEntry\(message, "speech", "__speech__", rawText, \{ kind: "bill_speech", speechNote \}\)/u, "Bill queue should accept 111 with text before or after it");
+  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);[\s\S]*return makeQueueEntry\(message, "speech", "__speech__", rawText, \{ kind: "bill_speech", speechNote, source \}\)/u, "Bill queue should accept 111 with text before or after it");
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
@@ -217,8 +219,9 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /if \(!queueInfo\.state\?\.isOpen \|\| queueInfo\.state\?\.mode !== "bill"\) \{\s*await sendMessage\(env, chatId, "\\u0418\\u0433\\u0440\\u0430/u, "Game command should answer outside open Bill queue");
   assert.doesNotMatch(messageHandlers, /isGameAllowedNow|21:30 \\u0434\\u043e 24:00|allowBillGameEntries/u, "Bill game should not have a time-of-day restriction");
   assert.match(messageHandlers, /\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0432\\u043e \\u0432\\u0440\\u0435\\u043c\\u044f \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f/u, "Bill game wording should explain that the game only works during the meeting");
-  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);\s*if \(speechNote === null\) \{\s*return null;\s*\}[\s\S]*const label = formatQueue111Label\(speechNote\);/u, "BK queue should keep text before or after 111 as the queue note");
-  assert.match(worker, /function parseRsQueueEntry\(message\) \{[\s\S]*return makeQueueEntry\(message, "rs", formatQueue111Label\(speechNote\), rawText\);/u, "RS queue should keep text before or after 111 as the queue note");
+  assert.match(worker, /function getQueueSpeechCodeNote\(rawText\)[\s\S]*\(111\|222\|333\|444\)/u, "BK and RS queues should accept 111/222/333/444 trigger codes");
+  assert.match(worker, /function parseBkQueueEntry\(message, \{ source = "Telegram" \} = \{\}\)[\s\S]*formatQueue111Label\(codeInfo\.note\)/u, "BK queue should publish every accepted trigger as 111");
+  assert.match(worker, /function parseRsQueueEntry\(message, \{ source = "Telegram" \} = \{\}\)[\s\S]*formatQueue111Label\(codeInfo\.note\)/u, "RS queue should publish every accepted trigger as 111");
   assert.match(messageHandlers, /function parseManualQueueCommand\(text\)[\s\S]*action: "remove"[\s\S]*action: "add_game"[\s\S]*action: "add_111"/u, "Admin text commands should parse manual queue add/game/remove actions");
   assert.match(messageHandlers, /\?:\\s\+\\u0432\\s\+\\u043e\\u0447\\u0435\\u0440\\u0435\\u0434\\u044c\)\?/u, "Manual add command should allow short 'add 111 name' form");
   assert.match(messageHandlers, /isPrivateChat\(chatType\)[\s\S]*getPrivateRoles[\s\S]*isUserAdmin\(env, message\.from\?\.id, chatId, chatType\)/u, "Manual queue commands should use group admin checks in chats");
@@ -263,6 +266,18 @@ function testQueueBehavior() {
   );
   assert.equal(entry?.block, "bk", "BK queue 111 should create a BK queue entry");
   assert.equal(entry?.label, "111 \u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "BK queue entry should keep text after 111");
+  assert.equal(entry?.author, "\u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D (Telegram)", "Queue author should include the Telegram source marker");
+
+  const convertedEntry = parseQueueEntry(
+    {
+      chat: { id: -1003547823625 },
+      message_id: 1002,
+      text: "333 @anna_lion",
+      from: { id: 42, first_name: "\u0410\u043D\u043D\u0430", username: "anna_lion" }
+    },
+    { isOpen: true, mode: "bk", entries: [] }
+  );
+  assert.equal(convertedEntry?.label, "111 anna_lion", "BK queue should accept 222/333/444 but publish them as 111");
 }
 
 async function testBillPanelWorksInMainGroup() {

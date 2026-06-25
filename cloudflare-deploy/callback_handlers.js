@@ -636,7 +636,9 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     sendAnnouncementCopyToGroup,
     copyTechMessageToGroup,
     CHAT_GROUP_ID,
-    getTodayTopicSourceMessageId
+    getTodayTopicSourceMessageId,
+    enqueueZoomMessages,
+    getZoomMeetingMessages
   } = deps;
   if (key === "yozhik") {
     try {
@@ -668,6 +670,9 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
       return okResponse();
     }
     await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId);
+    if (enqueueZoomMessages && getZoomMeetingMessages) {
+      await enqueueZoomMessages(env, getZoomMeetingMessages("today_topic")).catch(() => null);
+    }
     await answerCallback(env, callbackQuery.id, "\u0422\u0435\u043C\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0443\u0442\u0430\u0449\u0435\u043D\u0430 \u0432 \u0447\u0430\u0442.");
     return okResponse();
   }
@@ -676,10 +681,14 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     await answerCallback(env, callbackQuery.id, "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u0430\u043B\u043E\u043D\u043D\u043E\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435, \u0443\u0432\u044B.");
     return okResponse();
   }
-  if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID || sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID) {
+  const sentViaAnnouncementCopy = sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID || sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID;
+  if (sentViaAnnouncementCopy) {
     await sendAnnouncementCopyToGroup(env, sourceMessageId);
   } else {
     await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId);
+  }
+  if (!sentViaAnnouncementCopy && enqueueZoomMessages && getZoomMeetingMessages) {
+    await enqueueZoomMessages(env, getZoomMeetingMessages(key)).catch(() => null);
   }
   await answerCallback(env, callbackQuery.id, "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0443\u0442\u0430\u0449\u0435\u043D\u043E \u0432 \u0447\u0430\u0442 \u0433\u0440\u0443\u043F\u043F\u044B.");
   return okResponse();

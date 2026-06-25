@@ -347,6 +347,53 @@ var QUEUE_FOOTER_LINES = [
   "\uD83D\uDDE3\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
   "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1"
 ];
+var ZOOM_MEETING_URL = "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1";
+var ZOOM_BOT_NAME = "\u041D\u0430\u0444\u0430\u043D\u044F (\u0434\u043E\u043C\u043E\u0432\u043E\u0439 \u0431\u043E\u0442)";
+var ZOOM_MESSAGE_SAFE_LIMIT = 950;
+var ZOOM_MEETING_MESSAGE_TEXTS = {
+  telemost_link: ["\u0421\u0441\u044B\u043B\u043A\u0438", ZOOM_MEETING_URL],
+  free_services: ["\u0421\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  minute_silence: ["\u041C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  prayer: ["\u041C\u043E\u043B\u0438\u0442\u0432\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  preambula: ["\u041F\u0440\u0435\u0430\u043C\u0431\u0443\u043B\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  newcomer: ["\u041D\u043E\u0432\u0438\u0447\u043A\u0443: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  steps12: ["12 \u0448\u0430\u0433\u043E\u0432: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  traditions12: ["12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  meeting_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  today_topic: ["\u0422\u0435\u043C\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  seventh_tradition: ["7-\u044F \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  tea_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  speaker_questions: ["\u0412\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  chat_cleanliness: ["\u0427\u0438\u0441\u0442\u043E\u0442\u0430 \u0447\u0430\u0442\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
+  chat_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0442\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."]
+};
+var ZOOM_MEETING_COMMANDS = {
+  "\u043C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B": "minute_silence",
+  "\u043C\u043E\u043B\u0438\u0442\u0432\u0430": "prayer",
+  "\u043F\u0440\u0435\u0430\u043C\u0431\u0443\u043B\u0430": "preambula",
+  "\u043D\u043E\u0432\u0438\u0447\u043A\u0443": "newcomer",
+  "12 \u0448\u0430\u0433\u043E\u0432": "steps12",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432": "steps12",
+  "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439": "traditions12",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439": "traditions12",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F": "meeting_rules",
+  "\u0442\u0435\u043C\u0430": "today_topic",
+  "\u0442\u0435\u043C\u044B": "today_topic",
+  "\u0435\u0436\u0438\u043A": "yozhik",
+  "\u0451\u0436\u0438\u043A": "yozhik",
+  "\u0431\u0438\u043B\u043B": "bill_prompt",
+  "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F": "seventh_tradition",
+  "7-\u044F \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F": "seventh_tradition",
+  "\u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F": "free_services",
+  "\u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F": "free_services",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439": "tea_rules",
+  "\u0432\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443": "speaker_questions",
+  "\u0447\u0438\u0441\u0442\u043E\u0442\u0430 \u0447\u0430\u0442\u0430": "chat_cleanliness",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0442\u0430": "chat_rules",
+  "\u0441\u0441\u044B\u043B\u043A\u0438": "telemost_link",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 zoom": "telemost_link",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 \u0437\u0443\u043C": "telemost_link"
+};
 var MEDITATION_ANNOUNCEMENT_IDS_BY_HOUR = {
   11: 2375,
   12: 2376,
@@ -400,6 +447,7 @@ var TECH_MESSAGES = {
   meeting_rules: 1701,
   speaker_questions: 1705,
   seventh_tradition: 1708,
+  free_services: FREE_SERVICES_ANNOUNCEMENT_ID,
   promises9: 1710,
   tea_rules: 1711,
   chat_cleanliness: 1712,
@@ -407,6 +455,11 @@ var TECH_MESSAGES = {
   telemost_link: 2597,
   meeting_schedule: 3053
 };
+function getZoomMeetingKeyBySourceMessageId(sourceMessageId) {
+  const match = Object.entries(TECH_MESSAGES).find(([, messageId]) => Number(messageId) === Number(sourceMessageId));
+  return match ? match[0] : null;
+}
+__name(getZoomMeetingKeyBySourceMessageId, "getZoomMeetingKeyBySourceMessageId");
 var YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
 var BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
 var SPEAKER_QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/speaker_questions.json";
@@ -588,6 +641,42 @@ function compact(value) {
   return String(value || "").replace(/\uFEFF/g, "").replace(/\s+/g, " ").trim();
 }
 __name(compact, "compact");
+function stripTelegramHandles(value) {
+  return compact(String(value || "").replace(/\s*\(@[A-Za-z0-9_]{2,64}\)/gu, "").replace(/@([A-Za-z0-9_]{2,64})/gu, "$1"));
+}
+__name(stripTelegramHandles, "stripTelegramHandles");
+function formatQueueAuthorLabel(author, source = "Telegram") {
+  const cleanAuthor = stripTelegramHandles(author) || "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
+  const cleanSource = stripTelegramHandles(source) || "Telegram";
+  const sourcePattern = new RegExp(`\\s*\\(${cleanSource.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\s*$`, "u");
+  return `${cleanAuthor.replace(sourcePattern, "").trim()} (${cleanSource})`;
+}
+__name(formatQueueAuthorLabel, "formatQueueAuthorLabel");
+function stripHtmlTags(text) {
+  return String(text || "").replace(/<[^>]+>/g, "");
+}
+__name(stripHtmlTags, "stripHtmlTags");
+function cleanZoomText(text) {
+  return stripHtmlTags(text).replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{4,}/g, "\n\n\n").trim();
+}
+__name(cleanZoomText, "cleanZoomText");
+function splitZoomText(text, limit = ZOOM_MESSAGE_SAFE_LIMIT) {
+  const clean = cleanZoomText(text);
+  if (!clean) return [];
+  if (clean.length <= limit) return [clean];
+  const chunks = [];
+  let rest = clean;
+  while (rest.length > limit) {
+    const slice = rest.slice(0, limit + 1);
+    const breakAt = Math.max(slice.lastIndexOf("\n\n"), slice.lastIndexOf("\n"), slice.lastIndexOf(". "), slice.lastIndexOf(" "));
+    const cut = breakAt > Math.floor(limit * 0.55) ? breakAt : limit;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks.length > 1 ? chunks.map((chunk, index) => `\u0427\u0430\u0441\u0442\u044C ${index + 1}/${chunks.length}\n${chunk}`) : chunks;
+}
+__name(splitZoomText, "splitZoomText");
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -601,7 +690,7 @@ function makeQueueEntry(message, block, label, rawText, extra = {}) {
   const messageId = message?.message_id ?? getCurrentTimestamp();
   return {
     id: `${chatId}_${messageId}_${Math.random().toString(36).slice(2, 8)}`,
-    author: extra.author ?? getAuthorLabel(message),
+    author: formatQueueAuthorLabel(extra.author ?? getAuthorLabel(message), extra.source || "Telegram"),
     rawText,
     label,
     block,
@@ -635,8 +724,22 @@ function getQueue111Note(rawText) {
   return compact(`${before} ${after}`);
 }
 __name(getQueue111Note, "getQueue111Note");
+function getQueueSpeechCodeNote(rawText) {
+  const text = String(rawText || "").trim();
+  const match = text.match(/(^|[\s!.,?:;#-]+)(111|222|333|444)(?=$|[\s!.,?:;#-]+)/);
+  if (!match) {
+    return null;
+  }
+  const numberIndex = match.index + match[1].length;
+  const code = match[2];
+  const before = text.slice(0, numberIndex).replace(/[\s!.,?:;#-]+$/u, "").trim();
+  const after = text.slice(numberIndex + code.length).replace(/^[\s!.,?:;#-]+/u, "").trim();
+  return { code, note: compact(`${before} ${after}`) };
+}
+__name(getQueueSpeechCodeNote, "getQueueSpeechCodeNote");
 function formatQueue111Label(note, code = "111") {
-  return note ? `${code} ${note}` : code;
+  const cleanNote = stripTelegramHandles(note);
+  return cleanNote ? `${code} ${cleanNote}` : code;
 }
 __name(formatQueue111Label, "formatQueue111Label");
 function getBillQuestionNumber(text) {
@@ -667,7 +770,9 @@ function createEmptyAnnouncementState() {
     personalSubscriptions: {},
     adminDmDrafts: {},
     adminDmUsers: {},
-    replacementRequests: {}
+    replacementRequests: {},
+    zoomOutbox: [],
+    zoomOutboxNextId: 1
   };
 }
 __name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
@@ -688,6 +793,13 @@ function normalizeAnnouncementState(announcementState) {
   if (!normalized.replacementRequests || typeof normalized.replacementRequests !== "object") {
     normalized.replacementRequests = {};
   }
+  if (!Array.isArray(normalized.zoomOutbox)) {
+    normalized.zoomOutbox = [];
+  }
+  normalized.zoomOutbox = normalized.zoomOutbox.filter((item) => item && typeof item === "object");
+  const maxExistingId = normalized.zoomOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
+  const nextId = Number(normalized.zoomOutboxNextId);
+  normalized.zoomOutboxNextId = Number.isInteger(nextId) && nextId > maxExistingId ? nextId : maxExistingId + 1;
   return normalized;
 }
 __name(normalizeAnnouncementState, "normalizeAnnouncementState");
@@ -823,43 +935,39 @@ function getBillSpeechBlock(label) {
   return label;
 }
 __name(getBillSpeechBlock, "getBillSpeechBlock");
-function parseBillQueueEntry(message, state, { allowGameEntries = true } = {}) {
+function parseBillQueueEntry(message, state, { allowGameEntries = true, source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
   const normalized = normalizeText2(rawText);
   const questionNumber = getBillQuestionNumber(rawText);
   if (questionNumber !== null) {
     if (!allowGameEntries) return null;
-    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText);
+    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText, { source });
   }
   const trigger = normalized.match(/^(222|333|444)(?:[\s!.,?:;#-]*)$/);
   const speechNote = getQueue111Note(rawText);
   if (!trigger && speechNote === null) {
     return null;
   }
-  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote });
+  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote, source });
 }
 __name(parseBillQueueEntry, "parseBillQueueEntry");
-function parseBkQueueEntry(message) {
+function parseBkQueueEntry(message, { source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
-  const normalized = normalizeText2(rawText);
-  if (/\b222\b|\b333\b|\b444\b/.test(normalized)) {
+  const codeInfo = getQueueSpeechCodeNote(rawText);
+  if (!codeInfo) {
     return null;
   }
-  const speechNote = getQueue111Note(rawText);
-  if (speechNote === null) {
-    return null;
-  }
-  const label = formatQueue111Label(speechNote);
-  return makeQueueEntry(message, "bk", label, rawText);
+  const label = formatQueue111Label(codeInfo.note);
+  return makeQueueEntry(message, "bk", label, rawText, { source });
 }
 __name(parseBkQueueEntry, "parseBkQueueEntry");
-function parseRsQueueEntry(message) {
+function parseRsQueueEntry(message, { source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
-  const speechNote = getQueue111Note(rawText);
-  if (speechNote === null) {
+  const codeInfo = getQueueSpeechCodeNote(rawText);
+  if (!codeInfo) {
     return null;
   }
-  return makeQueueEntry(message, "rs", formatQueue111Label(speechNote), rawText);
+  return makeQueueEntry(message, "rs", formatQueue111Label(codeInfo.note), rawText, { source });
 }
 __name(parseRsQueueEntry, "parseRsQueueEntry");
 function parseQueueEntry(message, state, options = {}) {
@@ -867,13 +975,13 @@ function parseQueueEntry(message, state, options = {}) {
     return null;
   }
   if (state.mode === "bill") {
-    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false });
+    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false, source: options.source || "Telegram" });
   }
   if (state.mode === "bk") {
-    return parseBkQueueEntry(message);
+    return parseBkQueueEntry(message, { source: options.source || "Telegram" });
   }
   if (state.mode === "rs") {
-    return parseRsQueueEntry(message);
+    return parseRsQueueEntry(message, { source: options.source || "Telegram" });
   }
   return null;
 }
@@ -1403,6 +1511,45 @@ var AnnouncementStateDurableObject = class {
         await this.saveState(announcementState);
         return Response.json({ ok: true, messageId: announcementState.messageIds[key] ?? null });
       }
+      if (action === "enqueue_zoom_messages") {
+        const messages = Array.isArray(payload.messages) ? payload.messages : [];
+        const createdAt = Date.now();
+        const queued = messages
+          .map((message) => String(message || "").trim())
+          .filter(Boolean)
+          .map((text) => {
+            const item = {
+              id: announcementState.zoomOutboxNextId,
+              text,
+              createdAt
+            };
+            announcementState.zoomOutboxNextId += 1;
+            return item;
+          });
+        if (queued.length) {
+          announcementState.zoomOutbox.push(...queued);
+          if (announcementState.zoomOutbox.length > 200) {
+            announcementState.zoomOutbox = announcementState.zoomOutbox.slice(-200);
+          }
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, queued });
+      }
+      if (action === "pull_zoom_messages") {
+        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+        return Response.json({
+          ok: true,
+          messages: announcementState.zoomOutbox.slice(0, limit)
+        });
+      }
+      if (action === "ack_zoom_messages") {
+        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
+        if (ids.size) {
+          announcementState.zoomOutbox = announcementState.zoomOutbox.filter((item) => !ids.has(Number(item.id)));
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, remaining: announcementState.zoomOutbox.length });
+      }
       if (action === "get_personal_subscription") {
         const userId = String(payload.userId || "").trim();
         return Response.json({
@@ -1714,6 +1861,18 @@ function getAuthorLabel(message) {
   return "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
 }
 __name(getAuthorLabel, "getAuthorLabel");
+async function enqueueZoomMessages(env, messages) {
+  const cleanMessages = (Array.isArray(messages) ? messages : [messages]).map((message) => String(message || "").trim()).filter(Boolean);
+  if (!cleanMessages.length) return null;
+  return callAnnouncementState(env, "enqueue_zoom_messages", { messages: cleanMessages });
+}
+__name(enqueueZoomMessages, "enqueueZoomMessages");
+function getZoomMeetingMessages(key) {
+  const configured = ZOOM_MEETING_MESSAGE_TEXTS[key];
+  const parts = Array.isArray(configured) ? configured : [configured];
+  return parts.flatMap((part) => splitZoomText(part)).filter(Boolean);
+}
+__name(getZoomMeetingMessages, "getZoomMeetingMessages");
 async function applyQueueResponse(env, result) {
   if (result.publishQueue) {
     let deletedPreviousMessage = true;
@@ -1747,9 +1906,17 @@ async function applyQueueResponse(env, result) {
     await callQueueState(env, "set_message_id", {
       messageId
     });
+    await enqueueZoomMessages(env, splitZoomText(result.queueText)).catch((error) => notifyOwnerTechError(env, {
+      module: "Zoom",
+      operation: "queue outbox",
+      error,
+      details: { source: "queue" },
+      hint: "\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0432 Telegram \u0443\u0436\u0435 \u043E\u043F\u0443\u0431\u043B\u0438\u043A\u043E\u0432\u0430\u043D\u0430, \u043D\u043E Zoom-outbox \u043D\u0435 \u043F\u0440\u0438\u043D\u044F\u043B \u0442\u0435\u043A\u0441\u0442."
+    }));
   }
   if (result.closeMessage) {
     await sendMessage(env, CHAT_GROUP_ID, result.closeMessage, null, null, null, null, true);
+    await enqueueZoomMessages(env, splitZoomText(result.closeMessage)).catch(() => null);
   }
   if (result.cleared && result.previousMessageId) {
     const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, result.previousMessageId);
@@ -2599,6 +2766,16 @@ async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
       }
     }
   }
+  const zoomKey = getZoomMeetingKeyBySourceMessageId(sourceMessageId);
+  if (zoomKey) {
+    await enqueueZoomMessages(env, getZoomMeetingMessages(zoomKey)).catch((error) => notifyOwnerTechError(env, {
+      module: "Zoom",
+      operation: "meeting outbox",
+      error,
+      details: { source_message_id: sourceMessageId, zoom_key: zoomKey },
+      hint: "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0432 Telegram \u0443\u0448\u043B\u043E, \u043D\u043E \u0432 Zoom-outbox \u043D\u0435 \u043F\u043E\u043F\u0430\u043B\u043E."
+    }));
+  }
   return copied;
 }
 __name(sendAnnouncementCopyToGroup, "sendAnnouncementCopyToGroup");
@@ -2642,6 +2819,207 @@ ${text}`;
   await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
 }
 __name(sendBillToGroup, "sendBillToGroup");
+function isZoomBridgeAuthorized(request, env) {
+  const expected = String(env?.ZOOM_BRIDGE_SECRET || "").trim();
+  if (!expected) return false;
+  const actual = String(request.headers.get("x-nafanya-zoom-secret") || "").trim();
+  return actual && actual === expected;
+}
+__name(isZoomBridgeAuthorized, "isZoomBridgeAuthorized");
+function buildZoomMessage(payload) {
+  const user = payload?.user || payload?.from || {};
+  const name = stripTelegramHandles(user.displayName || user.name || user.nickname || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
+  return {
+    text: String(payload?.text || payload?.message || "").trim(),
+    message_id: payload?.messageId || payload?.id || getCurrentTimestamp(),
+    chat: { id: "zoom", type: "zoom" },
+    from: { first_name: name }
+  };
+}
+__name(buildZoomMessage, "buildZoomMessage");
+function isZoomAdminPayload(payload) {
+  const user = payload?.user || payload?.from || {};
+  const role = String(user.role || payload?.role || "").toLowerCase();
+  return Boolean(user.isHost || user.isCoHost || payload?.isHost || payload?.isCoHost || ["host", "cohost", "co-host", "organizer", "coorganizer"].includes(role));
+}
+__name(isZoomAdminPayload, "isZoomAdminPayload");
+function normalizeZoomCommand(text) {
+  return normalizeText2(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
+}
+__name(normalizeZoomCommand, "normalizeZoomCommand");
+function parseZoomManualQueueCommand(text) {
+  const normalized = normalizeZoomCommand(text);
+  const removeMatch = normalized.match(/^(?:\u0443\u0434\u0430\u043B\u0438\u0442\u044C|\u0443\u0434\u0430\u043B\u0438|\u0443\u0431\u0440\u0430\u0442\u044C|\u0443\u0431\u0435\u0440\u0438)(?:\s+(\d{1,3}))?$/u);
+  if (removeMatch) return { action: "remove", index: removeMatch[1] ? Number(removeMatch[1]) : null };
+  const addMatch = normalized.match(/^(?:\u0434\u043E\u0431\u0430\u0432\u044C|\u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C)\s+(.+)$/u);
+  if (!addMatch) return null;
+  const body = addMatch[1].trim();
+  const gameMatch = body.match(/^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+(\d{1,3})\s+(.+)$/u);
+  if (gameMatch) return { action: "add_game", number: Number(gameMatch[1]), author: stripTelegramHandles(gameMatch[2]) };
+  const codeMatch = body.match(/^(111|222|333|444)\s+(.+)$/u);
+  if (codeMatch) return { action: "add_code", code: codeMatch[1], author: stripTelegramHandles(codeMatch[2]) };
+  return { action: "invalid_add" };
+}
+__name(parseZoomManualQueueCommand, "parseZoomManualQueueCommand");
+async function publishMeetingFromZoomCommand(env, key) {
+  if (key === "yozhik") {
+    await sendYozhikToGroup(env);
+    await enqueueZoomMessages(env, ["\u0401\u0436\u0438\u043A \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D \u0432 Telegram."]);
+    return { ok: true, handled: true };
+  }
+  if (key === "bill_prompt") {
+    await enqueueZoomMessages(env, ["\u0411\u0438\u043B\u043B: \u0432\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u043E\u0442 1 \u0434\u043E 332."]);
+    await sendMessage(env, CHAT_GROUP_ID, "\u0412\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430.", null, null, null, null, true);
+    return { ok: true, handled: true };
+  }
+  if (key === "today_topic") {
+    const sourceMessageId = getTodayTopicSourceMessageId();
+    if (!sourceMessageId) {
+      await enqueueZoomMessages(env, ["\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043D\u0435\u0442."]);
+      return { ok: true, handled: true };
+    }
+    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
+    await enqueueZoomMessages(env, getZoomMeetingMessages("today_topic"));
+    return { ok: true, handled: true };
+  }
+  const sourceMessageId = TECH_MESSAGES[key];
+  if (!sourceMessageId) return { ok: false, handled: false, error: "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435." };
+  if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID || sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID) {
+    await sendAnnouncementCopyToGroup(env, sourceMessageId);
+  } else {
+    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
+    await enqueueZoomMessages(env, getZoomMeetingMessages(key));
+  }
+  return { ok: true, handled: true };
+}
+__name(publishMeetingFromZoomCommand, "publishMeetingFromZoomCommand");
+async function handleZoomBridgeMessage(env, payload) {
+  const message = buildZoomMessage(payload);
+  const text = message.text;
+  if (!text) return { ok: true, handled: false };
+  const queueInfo = await callQueueState(env, "get");
+  const isAdmin = isZoomAdminPayload(payload);
+  const normalized = normalizeZoomCommand(text);
+  const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
+  if (meetingKey) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    return publishMeetingFromZoomCommand(env, meetingKey);
+  }
+  if (isAdmin) {
+    const manual = parseZoomManualQueueCommand(text);
+    if (manual) {
+      if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
+        await enqueueZoomMessages(env, ["\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0441\u0435\u0439\u0447\u0430\u0441 \u0437\u0430\u043A\u0440\u044B\u0442\u0430."]);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "remove") {
+        const result = manual.index ? await callQueueState(env, "remove_by_number", { index: manual.index }) : await callQueueState(env, "remove");
+        await applyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_code" && manual.author) {
+        const label = queueInfo.state.mode === "bill" ? manual.code : "111";
+        const entry = makeManualQueueEntry(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
+        const result = await callQueueState(env, "add", { entry });
+        await applyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_game" && manual.author) {
+        if (queueInfo.state.mode !== "bill") {
+          await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0443 \u043C\u043E\u0436\u043D\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0411\u0438\u043B\u043B."]);
+          return { ok: true, handled: true };
+        }
+        const speakerQuestions = await getSpeakerQuestions();
+        const question = speakerQuestions.get(manual.number);
+        if (!question) {
+          await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
+          return { ok: true, handled: true };
+        }
+        const entry = makeManualQueueEntry(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
+        const result = await callQueueState(env, "add", { entry });
+        await applyQueueResponse(env, result);
+        const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`;
+        await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
+        await enqueueZoomMessages(env, splitZoomText(questionText));
+        return { ok: true, handled: true };
+      }
+      await enqueueZoomMessages(env, ["\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u043D\u0435 \u043F\u043E\u043D\u044F\u0442\u043D\u0430."]);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u0432\u044B\u0441\u043A\u0430\u0437\u0430\u043B\u0441\u044F") {
+      const result = await callQueueState(env, "done");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442") {
+      const result = await callQueueState(env, "skip");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C") {
+      const result = await callQueueState(env, "undo");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
+      const result = await callQueueState(env, "close");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+  }
+  if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
+    await enqueueZoomMessages(env, splitZoomText(buildQueueText(queueInfo.state || createEmptyQueueState())));
+    return { ok: true, handled: true };
+  }
+  const gameNumber = parseGameCommand(text);
+  if (gameNumber !== null) {
+    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
+      await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F."]);
+      return { ok: true, handled: true };
+    }
+    const speakerQuestions = await getSpeakerQuestions();
+    const question = speakerQuestions.get(gameNumber);
+    if (question) {
+      const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`;
+      await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
+      await enqueueZoomMessages(env, splitZoomText(questionText));
+    } else {
+      await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
+      return { ok: true, handled: true };
+    }
+  }
+  const entry = parseQueueEntry(message, queueInfo.state, { source: "Zoom" });
+  if (entry) {
+    const result = await callQueueState(env, "add", { entry });
+    await applyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
+  return { ok: true, handled: false };
+}
+__name(handleZoomBridgeMessage, "handleZoomBridgeMessage");
+async function handleZoomBridgeRequest(request, env) {
+  if (!isZoomBridgeAuthorized(request, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const url = new URL(request.url);
+  if (request.method === "POST" && url.pathname === "/zoom/webhook") {
+    const payload = await request.json();
+    return Response.json(await handleZoomBridgeMessage(env, payload));
+  }
+  if (request.method === "POST" && url.pathname === "/zoom/outbox") {
+    const payload = await request.json().catch(() => ({}));
+    if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
+      await callAnnouncementState(env, "ack_zoom_messages", { ids: payload.ackIds });
+    }
+    const result = await callAnnouncementState(env, "pull_zoom_messages", { limit: payload.limit || 20 });
+    return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
+  }
+  return textResponse("Not found", 404);
+}
+__name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
 function okResponse() {
   return new Response("ok");
 }
@@ -2703,6 +3081,8 @@ const callbackHandlerDeps = {
   CHAT_GROUP_ID,
   callQueueState,
   applyQueueResponse,
+  enqueueZoomMessages,
+  getZoomMeetingMessages,
   callTimerState,
   TIMER_DEFAULT_SECONDS,
   getTodayTopicSourceMessageId
@@ -2815,6 +3195,9 @@ var worker_default = {
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
+    }
+    if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox")) {
+      return handleZoomBridgeRequest(request, env);
     }
     return textResponse("Not found", 404);
   },
