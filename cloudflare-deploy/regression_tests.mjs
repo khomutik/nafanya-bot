@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
-import { getQueue111Note, isChatGroup, parseGameCommand, parseQueueEntry } from "./worker.mjs";
+import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
 import { handleServiceMessages, handleTechThreadMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
@@ -32,6 +32,59 @@ function env() {
 async function answer(runtime, question) {
   const result = await runtime.findKnowledgeAnswerDetailed(env(), question, { restrained: false });
   return result.answer || "";
+}
+
+async function testZoomWebhookHelpers() {
+  const secret = "zoom-secret";
+  const validationResponse = await buildZoomValidationResponse(
+    { ZOOM_WEBHOOK_SECRET_TOKEN: secret },
+    { event: "endpoint.url_validation", payload: { plainToken: "plain-token" } }
+  );
+  assert.equal(validationResponse.status, 200);
+  const validationJson = await validationResponse.json();
+  assert.equal(validationJson.plainToken, "plain-token");
+  assert.equal(validationJson.encryptedToken, await hmacSha256Hex(secret, "plain-token"));
+
+  const rawBody = JSON.stringify({ event: "meeting.chat_message_sent", payload: { object: { id: 5487249245 } }, event_ts: 1 });
+  const timestamp = "1782400000";
+  const signature = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
+  const signedRequest = new Request("https://example.com/zoom/events", {
+    method: "POST",
+    headers: {
+      "x-zm-request-timestamp": timestamp,
+      "x-zm-signature": signature
+    },
+    body: rawBody
+  });
+  assert.equal(await verifyZoomWebhookSignature(signedRequest, { ZOOM_WEBHOOK_SECRET_TOKEN: secret }, rawBody), true);
+
+  const zoomPayload = buildZoomPayloadFromChatEvent(
+    { ZOOM_ADMIN_NAMES: "\u041c\u0430\u0448\u0430;\u041b\u0438\u043b\u044f" },
+    {
+      event: "meeting.chat_message_sent",
+      event_ts: 1782400000000,
+      payload: {
+        object: {
+          id: 5487249245,
+          uuid: "meeting-uuid",
+          chat_message: {
+            message_id: "msg-1",
+            message_content: "111",
+            sender_name: "\u041b\u0438\u043b\u044f",
+            sender_type: "guest",
+            recipient_type: "everyone",
+            recipient_context: "meeting",
+            sender_context: "meeting"
+          }
+        }
+      }
+    }
+  );
+  assert.equal(zoomPayload.text, "111");
+  assert.equal(zoomPayload.user.displayName, "\u041b\u0438\u043b\u044f");
+  assert.equal(zoomPayload.user.isCoHost, true);
+  assert.equal(zoomPayload.recipientType, "everyone");
+  assert.equal(zoomPayload.recipientContext, "meeting");
 }
 
 function headerIndex(headers, names) {
@@ -680,6 +733,7 @@ await testVacancyReplacementRequest();
 await testOnlyCoordinatorCanSelectReplacement();
 await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
+await testZoomWebhookHelpers();
 testQueueBehavior();
 await testBillPanelWorksInMainGroup();
 await testKnowledgeAnswers();

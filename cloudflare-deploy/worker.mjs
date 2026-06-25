@@ -2848,6 +2848,16 @@ function isZoomAdminPayload(payload) {
   return Boolean(user.isHost || user.isCoHost || payload?.isHost || payload?.isCoHost || ["host", "cohost", "co-host", "organizer", "coorganizer"].includes(role));
 }
 __name(isZoomAdminPayload, "isZoomAdminPayload");
+function getZoomAdminNames(env) {
+  return String(env?.ZOOM_ADMIN_NAMES || "").split(/[,;\n]/u).map((name) => normalizeZoomCommand(name)).filter(Boolean);
+}
+__name(getZoomAdminNames, "getZoomAdminNames");
+function isZoomAdminName(env, name) {
+  const normalizedName = normalizeZoomCommand(name);
+  if (!normalizedName) return false;
+  return getZoomAdminNames(env).includes(normalizedName);
+}
+__name(isZoomAdminName, "isZoomAdminName");
 function normalizeZoomCommand(text) {
   return normalizeText2(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
 }
@@ -3035,6 +3045,96 @@ async function handleZoomBridgeRequest(request, env) {
   return textResponse("Not found", 404);
 }
 __name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
+function bytesToHex(bytes) {
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+__name(bytesToHex, "bytesToHex");
+async function hmacSha256Hex(secret, message) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
+  return bytesToHex(signature);
+}
+__name(hmacSha256Hex, "hmacSha256Hex");
+function constantTimeEqual(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) {
+    diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return diff === 0;
+}
+__name(constantTimeEqual, "constantTimeEqual");
+async function verifyZoomWebhookSignature(request, env, rawBody) {
+  const secret = String(env?.ZOOM_WEBHOOK_SECRET_TOKEN || "").trim();
+  if (!secret) return false;
+  const timestamp = String(request.headers.get("x-zm-request-timestamp") || "").trim();
+  const signature = String(request.headers.get("x-zm-signature") || "").trim();
+  if (!timestamp || !signature) return false;
+  const expected = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
+  return constantTimeEqual(signature, expected);
+}
+__name(verifyZoomWebhookSignature, "verifyZoomWebhookSignature");
+async function buildZoomValidationResponse(env, payload) {
+  const secret = String(env?.ZOOM_WEBHOOK_SECRET_TOKEN || "").trim();
+  const plainToken = String(payload?.payload?.plainToken || "").trim();
+  if (!secret || !plainToken) {
+    return Response.json({ ok: false, error: "validation_failed" }, { status: 400 });
+  }
+  return Response.json({
+    plainToken,
+    encryptedToken: await hmacSha256Hex(secret, plainToken)
+  });
+}
+__name(buildZoomValidationResponse, "buildZoomValidationResponse");
+function buildZoomPayloadFromChatEvent(env, payload) {
+  const object = payload?.payload?.object || {};
+  const chatMessage = object.chat_message || {};
+  const senderName = stripTelegramHandles(chatMessage.sender_name || "\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a Zoom");
+  const senderType = String(chatMessage.sender_type || "").toLowerCase();
+  return {
+    id: chatMessage.message_id || `${payload?.event_ts || Date.now()}`,
+    text: chatMessage.message_content || "",
+    user: {
+      displayName: senderName,
+      role: senderType,
+      isHost: senderType === "host",
+      isCoHost: isZoomAdminName(env, senderName)
+    },
+    zoomEvent: payload?.event || "",
+    meetingId: object.id || null,
+    meetingUuid: object.uuid || null,
+    recipientType: chatMessage.recipient_type || "",
+    recipientContext: chatMessage.recipient_context || "",
+    senderContext: chatMessage.sender_context || ""
+  };
+}
+__name(buildZoomPayloadFromChatEvent, "buildZoomPayloadFromChatEvent");
+async function handleZoomWebhookEvent(request, env) {
+  const rawBody = await request.text();
+  const payload = JSON.parse(rawBody || "{}");
+  if (payload.event === "endpoint.url_validation") {
+    return buildZoomValidationResponse(env, payload);
+  }
+  const authorized = await verifyZoomWebhookSignature(request, env, rawBody);
+  if (!authorized) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (payload.event !== "meeting.chat_message_sent") {
+    return Response.json({ ok: true, handled: false });
+  }
+  const zoomPayload = buildZoomPayloadFromChatEvent(env, payload);
+  const text = String(zoomPayload.text || "").trim();
+  const recipientType = String(zoomPayload.recipientType || "").toLowerCase();
+  const recipientContext = String(zoomPayload.recipientContext || "").toLowerCase();
+  if (!text || recipientType !== "everyone" || recipientContext !== "meeting") {
+    return Response.json({ ok: true, handled: false });
+  }
+  return Response.json(await handleZoomBridgeMessage(env, zoomPayload));
+}
+__name(handleZoomWebhookEvent, "handleZoomWebhookEvent");
 function okResponse() {
   return new Response("ok");
 }
@@ -3218,6 +3318,9 @@ var worker_default = {
     if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox")) {
       return handleZoomBridgeRequest(request, env);
     }
+    if (request.method === "POST" && url.pathname === "/zoom/events") {
+      return handleZoomWebhookEvent(request, env);
+    }
     return textResponse("Not found", 404);
   },
   async scheduled(controller, env, ctx) {
@@ -3258,6 +3361,10 @@ var worker_default = {
 };
 export {
   AnnouncementStateDurableObject,
+  buildZoomPayloadFromChatEvent,
+  buildZoomValidationResponse,
+  hmacSha256Hex,
+  handleZoomWebhookEvent,
   LightTalkStateDurableObject,
   getQueue111Note,
   isChatGroup,
@@ -3265,6 +3372,7 @@ export {
   parseQueueEntry,
   QueueStateDurableObject,
   TimerStateDurableObject,
+  verifyZoomWebhookSignature,
   worker_default as default
 };
 //# sourceMappingURL=worker.js.map

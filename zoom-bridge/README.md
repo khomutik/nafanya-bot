@@ -17,6 +17,10 @@ docker compose up -d --build
 
 Порты наружу публиковать не нужно. Контейнер сам ходит к Worker, а healthcheck доступен только внутри контейнера.
 
+## Zoom Marketplace
+
+Покнопочная настройка Zoom webhook лежит в [ZOOM_MARKETPLACE_SETUP.md](ZOOM_MARKETPLACE_SETUP.md).
+
 ## Переменные окружения
 
 - `WORKER_BASE_URL` - адрес Cloudflare Worker.
