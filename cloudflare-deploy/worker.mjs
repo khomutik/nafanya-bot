@@ -357,6 +357,7 @@ var QUEUE_FOOTER_LINES = [
 ];
 var ZOOM_BOT_NAME = "\u041D\u0430\u0444\u0430\u043D\u044F (\u0434\u043E\u043C\u043E\u0432\u043E\u0439 \u0431\u043E\u0442)";
 var ZOOM_MESSAGE_SAFE_LIMIT = 950;
+var ZOOM_CHAT_MESSAGE_EVENTS = /* @__PURE__ */ new Set(["meeting.chat_message_sent", "meeting.chat_message_received"]);
 var ZOOM_MEETING_COMMANDS = {
   "\u043C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B": "minute_silence",
   "\u043C\u043E\u043B\u0438\u0442\u0432\u0430": "prayer",
@@ -3122,7 +3123,7 @@ async function handleZoomWebhookEvent(request, env) {
   if (!authorized) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  if (payload.event !== "meeting.chat_message_sent") {
+  if (!ZOOM_CHAT_MESSAGE_EVENTS.has(String(payload.event || ""))) {
     return Response.json({ ok: true, handled: false });
   }
   const zoomPayload = buildZoomPayloadFromChatEvent(env, payload);

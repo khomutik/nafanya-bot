@@ -33,8 +33,10 @@ https://pochti-normalnye-bot.pochtinormalnye.workers.dev/zoom/events
 10. Нажать выбор событий и добавить:
 
 ```text
-meeting.chat_message_sent
+In-meeting chat message received
 ```
+
+В API это событие может называться `meeting.chat_message_sent` или `meeting.chat_message_received`; Worker принимает оба варианта.
 
 11. Скопировать `Secret Token` из блока webhook.
 12. Поставить этот токен в Cloudflare Worker как secret:

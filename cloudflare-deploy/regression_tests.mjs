@@ -61,7 +61,7 @@ async function testZoomWebhookHelpers() {
   const zoomPayload = buildZoomPayloadFromChatEvent(
     { ZOOM_ADMIN_NAMES: "\u041c\u0430\u0448\u0430;\u041b\u0438\u043b\u044f" },
     {
-      event: "meeting.chat_message_sent",
+      event: "meeting.chat_message_received",
       event_ts: 1782400000000,
       payload: {
         object: {
