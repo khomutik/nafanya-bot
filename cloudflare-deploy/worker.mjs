@@ -776,7 +776,8 @@ function createEmptyAnnouncementState() {
     adminDmUsers: {},
     replacementRequests: {},
     zoomOutbox: [],
-    zoomOutboxNextId: 1
+    zoomOutboxNextId: 1,
+    zoomDebugEvents: []
   };
 }
 __name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
@@ -801,6 +802,10 @@ function normalizeAnnouncementState(announcementState) {
     normalized.zoomOutbox = [];
   }
   normalized.zoomOutbox = normalized.zoomOutbox.filter((item) => item && typeof item === "object");
+  if (!Array.isArray(normalized.zoomDebugEvents)) {
+    normalized.zoomDebugEvents = [];
+  }
+  normalized.zoomDebugEvents = normalized.zoomDebugEvents.filter((item) => item && typeof item === "object").slice(-25);
   const maxExistingId = normalized.zoomOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
   const nextId = Number(normalized.zoomOutboxNextId);
   normalized.zoomOutboxNextId = Number.isInteger(nextId) && nextId > maxExistingId ? nextId : maxExistingId + 1;
@@ -1553,6 +1558,24 @@ var AnnouncementStateDurableObject = class {
           await this.saveState(announcementState);
         }
         return Response.json({ ok: true, remaining: announcementState.zoomOutbox.length });
+      }
+      if (action === "record_zoom_debug") {
+        const event = payload.event && typeof payload.event === "object" ? payload.event : {};
+        announcementState.zoomDebugEvents.push({
+          ...event,
+          recordedAt: Date.now()
+        });
+        announcementState.zoomDebugEvents = announcementState.zoomDebugEvents.slice(-25);
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, count: announcementState.zoomDebugEvents.length });
+      }
+      if (action === "pull_zoom_debug") {
+        return Response.json({ ok: true, events: announcementState.zoomDebugEvents.slice(-25) });
+      }
+      if (action === "clear_zoom_debug") {
+        announcementState.zoomDebugEvents = [];
+        await this.saveState(announcementState);
+        return Response.json({ ok: true });
       }
       if (action === "get_personal_subscription") {
         const userId = String(payload.userId || "").trim();
@@ -3043,9 +3066,30 @@ async function handleZoomBridgeRequest(request, env) {
     const result = await callAnnouncementState(env, "pull_zoom_messages", { limit: payload.limit || 20 });
     return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
   }
+  if (request.method === "POST" && url.pathname === "/zoom/debug") {
+    const payload = await request.json().catch(() => ({}));
+    if (payload.clear) {
+      await callAnnouncementState(env, "clear_zoom_debug");
+    }
+    const result = await callAnnouncementState(env, "pull_zoom_debug");
+    return Response.json({ ok: true, events: result.events || [] });
+  }
   return textResponse("Not found", 404);
 }
 __name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
+function zoomDebugTextPreview(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
+}
+__name(zoomDebugTextPreview, "zoomDebugTextPreview");
+async function recordZoomDebugEvent(env, event) {
+  try {
+    await callAnnouncementState(env, "record_zoom_debug", { event });
+  } catch (error) {
+    console.warn("zoom debug record failed", error?.message || String(error));
+  }
+}
+__name(recordZoomDebugEvent, "recordZoomDebugEvent");
 function bytesToHex(bytes) {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -3117,13 +3161,16 @@ async function handleZoomWebhookEvent(request, env) {
   const rawBody = await request.text();
   const payload = JSON.parse(rawBody || "{}");
   if (payload.event === "endpoint.url_validation") {
+    await recordZoomDebugEvent(env, { kind: "validation", event: payload.event });
     return buildZoomValidationResponse(env, payload);
   }
   const authorized = await verifyZoomWebhookSignature(request, env, rawBody);
   if (!authorized) {
+    await recordZoomDebugEvent(env, { kind: "unauthorized", event: payload.event || "", hasSignature: Boolean(request.headers.get("x-zm-signature")) });
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   if (!ZOOM_CHAT_MESSAGE_EVENTS.has(String(payload.event || ""))) {
+    await recordZoomDebugEvent(env, { kind: "ignored_event", event: payload.event || "" });
     return Response.json({ ok: true, handled: false });
   }
   const zoomPayload = buildZoomPayloadFromChatEvent(env, payload);
@@ -3131,9 +3178,28 @@ async function handleZoomWebhookEvent(request, env) {
   const recipientType = String(zoomPayload.recipientType || "").toLowerCase();
   const recipientContext = String(zoomPayload.recipientContext || "").toLowerCase();
   if (!text || recipientType !== "everyone" || recipientContext !== "meeting") {
+    await recordZoomDebugEvent(env, {
+      kind: "ignored_chat",
+      event: payload.event || "",
+      textPreview: zoomDebugTextPreview(text),
+      sender: zoomPayload.user?.displayName || "",
+      recipientType,
+      recipientContext
+    });
     return Response.json({ ok: true, handled: false });
   }
-  return Response.json(await handleZoomBridgeMessage(env, zoomPayload));
+  const result = await handleZoomBridgeMessage(env, zoomPayload);
+  await recordZoomDebugEvent(env, {
+    kind: "handled_chat",
+    event: payload.event || "",
+    textPreview: zoomDebugTextPreview(text),
+    sender: zoomPayload.user?.displayName || "",
+    recipientType,
+    recipientContext,
+    handled: Boolean(result?.handled),
+    denied: Boolean(result?.denied)
+  });
+  return Response.json(result);
 }
 __name(handleZoomWebhookEvent, "handleZoomWebhookEvent");
 function okResponse() {
@@ -3341,7 +3407,7 @@ var worker_default = {
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
     }
-    if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox")) {
+    if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox" || url.pathname === "/zoom/debug")) {
       return handleZoomBridgeRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/zoom/events") {

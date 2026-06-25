@@ -228,6 +228,9 @@ function testWorkerStaticRules() {
   const zoomMeetingTexts = fs.readFileSync(new URL("./zoom_meeting_texts.js", import.meta.url), "utf8");
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
+  assert.match(worker, /record_zoom_debug/u, "Zoom webhook diagnostics should record recent events");
+  assert.match(worker, /url\.pathname === "\/zoom\/debug"/u, "Zoom webhook diagnostics should be available through protected bridge route");
+  assert.match(worker, /zoomDebugEvents = normalized\.zoomDebugEvents[\s\S]*slice\(-25\)/u, "Zoom webhook diagnostics should be bounded");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
   assert.match(messageHandlers, /zoom\|\\u0437\\u0443\\u043c/u, "Zoom link detector should understand Zoom wording");
   assert.match(messageHandlers, /\\u043f\\u0440\\u0438\\u043d\\u0435\\u0441\\u0438/u, "Zoom link detector should understand 'bring link' wording");
