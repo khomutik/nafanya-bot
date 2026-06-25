@@ -153,6 +153,7 @@ function testWorkerStaticRules() {
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
   const telegramApi = fs.readFileSync(new URL("./telegram_api.js", import.meta.url), "utf8");
+  const zoomMeetingTexts = fs.readFileSync(new URL("./zoom_meeting_texts.js", import.meta.url), "utf8");
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
@@ -184,19 +185,36 @@ function testWorkerStaticRules() {
   assert.match(worker, /sourceMessageId: 2895/u, "Thursday tech announcement should copy message 2895");
   assert.match(worker, /sourceMessageId: 2896/u, "Friday tech announcement should copy message 2896");
   assert.match(worker, /sourceMessageId: 2897/u, "Sunday tech announcement should copy message 2897");
+  assert.match(worker, /sourceMessageId: 3132[\s\S]*zoomKey: "theme_monday"/u, "Meeting-topic button should use new Monday source 3132");
+  assert.match(worker, /sourceMessageId: 3133[\s\S]*zoomKey: "theme_tuesday"/u, "Meeting-topic button should use new Tuesday source 3133");
+  assert.match(worker, /sourceMessageId: 3134[\s\S]*zoomKey: "theme_thursday"/u, "Meeting-topic button should use new Thursday source 3134");
+  assert.match(worker, /sourceMessageId: 3135[\s\S]*zoomKey: "theme_friday"/u, "Meeting-topic button should use new Friday source 3135");
+  assert.match(worker, /sourceMessageId: 3136[\s\S]*zoomKey: "theme_sunday"/u, "Meeting-topic button should use new Sunday source 3136");
   assert.doesNotMatch(botPanels, /promises9/u, "Meeting panel should not include the 9th-step promises button");
   assert.doesNotMatch(botPanels, /topicsMeetingUrl|url: topicsMeetingUrl/u, "Meeting topics button should not be a link");
   assert.match(botPanels, /callback_data: "meeting:today_topic"/u, "Meeting topics button should publish today's topic");
   assert.match(botPanels, /meeting:seventh_tradition" \},\s*\n\s*\{ text: "\\uD83D\\uDE4B[\s\S]*callback_data: "meeting:free_services"/u, "Seventh tradition and free services should be on one meeting-panel row");
   assert.match(botPanels, /meeting:tea_rules" \},\s*\n\s*\{ text: "\\u2753[\s\S]*callback_data: "meeting:speaker_questions"/u, "Tea rules and speaker questions should be on one meeting-panel row");
   assert.match(botPanels, /meeting:chat_cleanliness" \},\s*\n\s*\{ text: "\\uD83D\\uDCCC[\s\S]*callback_data: "meeting:chat_rules"/u, "Chat cleanliness and chat rules should be on one meeting-panel row");
+  assert.match(botPanels, /callback_data: "meeting:meeting_schedule"[\s\S]*callback_data: "meeting:telemost_link"/u, "Meeting schedule and links should share the final meeting-panel row");
   assert.match(botPanels, /text: "\\u0421\\u0441\\u044b\\u043b\\u043a\\u0438"[\s\S]*callback_data: "meeting:telemost_link"/u, "Meeting links button should be renamed to 'Links'");
   assert.match(worker, /free_services: FREE_SERVICES_ANNOUNCEMENT_ID/u, "Free services meeting button should copy the free-services announcement");
   assert.match(worker, /function isMeetingPanelCommand\(text, \{ allowBare = true \} = \{\}\)[\s\S]*\\u043F\\u0443\\u043B\\u044C\\u0442 \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F[\s\S]*allowBare && bare/u, "Meeting panel command should support strict 'panel meeting' mode");
   assert.match(messageHandlers, /isMeetingPanelCommand\(text, \{ allowBare: !isChatGroup\(chatId, threadId\) \}\)/u, "Group chat should require 'panel meeting' to open meeting panel");
-  assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*WEEKDAY_TECH_ANNOUNCEMENTS\.find/u, "Today's topic should be selected from weekday tech announcements");
+  assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*TODAY_TOPIC_MESSAGES\.find/u, "Today's topic button should be selected from the new topic-message map");
+  assert.match(worker, /function getTodayTopicZoomMessages\(\)[\s\S]*getZoomMeetingMessages\(key\)/u, "Zoom topic messages should use the weekday theme text");
   assert.match(callbackHandlers, /if \(key === "today_topic"\)[\s\S]*copyTechMessageToGroup\(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId\)/u, "Today's topic button should copy the source message from TECHVED");
+  assert.match(callbackHandlers, /getTodayTopicZoomMessages\(\)/u, "Telegram topic button should enqueue the current Zoom theme text");
   assert.match(callbackHandlers, /\\u0421\\u0435\\u0433\\u043E\\u0434\\u043D\\u044F \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F \\u043D\\u0435\\u0442/u, "No-topic days should say today's meeting is absent");
+  assert.match(worker, /"\\u0442\\u0435\\u043C\\u044B \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F": "today_topic"/u, "Zoom should understand 'meeting topics'");
+  assert.match(worker, /"\\u0440\\u0430\\u0441\\u043F\\u0438\\u0441\\u0430\\u043D\\u0438\\u0435": "meeting_schedule"/u, "Zoom should understand schedule command");
+  assert.match(worker, /sendYozhikToGroup\(env\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Yozhik command should publish the actual Yozhik text");
+  assert.match(worker, /sendBillToGroup\(env, zoomBillNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Bill command should publish the actual Bill text");
+  assert.match(messageHandlers, /sendBillToGroup\(env, billNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Telegram Bill panel flow should mirror the Bill text to Zoom");
+  assert.doesNotMatch(worker + zoomMeetingTexts, /\\u0442\\u0435\\u043A\\u0441\\u0442 \\u0434\\u043B\\u044F Zoom \\u043D\\u0443\\u0436\\u043D\\u043E \\u043F\\u0435\\u0440\\u0435\\u043D\\u0435\\u0441\\u0442\\u0438/u, "Zoom meeting texts should not contain placeholder copy");
+  for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
+    assert.match(zoomMeetingTexts, new RegExp(`"${key}"`, "u"), `Zoom meeting text should include ${key}`);
+  }
   assert.match(worker, /tech_11_00`, item\.weekday, 11, 0, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 11:00");
   assert.match(worker, /tech_21_20`, item\.weekday, 21, 20, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 21:20");
   assert.match(worker, /\\u041f\\u043e\\u0434\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0430\\u044e/u, "service reminder OK button should say 'Confirm'");

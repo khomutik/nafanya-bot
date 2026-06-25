@@ -155,6 +155,7 @@ export function buildMeetingKeyboard() {
         { text: "\uD83D\uDCCC \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", callback_data: "meeting:chat_rules" },
       ],
       [
+        { text: "\uD83D\uDCC5 \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435", callback_data: "meeting:meeting_schedule" },
         { text: "\u0421\u0441\u044b\u043b\u043a\u0438", callback_data: "meeting:telemost_link" }
       ]
     ]

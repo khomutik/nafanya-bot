@@ -10,6 +10,7 @@ import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQu
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
+import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 var YANDEX_COMPLETION_ENDPOINT = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion";
@@ -340,6 +341,13 @@ var WEEKDAY_TECH_ANNOUNCEMENTS = [
   { key: "friday", weekday: 5, sourceMessageId: 2896 },
   { key: "sunday", weekday: 0, sourceMessageId: 2897 }
 ];
+var TODAY_TOPIC_MESSAGES = [
+  { key: "monday", weekday: 1, sourceMessageId: 3132, zoomKey: "theme_monday" },
+  { key: "tuesday", weekday: 2, sourceMessageId: 3133, zoomKey: "theme_tuesday" },
+  { key: "thursday", weekday: 4, sourceMessageId: 3134, zoomKey: "theme_thursday" },
+  { key: "friday", weekday: 5, sourceMessageId: 3135, zoomKey: "theme_friday" },
+  { key: "sunday", weekday: 0, sourceMessageId: 3136, zoomKey: "theme_sunday" }
+];
 var QUEUE_FOOTER_LINES = [
   "",
   "\u270D\uFE0F \u041F\u0438\u0448\u0435\u043C \u0432 \u0422\u0435\u043B\u0435\u0433\u0440\u0430\u043C\u0435:",
@@ -347,26 +355,8 @@ var QUEUE_FOOTER_LINES = [
   "\uD83D\uDDE3\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
   "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1"
 ];
-var ZOOM_MEETING_URL = "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1";
 var ZOOM_BOT_NAME = "\u041D\u0430\u0444\u0430\u043D\u044F (\u0434\u043E\u043C\u043E\u0432\u043E\u0439 \u0431\u043E\u0442)";
 var ZOOM_MESSAGE_SAFE_LIMIT = 950;
-var ZOOM_MEETING_MESSAGE_TEXTS = {
-  telemost_link: ["\u0421\u0441\u044B\u043B\u043A\u0438", ZOOM_MEETING_URL],
-  free_services: ["\u0421\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  minute_silence: ["\u041C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  prayer: ["\u041C\u043E\u043B\u0438\u0442\u0432\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  preambula: ["\u041F\u0440\u0435\u0430\u043C\u0431\u0443\u043B\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  newcomer: ["\u041D\u043E\u0432\u0438\u0447\u043A\u0443: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  steps12: ["12 \u0448\u0430\u0433\u043E\u0432: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  traditions12: ["12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  meeting_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  today_topic: ["\u0422\u0435\u043C\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  seventh_tradition: ["7-\u044F \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044F: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  tea_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  speaker_questions: ["\u0412\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  chat_cleanliness: ["\u0427\u0438\u0441\u0442\u043E\u0442\u0430 \u0447\u0430\u0442\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."],
-  chat_rules: ["\u041F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0442\u0430: \u0442\u0435\u043A\u0441\u0442 \u0434\u043B\u044F Zoom \u043D\u0443\u0436\u043D\u043E \u043F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u0438\u0437 \u0442\u0435\u043C\u044B ZOOM."]
-};
 var ZOOM_MEETING_COMMANDS = {
   "\u043C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B": "minute_silence",
   "\u043C\u043E\u043B\u0438\u0442\u0432\u0430": "prayer",
@@ -379,6 +369,7 @@ var ZOOM_MEETING_COMMANDS = {
   "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F": "meeting_rules",
   "\u0442\u0435\u043C\u0430": "today_topic",
   "\u0442\u0435\u043C\u044B": "today_topic",
+  "\u0442\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F": "today_topic",
   "\u0435\u0436\u0438\u043A": "yozhik",
   "\u0451\u0436\u0438\u043A": "yozhik",
   "\u0431\u0438\u043B\u043B": "bill_prompt",
@@ -390,6 +381,8 @@ var ZOOM_MEETING_COMMANDS = {
   "\u0432\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443": "speaker_questions",
   "\u0447\u0438\u0441\u0442\u043E\u0442\u0430 \u0447\u0430\u0442\u0430": "chat_cleanliness",
   "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0442\u0430": "chat_rules",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435": "meeting_schedule",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0439": "meeting_schedule",
   "\u0441\u0441\u044B\u043B\u043A\u0438": "telemost_link",
   "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 zoom": "telemost_link",
   "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 \u0437\u0443\u043C": "telemost_link"
@@ -621,9 +614,19 @@ function isBillPromptCommand(text) {
 __name(isBillPromptCommand, "isBillPromptCommand");
 function getTodayTopicSourceMessageId() {
   const clock = getMoscowClock();
-  return WEEKDAY_TECH_ANNOUNCEMENTS.find((item) => item.weekday === clock.weekday)?.sourceMessageId ?? null;
+  return TODAY_TOPIC_MESSAGES.find((item) => item.weekday === clock.weekday)?.sourceMessageId ?? null;
 }
 __name(getTodayTopicSourceMessageId, "getTodayTopicSourceMessageId");
+function getTodayTopicZoomKey() {
+  const clock = getMoscowClock();
+  return ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY[String(clock.weekday)] || TODAY_TOPIC_MESSAGES.find((item) => item.weekday === clock.weekday)?.zoomKey || null;
+}
+__name(getTodayTopicZoomKey, "getTodayTopicZoomKey");
+function getTodayTopicZoomMessages() {
+  const key = getTodayTopicZoomKey();
+  return key ? getZoomMeetingMessages(key) : [];
+}
+__name(getTodayTopicZoomMessages, "getTodayTopicZoomMessages");
 function parseBillInput(text) {
   const normalized = text.trim();
   const match = normalized.match(/^(?:билл\s+)?(\d{1,3})$/i);
@@ -2544,6 +2547,7 @@ async function sendYozhikToGroup(env, { disableNotification = true } = {}) {
 
 ${text}`;
   await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+  return messageText;
 }
 __name(sendYozhikToGroup, "sendYozhikToGroup");
 function getAnnouncementKey(sourceMessageId) {
@@ -2817,6 +2821,7 @@ ${body}` : `${header}
 
 ${text}`;
   await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+  return messageText;
 }
 __name(sendBillToGroup, "sendBillToGroup");
 function isZoomBridgeAuthorized(request, env) {
@@ -2863,8 +2868,8 @@ function parseZoomManualQueueCommand(text) {
 __name(parseZoomManualQueueCommand, "parseZoomManualQueueCommand");
 async function publishMeetingFromZoomCommand(env, key) {
   if (key === "yozhik") {
-    await sendYozhikToGroup(env);
-    await enqueueZoomMessages(env, ["\u0401\u0436\u0438\u043A \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D \u0432 Telegram."]);
+    const messageText = await sendYozhikToGroup(env);
+    await enqueueZoomMessages(env, splitZoomText(messageText));
     return { ok: true, handled: true };
   }
   if (key === "bill_prompt") {
@@ -2879,7 +2884,7 @@ async function publishMeetingFromZoomCommand(env, key) {
       return { ok: true, handled: true };
     }
     await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
-    await enqueueZoomMessages(env, getZoomMeetingMessages("today_topic"));
+    await enqueueZoomMessages(env, getTodayTopicZoomMessages());
     return { ok: true, handled: true };
   }
   const sourceMessageId = TECH_MESSAGES[key];
@@ -2907,6 +2912,16 @@ async function handleZoomBridgeMessage(env, payload) {
       return { ok: true, handled: true, denied: true };
     }
     return publishMeetingFromZoomCommand(env, meetingKey);
+  }
+  const zoomBillNumber = parseBillInput(text);
+  if (zoomBillNumber !== null && /^\/?\u0431\u0438\u043B\u043B\s+\d{1,3}$/iu.test(text.trim())) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const messageText = await sendBillToGroup(env, zoomBillNumber);
+    await enqueueZoomMessages(env, splitZoomText(messageText));
+    return { ok: true, handled: true };
   }
   if (isAdmin) {
     const manual = parseZoomManualQueueCommand(text);
@@ -3085,7 +3100,9 @@ const callbackHandlerDeps = {
   getZoomMeetingMessages,
   callTimerState,
   TIMER_DEFAULT_SECONDS,
-  getTodayTopicSourceMessageId
+  getTodayTopicSourceMessageId,
+  getTodayTopicZoomMessages,
+  splitZoomText
 };
 const messageHandlerDeps = {
   sendMessage: sendMessageWithInfoSilence,
@@ -3161,7 +3178,9 @@ const messageHandlerDeps = {
   makeManualQueueEntry,
   getSpeakerQuestions,
   getTodayTopicSourceMessageId,
-  applyQueueResponse
+  applyQueueResponse,
+  enqueueZoomMessages,
+  splitZoomText
 };
   async function handleWebhookUpdate(request, env) {
     try {
