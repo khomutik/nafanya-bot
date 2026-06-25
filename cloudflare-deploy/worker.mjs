@@ -3164,6 +3164,18 @@ async function handleRootRequest(env) {
   return textResponse(text);
 }
 __name(handleRootRequest, "handleRootRequest");
+function handleZoomOAuthReturn(request) {
+  const url = new URL(request.url);
+  const error = String(url.searchParams.get("error") || "").trim();
+  if (error) {
+    const description = String(url.searchParams.get("error_description") || error).trim();
+    return textResponse(`Zoom authorization failed: ${description}`, 400);
+  }
+  const code = String(url.searchParams.get("code") || "").trim();
+  const text = code ? "Nafanya Zoom Bridge authorization received. You can close this tab and return to Zoom Marketplace." : "Nafanya Zoom Bridge OAuth return endpoint is ready.";
+  return textResponse(text);
+}
+__name(handleZoomOAuthReturn, "handleZoomOAuthReturn");
 const knowledgeRuntime = createKnowledgeRuntime({
   QUERY_HINT,
   FAQ_HINT,
@@ -3323,6 +3335,9 @@ var worker_default = {
     if (request.method === "GET" && url.pathname === "/") {
       return handleRootRequest(env);
     }
+    if (request.method === "GET" && url.pathname === "/oauth") {
+      return handleZoomOAuthReturn(request);
+    }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
     }
@@ -3376,6 +3391,7 @@ export {
   buildZoomValidationResponse,
   hmacSha256Hex,
   handleRootRequest,
+  handleZoomOAuthReturn,
   handleZoomWebhookEvent,
   LightTalkStateDurableObject,
   getQueue111Note,
