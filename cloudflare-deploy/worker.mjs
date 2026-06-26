@@ -1544,11 +1544,19 @@ var AnnouncementStateDurableObject = class {
         }
         return Response.json({ ok: true, queued });
       }
-      if (action === "pull_zoom_messages") {
-        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+      if (action === "get_zoom_outbox_marker") {
         return Response.json({
           ok: true,
-          messages: announcementState.zoomOutbox.slice(0, limit)
+          nextId: announcementState.zoomOutboxNextId
+        });
+      }
+      if (action === "pull_zoom_messages") {
+        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+        const minId = Number(payload.minId) || 0;
+        const messages = announcementState.zoomOutbox.filter((item) => !minId || Number(item.id) >= minId);
+        return Response.json({
+          ok: true,
+          messages: messages.slice(0, limit)
         });
       }
       if (action === "ack_zoom_messages") {
@@ -3077,6 +3085,54 @@ async function handleZoomBridgeRequest(request, env) {
   return textResponse("Not found", 404);
 }
 __name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
+function isZoomAppControlCommand(command) {
+  const normalized = normalizeZoomCommand(command);
+  if (ZOOM_APP_ALLOWED_COMMANDS.has(normalized)) return true;
+  if (/^\u0431\u0438\u043b\u043b\s+\d{1,3}$/iu.test(normalized)) return true;
+  return false;
+}
+__name(isZoomAppControlCommand, "isZoomAppControlCommand");
+function buildZoomPayloadFromAppCommand(env, command, userContext = {}) {
+  const role = String(userContext.role || "").toLowerCase();
+  const displayName = stripTelegramHandles(userContext.screenName || userContext.displayName || userContext.name || "Zoom App");
+  const nameIsAdmin = isZoomAdminName(env, displayName);
+  return {
+    id: `zoom-app-${Date.now()}`,
+    text: command,
+    user: {
+      displayName,
+      role,
+      isHost: role === "host",
+      isCoHost: role === "cohost" || role === "co-host" || nameIsAdmin
+    },
+    source: "zoom_app"
+  };
+}
+__name(buildZoomPayloadFromAppCommand, "buildZoomPayloadFromAppCommand");
+async function handleZoomAppActionRequest(request, env) {
+  if (request.method !== "POST") {
+    return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  }
+  const payload = await request.json().catch(() => ({}));
+  const command = String(payload.command || "").trim();
+  if (!command || !isZoomAppControlCommand(command)) {
+    return Response.json({ ok: false, error: "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043b\u044f Zoom-\u043f\u0443\u043b\u044c\u0442\u0430 \u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0430." }, { status: 400 });
+  }
+  const marker = await callAnnouncementState(env, "get_zoom_outbox_marker").catch(() => ({ nextId: 1 }));
+  const result = await handleZoomBridgeMessage(env, buildZoomPayloadFromAppCommand(env, command, payload.userContext || {}));
+  const outbox = await callAnnouncementState(env, "pull_zoom_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
+  if (messages.length) {
+    await callAnnouncementState(env, "ack_zoom_messages", { ids: messages.map((message) => message.id) }).catch(() => null);
+  }
+  return Response.json({
+    ok: true,
+    handled: Boolean(result?.handled),
+    denied: Boolean(result?.denied),
+    messages: messages.map((message) => ({ id: message.id, text: String(message.text || "") })).filter((message) => message.text)
+  });
+}
+__name(handleZoomAppActionRequest, "handleZoomAppActionRequest");
 function zoomDebugTextPreview(text) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
@@ -3223,13 +3279,252 @@ function textResponse(text, status = 200) {
   });
 }
 __name(textResponse, "textResponse");
+var ZOOM_APP_SECURITY_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://appssdk.zoom.us",
+    "style-src 'self' 'unsafe-inline'",
+    "connect-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "base-uri 'none'",
+    "frame-ancestors https://*.zoom.us https://*.zoom.com"
+  ].join("; "),
+  "referrer-policy": "no-referrer"
+};
+function htmlResponse(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      ...ZOOM_APP_SECURITY_HEADERS,
+      "content-type": "text/html; charset=UTF-8"
+    }
+  });
+}
+__name(htmlResponse, "htmlResponse");
+var ZOOM_APP_ACTIONS = [
+  { command: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", label: "\u041c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", icon: "\u{1f92b}" },
+  { command: "\u043c\u043e\u043b\u0438\u0442\u0432\u0430", label: "\u041c\u043e\u043b\u0438\u0442\u0432\u0430", icon: "\u{1f64f}" },
+  { command: "\u043f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", label: "\u041f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", icon: "\u{1f4dc}" },
+  { command: "\u043d\u043e\u0432\u0438\u0447\u043a\u0443", label: "\u041d\u043e\u0432\u0438\u0447\u043a\u0443", icon: "\u{1f44b}" },
+  { command: "12 \u0448\u0430\u0433\u043e\u0432", label: "12 \u0428\u0430\u0433\u043e\u0432", icon: "12" },
+  { command: "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439", label: "12 \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u0439", icon: "12" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f4d8}" },
+  { command: "\u0442\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u0422\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f5c2}\ufe0f" },
+  { command: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", icon: "\u{1f4c5}" },
+  { command: "\u0441\u043b\u0443\u0436\u0435\u043d\u0438\u044f", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f", icon: "\u{1f4cc}" },
+  { command: "\u0441\u0441\u044b\u043b\u043a\u0438", label: "\u0421\u0441\u044b\u043b\u043a\u0438", icon: "\u{1f517}" },
+  { command: "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f", label: "7-\u044f \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044f", icon: "\u{1f4b0}" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", icon: "\u2615" },
+  { command: "\u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", icon: "\u2753" },
+  { command: "\u0447\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", icon: "\u203c\ufe0f" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", icon: "\u{1f4cc}" },
+  { command: "\u0435\u0436\u0438\u043a", label: "\u0401\u0436\u0438\u043a", icon: "\u{1f994}" },
+  { command: "\u0431\u0438\u043b\u043b", label: "\u0411\u0438\u043b\u043b", icon: "\u{1f4d9}" }
+];
+var ZOOM_APP_ALLOWED_COMMANDS = new Set([
+  ...ZOOM_APP_ACTIONS.map((action) => normalizeZoomCommand(action.command)),
+  "\u0432\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f",
+  "\u043f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",
+  "\u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c",
+  "\u0437\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c",
+  "\u043e\u0447\u0435\u0440\u0435\u0434\u044c"
+]);
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+__name(escapeHtml, "escapeHtml");
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
+}
+__name(escapeAttr, "escapeAttr");
+function buildZoomAppHtml() {
+  const buttons = ZOOM_APP_ACTIONS.map((action) => `<button class="action" type="button" data-command="${escapeAttr(action.command)}"><span class="icon">${escapeHtml(action.icon)}</span><span>${escapeHtml(action.label)}</span></button>`).join("");
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nafanya Zoom Bridge</title>
+  <script src="https://appssdk.zoom.us/sdk.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f7f5f2; color: #211f1b; }
+    .shell { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.15; }
+    .badge { flex: 0 0 auto; border: 1px solid #d8d1c6; border-radius: 999px; padding: 6px 10px; font-size: 12px; background: #fff; color: #5f574d; }
+    .status { min-height: 40px; border-radius: 8px; padding: 10px 12px; background: #fff; border: 1px solid #ded8ce; color: #4b443d; font-size: 13px; }
+    .status.good { border-color: #9fc89e; background: #f2fbf1; }
+    .status.warn { border-color: #e3c16a; background: #fff8e5; }
+    .status.bad { border-color: #db8b83; background: #fff0ee; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .action { min-height: 52px; border: 1px solid #cfc7bb; border-radius: 8px; background: #fff; color: #241f1a; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; justify-content: flex-start; padding: 10px 12px; text-align: left; cursor: pointer; }
+    .action:active { transform: translateY(1px); }
+    .action[disabled] { opacity: 0.58; cursor: wait; }
+    .icon { flex: 0 0 26px; width: 26px; text-align: center; font-weight: 800; }
+    .manual { margin-top: auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .manual input { min-width: 0; border-radius: 8px; border: 1px solid #cfc7bb; padding: 10px 12px; font-size: 15px; background: #fff; color: #211f1b; }
+    .manual button { border-radius: 8px; border: 0; padding: 10px 14px; background: #214c8f; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .log { max-height: 155px; overflow: auto; border-radius: 8px; background: #2a2622; color: #fff7eb; padding: 10px; font-size: 12px; white-space: pre-wrap; }
+    @media (max-width: 380px) { .grid { grid-template-columns: 1fr; } .shell { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="top">
+      <div>
+        <h1>Нафаня</h1>
+        <div>Пульт собрания</div>
+      </div>
+      <div class="badge" id="roleBadge">Zoom App</div>
+    </section>
+    <div class="status warn" id="status">Подключаю Zoom SDK...</div>
+    <section class="grid">${buttons}</section>
+    <form class="manual" id="manualForm">
+      <input id="manualInput" autocomplete="off" placeholder="билл 17, очередь, отменить">
+      <button type="submit">OK</button>
+    </form>
+    <pre class="log" id="log">Жду команду.</pre>
+  </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const roleBadge = document.getElementById("roleBadge");
+    const manualInput = document.getElementById("manualInput");
+    const buttons = [...document.querySelectorAll(".action")];
+    let zoomReady = false;
+    let userContext = {};
+
+    function setStatus(text, kind = "warn") {
+      statusEl.textContent = text;
+      statusEl.className = "status " + kind;
+    }
+
+    function addLog(text) {
+      const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
+    }
+
+    function normalizeRole(role) {
+      return String(role || "").toLowerCase().replace(/[-_\\s]+/g, "");
+    }
+
+    function canControl() {
+      const role = normalizeRole(userContext.role);
+      return role === "host" || role === "cohost" || role === "co-host";
+    }
+
+    async function initZoom() {
+      if (!window.zoomSdk) {
+        setStatus("Открыто вне Zoom-клиента. Кнопки могут отправить в Telegram, но не в чат Zoom.", "warn");
+        return;
+      }
+      try {
+        const config = await zoomSdk.config({
+          version: "0.16",
+          capabilities: ["getUserContext", "sendMessageToChat", "showNotification"],
+          popoutSize: { width: 420, height: 760 }
+        });
+        zoomReady = !config.unsupportedApis?.includes("sendMessageToChat");
+        userContext = await zoomSdk.getUserContext().catch(() => ({}));
+        const name = userContext.screenName || "Zoom";
+        const role = userContext.role || config.runningContext || "";
+        roleBadge.textContent = name + (role ? " / " + role : "");
+        if (config.runningContext !== "inMeeting") {
+          setStatus("Пульт открыт не внутри конференции. Для отправки в чат открой его из кнопки Приложения в самой конференции.", "warn");
+        } else if (!zoomReady) {
+          setStatus("Zoom SDK открылся, но sendMessageToChat недоступен. Проверь разрешение Zoom App SDK: sendMessageToChat.", "bad");
+        } else {
+          setStatus("Готов. Нажми кнопку, Нафаня отправит текст в Telegram и попробует продублировать в чат Zoom.", "good");
+        }
+        addLog("SDK: " + JSON.stringify({ runningContext: config.runningContext, unsupportedApis: config.unsupportedApis || [], user: userContext }));
+      } catch (error) {
+        setStatus("Zoom SDK не настроился: " + (error?.message || String(error)), "bad");
+        addLog("Ошибка SDK: " + JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      }
+    }
+
+    async function sendToZoomChat(text) {
+      if (!zoomReady || !window.zoomSdk?.sendMessageToChat) {
+        addLog("Zoom chat пропущен: SDK не разрешил отправку.");
+        return false;
+      }
+      await zoomSdk.sendMessageToChat({ message: text });
+      return true;
+    }
+
+    async function runCommand(command) {
+      const clean = String(command || "").trim();
+      if (!clean) return;
+      buttons.forEach((button) => button.disabled = true);
+      setStatus("Выполняю: " + clean, "warn");
+      addLog("Команда: " + clean);
+      try {
+        const response = await fetch("/zoom/app/action", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command: clean, userContext })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ("HTTP " + response.status));
+        }
+        let sent = 0;
+        for (const item of data.messages || []) {
+          if (await sendToZoomChat(item.text)) sent += 1;
+        }
+        if (data.denied) {
+          setStatus("Команда не выполнена: нужны права организатора или соорганизатора.", "bad");
+        } else if ((data.messages || []).length && sent === 0) {
+          setStatus("В Telegram ушло. В чат Zoom не отправилось: SDK не дал отправку.", "warn");
+        } else {
+          setStatus("Готово. Сообщений в Zoom: " + sent + ".", "good");
+        }
+        addLog("Ответ: " + JSON.stringify({ handled: data.handled, messages: (data.messages || []).length, sent }));
+      } catch (error) {
+        setStatus("Ошибка: " + (error?.message || String(error)), "bad");
+        addLog("Ошибка команды: " + (error?.stack || error?.message || String(error)));
+      } finally {
+        buttons.forEach((button) => button.disabled = false);
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => runCommand(button.dataset.command));
+    });
+    document.getElementById("manualForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = manualInput.value;
+      manualInput.value = "";
+      runCommand(value);
+    });
+    initZoom();
+  </script>
+</body>
+</html>`;
+}
+__name(buildZoomAppHtml, "buildZoomAppHtml");
 async function handleRootRequest(env) {
+  return htmlResponse(buildZoomAppHtml());
+}
+__name(handleRootRequest, "handleRootRequest");
+async function handleStatusRequest(env) {
   const tokenStatus = env.BOT_TOKEN ? "\u0435\u0441\u0442\u044C" : "\u043D\u0435\u0442";
   const speakerQuestions = await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map());
   const text = buildRootStatusText(tokenStatus, speakerQuestions.size);
   return textResponse(text);
 }
-__name(handleRootRequest, "handleRootRequest");
+__name(handleStatusRequest, "handleStatusRequest");
 function handleZoomOAuthReturn(request) {
   const url = new URL(request.url);
   const error = String(url.searchParams.get("error") || "").trim();
@@ -3398,11 +3693,17 @@ __name(handleWebhookUpdate, "handleWebhookUpdate");
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/") {
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/zoom/app")) {
       return handleRootRequest(env);
+    }
+    if (request.method === "GET" && url.pathname === "/status") {
+      return handleStatusRequest(env);
     }
     if (request.method === "GET" && url.pathname === "/oauth") {
       return handleZoomOAuthReturn(request);
+    }
+    if (url.pathname === "/zoom/app/action") {
+      return handleZoomAppActionRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
@@ -3457,6 +3758,7 @@ export {
   buildZoomValidationResponse,
   hmacSha256Hex,
   handleRootRequest,
+  handleStatusRequest,
   handleZoomOAuthReturn,
   handleZoomWebhookEvent,
   LightTalkStateDurableObject,

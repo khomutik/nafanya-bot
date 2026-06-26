@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
-import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, handleZoomOAuthReturn, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
+import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, handleStatusRequest, handleZoomOAuthReturn, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
 import { handleServiceMessages, handleTechThreadMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
@@ -88,11 +88,24 @@ async function testZoomWebhookHelpers() {
 }
 
 async function testRootResponseHasZoomRequiredSecurityHeaders() {
-  const response = await handleRootRequest({});
+  const response = await handleStatusRequest({});
   assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains; preload");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.ok(response.headers.get("content-security-policy")?.includes("default-src 'none'"));
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+}
+
+async function testZoomAppHomePage() {
+  const response = await handleRootRequest({});
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
+  assert.match(response.headers.get("content-security-policy") || "", /appssdk\.zoom\.us/u);
+  assert.match(response.headers.get("content-security-policy") || "", /frame-ancestors https:\/\/\*\.zoom\.us/u);
+  assert.match(html, /Nafanya Zoom Bridge/u);
+  assert.match(html, /sendMessageToChat/u);
+  assert.match(html, /data-command="\u043c\u043e\u043b\u0438\u0442\u0432\u0430"/u);
+  assert.match(html, /\/zoom\/app\/action/u);
 }
 
 async function testZoomOAuthReturnEndpoint() {
@@ -757,6 +770,7 @@ await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
 await testZoomWebhookHelpers();
 await testRootResponseHasZoomRequiredSecurityHeaders();
+await testZoomAppHomePage();
 await testZoomOAuthReturnEndpoint();
 testQueueBehavior();
 await testBillPanelWorksInMainGroup();
