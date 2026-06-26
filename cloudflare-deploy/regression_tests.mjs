@@ -101,7 +101,7 @@ async function testZoomAppHomePage() {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
   assert.match(response.headers.get("content-security-policy") || "", /appssdk\.zoom\.us/u);
-  assert.match(response.headers.get("content-security-policy") || "", /frame-ancestors https:\/\/\*\.zoom\.us/u);
+  assert.doesNotMatch(response.headers.get("content-security-policy") || "", /frame-ancestors/u);
   assert.match(html, /Nafanya Zoom Bridge/u);
   assert.match(html, /sendMessageToChat/u);
   assert.match(html, /data-command="\u043c\u043e\u043b\u0438\u0442\u0432\u0430"/u);

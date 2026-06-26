@@ -3289,8 +3289,7 @@ var ZOOM_APP_SECURITY_HEADERS = {
     "connect-src 'self'",
     "img-src 'self' data:",
     "font-src 'self' data:",
-    "base-uri 'none'",
-    "frame-ancestors https://*.zoom.us https://*.zoom.com"
+    "base-uri 'none'"
   ].join("; "),
   "referrer-policy": "no-referrer"
 };
