@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/main.mjs",
-    "check": "node --check src/main.mjs && node --check src/config.mjs && node --check src/worker-client.mjs && node --check src/text.mjs && node --check src/adapters/stub-zoom.mjs && node --check src/health-server.mjs && node --check src/healthcheck.mjs",
-    "test": "node --test"
+    "check": "node --check src/main.mjs && node --check src/config.mjs && node --check src/worker-client.mjs && node --check src/text.mjs && node --check src/adapters/stub-zoom.mjs && node --check src/adapters/meeting-sdk-process.mjs && node --check src/health-server.mjs && node --check src/healthcheck.mjs",
+    "test": "node --test test/text.test.mjs && node --test test/worker-client.test.mjs && node --test test/meeting-sdk-process.test.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -3442,7 +3442,7 @@ function buildZoomAppHtml() {
         if (config.runningContext !== "inMeeting") {
           setStatus("Пульт открыт не внутри конференции. Для отправки в чат открой его из кнопки Приложения в самой конференции.", "warn");
         } else if (!zoomReady) {
-          setStatus("Zoom SDK открылся, но sendMessageToChat недоступен. Проверь разрешение Zoom App SDK: sendMessageToChat.", "bad");
+          setStatus("Пульт открыт внутри конференции. Zoom App не дал прямую отправку в чат; сообщения отправит серверный Zoom-мост, когда он подключен.", "warn");
         } else {
           setStatus("Готов. Нажми кнопку, Нафаня отправит текст в Telegram и попробует продублировать в чат Zoom.", "good");
         }
@@ -3485,7 +3485,7 @@ function buildZoomAppHtml() {
         if (data.denied) {
           setStatus("Команда не выполнена: нужны права организатора или соорганизатора.", "bad");
         } else if ((data.messages || []).length && sent === 0) {
-          setStatus("В Telegram ушло. В чат Zoom не отправилось: SDK не дал отправку.", "warn");
+          setStatus("Команда ушла в Worker. Zoom App не пишет в чат напрямую; жду отправку через серверный мост.", "warn");
         } else {
           setStatus("Готово. Сообщений в Zoom: " + sent + ".", "good");
         }

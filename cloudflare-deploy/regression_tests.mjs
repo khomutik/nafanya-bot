@@ -104,6 +104,7 @@ async function testZoomAppHomePage() {
   assert.doesNotMatch(response.headers.get("content-security-policy") || "", /frame-ancestors/u);
   assert.match(html, /Nafanya Zoom Bridge/u);
   assert.match(html, /sendMessageToChat/u);
+  assert.match(html, /\u0441\u0435\u0440\u0432\u0435\u0440\u043d\u044b\u0439 Zoom-\u043c\u043e\u0441\u0442/u);
   assert.match(html, /data-command="\u043c\u043e\u043b\u0438\u0442\u0432\u0430"/u);
   assert.match(html, /\/zoom\/app\/action/u);
 }
