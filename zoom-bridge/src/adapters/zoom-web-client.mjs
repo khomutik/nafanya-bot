@@ -6,6 +6,12 @@ const WITHOUT_AUDIO_VIDEO_PATTERNS = [
   /continue without audio and video/i,
   /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437/iu
 ];
+const USE_AUDIO_VIDEO_PATTERNS = [
+  /use microphone and camera/i,
+  /use microphone/i,
+  /use audio and video/i,
+  /\u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c/iu
+];
 const DIAGNOSTICS_DIR = "/tmp/nafanya-zoom-bridge";
 
 export function shouldIgnoreZoomMessage(message, botName) {
@@ -136,6 +142,16 @@ async function dismissAudioVideoPrompts(page) {
   }
 }
 
+async function acceptAudioVideoPrompts(page) {
+  for (let index = 0; index < 4; index += 1) {
+    const clicked = await clickButtonByText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await clickTextByPattern(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await clickVisibleText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false);
+    if (!clicked) return;
+    await page.waitForTimeout(1000);
+  }
+}
+
 async function writeDiagnostics(page, logger, label) {
   try {
     const { mkdir } = await import("node:fs/promises");
@@ -211,18 +227,22 @@ export function createZoomWebClientAdapter(config, logger) {
 
   async function joinMeeting() {
     const { chromium } = await import("playwright");
+    const browserArgs = [
+      "--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-infobars",
+      "--no-sandbox"
+    ];
+    if (config.zoomAvatarVideoPath) {
+      browserArgs.push(`--use-file-for-fake-video-capture=${config.zoomAvatarVideoPath}`);
+    }
     context = await chromium.launchPersistentContext(config.zoomBrowserProfileDir, {
       headless: config.zoomHeadless,
       slowMo: config.zoomBrowserSlowMoMs || 0,
       viewport: { width: 1280, height: 720 },
       ignoreDefaultArgs: ["--enable-automation"],
-      args: [
-        "--use-fake-ui-for-media-stream",
-        "--use-fake-device-for-media-stream",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-infobars",
-        "--no-sandbox"
-      ]
+      args: browserArgs
     });
     browser = context.browser();
     page = context.pages()[0] || await context.newPage();
@@ -232,7 +252,11 @@ export function createZoomWebClientAdapter(config, logger) {
     await page.goto(buildZoomWebClientUrl(config.zoomMeetingUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(2000);
     await writeDiagnostics(page, logger, "after-goto");
-    await dismissAudioVideoPrompts(page);
+    if (config.zoomAvatarVideoPath) {
+      await acceptAudioVideoPrompts(page);
+    } else {
+      await dismissAudioVideoPrompts(page);
+    }
     await writeDiagnostics(page, logger, "after-av-choice");
     await clickFirst(page, [
       'a[href*="/wc/join"]',

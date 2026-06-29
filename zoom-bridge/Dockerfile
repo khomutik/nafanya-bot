@@ -7,5 +7,12 @@ COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev --package-lock=false; fi
 
 COPY --chown=pwuser:pwuser src ./src
+COPY --chown=pwuser:pwuser assets ./assets
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/* \
+  && ffmpeg -y -loop 1 -i /app/assets/nafanya-avatar.png \
+    -vf "scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2:color=0x161616,format=yuv420p" \
+    -frames:v 30 -r 10 -f yuv4mpegpipe /app/assets/nafanya-avatar.y4m
 
 CMD ["sh", "-lc", "mkdir -p /home/pwuser/.nafanya-zoom-profile && chown -R pwuser:pwuser /home/pwuser/.nafanya-zoom-profile && su -s /bin/sh pwuser -c 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & export DISPLAY=:99; node src/main.mjs'"]
