@@ -5,6 +5,9 @@ export class WorkerClient {
     }
     this.config = config;
     this.fetch = fetchImpl;
+    const zoomOnly = config.zoomWorkerMode === "zoom-only";
+    this.webhookPath = zoomOnly ? "/zoom-only/webhook" : "/zoom/webhook";
+    this.outboxPath = zoomOnly ? "/zoom-only/outbox" : "/zoom/outbox";
   }
 
   async postJson(path, payload) {
@@ -25,10 +28,10 @@ export class WorkerClient {
   }
 
   sendIncomingMessage(payload) {
-    return this.postJson("/zoom/webhook", payload);
+    return this.postJson(this.webhookPath, payload);
   }
 
   pullOutbox({ ackIds = [], limit = this.config.outboxLimit } = {}) {
-    return this.postJson("/zoom/outbox", { ackIds, limit });
+    return this.postJson(this.outboxPath, { ackIds, limit });
   }
 }

@@ -2,16 +2,17 @@
 
 Мост между Zoom и Cloudflare Worker Нафани.
 
-Сейчас это Docker-сервис с безопасной связью с Worker и двумя режимами Zoom:
+Сейчас это Docker-сервис с безопасной связью с Worker и тремя режимами Zoom:
 
 - `stub` - проверяет связь с Worker, но не подтверждает исходящие сообщения как отправленные в Zoom.
 - `meeting-sdk-process` - запускает отдельный процесс на базе Zoom Meeting SDK. Этот процесс входит в конференцию как участник и отправляет сообщения в чат. Именно этот режим нужен для настоящей автоматической отправки в Zoom без ручного копирования.
+- `zoom-web-client` - запускает Chromium через Playwright, входит в постоянную конференцию как обычный участник `Нафаня (домовой бот)`, читает чат и пишет ответы обратно в чат конференции. Это основной режим для Zoom-only Нафани.
 
 ## Настройка
 
 1. Скопировать `.env.example` в `.env` на сервере.
 2. Вписать в `.env` реальный `ZOOM_BRIDGE_SECRET`.
-3. Оставить `ZOOM_ADAPTER=stub`, пока нет собранного Zoom Meeting SDK-бота.
+3. Для Zoom-only режима оставить `ZOOM_ADAPTER=zoom-web-client` и `ZOOM_WORKER_MODE=zoom-only`.
 4. Запустить:
 
 ```bash
@@ -30,7 +31,11 @@ docker compose up -d --build
 - `ZOOM_BRIDGE_SECRET` - секрет для заголовка `x-nafanya-zoom-secret`.
 - `ZOOM_MEETING_URL` - постоянная ссылка Zoom.
 - `ZOOM_BOT_NAME` - имя участника в Zoom.
-- `ZOOM_ADAPTER` - `stub` или `meeting-sdk-process`.
+- `ZOOM_ADAPTER` - `stub`, `meeting-sdk-process` или `zoom-web-client`.
+- `ZOOM_WORKER_MODE` - `legacy` для старого Telegram+Zoom контура или `zoom-only` для отдельного Zoom-only режима.
+- `ZOOM_MEETING_PASSCODE` - код доступа к конференции, сейчас `111`.
+- `ZOOM_HEADLESS` - `true` для фонового Chromium на сервере, `false` для видимого локального окна при отладке.
+- `ZOOM_RECONNECT_DELAY_MS` - пауза перед переподключением после вылета Zoom web client.
 - `ZOOM_SDK_BOT_COMMAND` - путь к исполняемому файлу Meeting SDK-бота для режима `meeting-sdk-process`.
 - `ZOOM_SDK_BOT_ARGS` - аргументы Meeting SDK-бота, если нужны.
 - `ZOOM_SDK_READY_TIMEOUT_MS` - сколько ждать входа SDK-бота в конференцию.

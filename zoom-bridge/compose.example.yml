@@ -3,10 +3,9 @@ services:
     build: .
     container_name: nafanya-zoom-bridge
     restart: unless-stopped
+    ipc: host
     env_file:
       - .env
-    volumes:
-      - ./sdk-bot:/opt/nafanya-zoom-sdk-bot:ro
     healthcheck:
       test: ["CMD", "node", "src/healthcheck.mjs"]
       interval: 30s

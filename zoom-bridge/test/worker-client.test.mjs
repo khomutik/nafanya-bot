@@ -65,3 +65,29 @@ test("WorkerClient surfaces unauthorized responses", async () => {
     await server.close();
   }
 });
+
+test("WorkerClient can use zoom-only worker paths", async () => {
+  const seen = [];
+  const server = await createTestServer(async (request, response) => {
+    seen.push({
+      url: request.url,
+      body: await readJson(request)
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, messages: [] }));
+  });
+  try {
+    const client = new WorkerClient({
+      workerBaseUrl: server.url,
+      zoomBridgeSecret: "secret",
+      zoomWorkerMode: "zoom-only",
+      outboxLimit: 20
+    });
+    await client.sendIncomingMessage({ text: "111" });
+    await client.pullOutbox({ ackIds: [1], limit: 2 });
+    assert.equal(seen[0].url, "/zoom-only/webhook");
+    assert.equal(seen[1].url, "/zoom-only/outbox");
+  } finally {
+    await server.close();
+  }
+});

@@ -1,5 +1,6 @@
 import { createStubZoomAdapter } from "./adapters/stub-zoom.mjs";
 import { createMeetingSdkProcessAdapter } from "./adapters/meeting-sdk-process.mjs";
+import { createZoomWebClientAdapter } from "./adapters/zoom-web-client.mjs";
 import { loadConfig } from "./config.mjs";
 import { startHealthServer } from "./health-server.mjs";
 import { splitZoomText } from "./text.mjs";
@@ -27,6 +28,9 @@ function createZoomAdapter(config, logger) {
   }
   if (config.zoomAdapter === "meeting-sdk-process") {
     return createMeetingSdkProcessAdapter(config, logger);
+  }
+  if (config.zoomAdapter === "zoom-web-client") {
+    return createZoomWebClientAdapter(config, logger);
   }
   throw new Error(`Unsupported ZOOM_ADAPTER: ${config.zoomAdapter}`);
 }

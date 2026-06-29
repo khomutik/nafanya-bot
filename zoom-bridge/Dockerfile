@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -6,7 +6,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev --package-lock=false; fi
 
-COPY src ./src
+COPY --chown=pwuser:pwuser src ./src
 
-USER node
+USER pwuser
 CMD ["node", "src/main.mjs"]

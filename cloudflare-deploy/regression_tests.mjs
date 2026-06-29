@@ -354,6 +354,27 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /privateKnowledgeQuestion/u, "private chats should query knowledge docs before light talk");
 }
 
+function testZoomOnlyStaticRules() {
+  const worker = fs.readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/webhook"/u, "Zoom-only webhook endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/outbox"/u, "Zoom-only outbox endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/status"/u, "Zoom-only status endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/app\/action"/u, "Zoom-only app action endpoint should exist");
+  assert.match(worker, /zoomOnlyQueueState: createEmptyQueueState\(\)/u, "Zoom-only queue should live in separate announcement state");
+  assert.match(worker, /zoomOnlyOutbox: \[\]/u, "Zoom-only outbox should be separate from legacy Zoom outbox");
+  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*callZoomOnlyQueueState/u, "Zoom-only messages should use the separate queue state");
+  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*publishZoomOnlyMeetingCommand/u, "Zoom-only meeting commands should use Zoom-only publisher");
+  assert.match(worker, /async function publishZoomOnlyMeetingCommand[\s\S]*buildYozhikText[\s\S]*buildBillText/u, "Zoom-only Yozhik and Bill should build text without Telegram sends");
+  assert.match(worker, /const zoomOnlyMode = \$\{zoomOnly \? "true" : "false"\}/u, "Zoom-only app should render an explicit client-side mode flag");
+  assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
+  assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");
+  assert.doesNotMatch(worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only message handler must not call Telegram send/copy helpers");
+  assert.doesNotMatch(worker.match(/async function publishZoomOnlyMeetingCommand[\s\S]*?__name\(publishZoomOnlyMeetingCommand/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendAnnouncementCopyToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only publisher must not call Telegram send/copy helpers");
+  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0431\\u043A" \? "bk"/u, "Zoom-only admin command should open BK queue");
+  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0431\\u0438\\u043B\\u043B" \? "bill"/u, "Zoom-only admin command should open Bill queue");
+  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0440\\u0430\\u0431\\u043E\\u0447\\u043A\\u0430" \? "rs"/u, "Zoom-only admin command should open RS queue");
+}
+
 function testQueueBehavior() {
   assert.equal(isChatGroup(-1003547823625, null), true, "Main group without topic id should be accepted");
   assert.equal(isChatGroup(-1003547823625, 1), true, "Main group topic id 1 should be accepted");
@@ -774,6 +795,7 @@ await testRootResponseHasZoomRequiredSecurityHeaders();
 await testZoomAppHomePage();
 await testZoomOAuthReturnEndpoint();
 testQueueBehavior();
+testZoomOnlyStaticRules();
 await testBillPanelWorksInMainGroup();
 await testKnowledgeAnswers();
 await testMeetingScheduleAnswers();
