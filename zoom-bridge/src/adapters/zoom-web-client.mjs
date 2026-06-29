@@ -1,6 +1,12 @@
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
 const JOIN_BUTTON_PATTERNS = [/join/i, /\u0432\u043e\u0439\u0442\u0438/iu, /\u043f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d/iu];
 const PASSCODE_PATTERNS = [/passcode/i, /password/i, /\u043a\u043e\u0434/iu, /\u043f\u0430\u0440\u043e\u043b/iu];
+const WITHOUT_AUDIO_VIDEO_PATTERNS = [
+  /continue without microphone and camera/i,
+  /continue without audio and video/i,
+  /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437/iu
+];
+const DIAGNOSTICS_DIR = "/tmp/nafanya-zoom-bridge";
 
 export function shouldIgnoreZoomMessage(message, botName) {
   const sender = String(message?.sender || "").trim().toLowerCase();
@@ -19,6 +25,15 @@ export function buildZoomChatPayload(message) {
     },
     source: "zoom_web_client"
   };
+}
+
+export function buildZoomWebClientUrl(meetingUrl) {
+  const url = new URL(meetingUrl);
+  const match = url.pathname.match(/^\/j\/(\d+)/u);
+  if (match) {
+    url.pathname = `/wc/join/${match[1]}`;
+  }
+  return url.toString();
 }
 
 async function clickFirst(page, selectors, { timeout = 1500 } = {}) {
@@ -64,6 +79,75 @@ async function clickButtonByText(page, patterns) {
     }
   }
   return false;
+}
+
+async function clickTextByPattern(page, patterns) {
+  for (const pattern of patterns) {
+    try {
+      const item = page.getByText(pattern).first();
+      if (await item.isVisible({ timeout: 1500 })) {
+        await item.click();
+        return true;
+      }
+    } catch {
+      // Try next pattern.
+    }
+  }
+  return false;
+}
+
+async function clickVisibleText(page, patterns) {
+  const patternSources = patterns.map((pattern) => pattern.source);
+  const flags = patterns.map((pattern) => pattern.flags);
+  return page.evaluate(({ patternSources, flags }) => {
+    const expressions = patternSources.map((source, index) => new RegExp(source, flags[index]));
+    const elements = [...document.querySelectorAll("button, a, [role='button'], span, div")];
+    for (const element of elements) {
+      const text = String(element.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || !expressions.some((expression) => expression.test(text))) continue;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) continue;
+      const style = window.getComputedStyle(element);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+      element.click();
+      return true;
+    }
+    return false;
+  }, { patternSources, flags });
+}
+
+async function dismissAudioVideoPrompts(page) {
+  for (let index = 0; index < 4; index += 1) {
+    const clicked = await clickFirst(page, [
+      'a:has-text("Continue without microphone and camera")',
+      'button:has-text("Continue without microphone and camera")',
+      '[role="button"]:has-text("Continue without microphone and camera")',
+      'a:has-text("Continue without audio and video")',
+      'button:has-text("Continue without audio and video")',
+      '[role="button"]:has-text("Continue without audio and video")',
+      'a:has-text("\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437")',
+      'button:has-text("\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437")',
+      '[role="button"]:has-text("\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437")'
+    ], { timeout: 1000 })
+      || await clickTextByPattern(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await clickVisibleText(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false);
+    if (!clicked) return;
+    await page.waitForTimeout(1000);
+  }
+}
+
+async function writeDiagnostics(page, logger, label) {
+  try {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(DIAGNOSTICS_DIR, { recursive: true });
+    const safeLabel = String(label || "state").replace(/[^a-z0-9_-]+/giu, "-");
+    const title = await page.title().catch(() => "");
+    const url = page.url();
+    logger.info(`Zoom page ${safeLabel}: title=${JSON.stringify(title)} url=${url}`);
+    await page.screenshot({ path: `${DIAGNOSTICS_DIR}/${safeLabel}.png`, fullPage: true }).catch(() => null);
+  } catch (error) {
+    logger.warn("Zoom diagnostics failed:", error?.message || String(error));
+  }
 }
 
 async function sendChatText(page, text) {
@@ -118,6 +202,7 @@ async function readChatMessages(page) {
 
 export function createZoomWebClientAdapter(config, logger) {
   let browser = null;
+  let context = null;
   let page = null;
   let timer = null;
   let onMessage = null;
@@ -126,14 +211,29 @@ export function createZoomWebClientAdapter(config, logger) {
 
   async function joinMeeting() {
     const { chromium } = await import("playwright");
-    browser = await chromium.launch({
+    context = await chromium.launchPersistentContext(config.zoomBrowserProfileDir, {
       headless: config.zoomHeadless,
       slowMo: config.zoomBrowserSlowMoMs || 0,
-      args: ["--use-fake-ui-for-media-stream", "--no-sandbox"]
+      viewport: { width: 1280, height: 720 },
+      ignoreDefaultArgs: ["--enable-automation"],
+      args: [
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--no-sandbox"
+      ]
     });
-    page = await browser.newPage();
-    await page.goto(config.zoomMeetingUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    browser = context.browser();
+    page = context.pages()[0] || await context.newPage();
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    });
+    await page.goto(buildZoomWebClientUrl(config.zoomMeetingUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(2000);
+    await writeDiagnostics(page, logger, "after-goto");
+    await dismissAudioVideoPrompts(page);
+    await writeDiagnostics(page, logger, "after-av-choice");
     await clickFirst(page, [
       'a[href*="/wc/join"]',
       'a[href*="join"]',
@@ -145,8 +245,12 @@ export function createZoomWebClientAdapter(config, logger) {
       'input[placeholder*="name" i]',
       'input[aria-label*="name" i]',
       'input[placeholder*="\u0438\u043c\u044f" i]',
-      'input[aria-label*="\u0438\u043c\u044f" i]'
+      'input[aria-label*="\u0438\u043c\u044f" i]',
+      'input[type="text"]',
+      'input:not([type])'
     ], config.zoomBotName).catch(() => null);
+    await page.waitForTimeout(500);
+    await writeDiagnostics(page, logger, "after-name");
     if (config.zoomMeetingPasscode) {
       await fillFirst(page, [
         'input[type="password"]',
@@ -158,7 +262,9 @@ export function createZoomWebClientAdapter(config, logger) {
     }
     await clickButtonByText(page, JOIN_BUTTON_PATTERNS);
     await page.waitForTimeout(5000);
+    await writeDiagnostics(page, logger, "after-join");
     await clickButtonByText(page, CHAT_BUTTON_PATTERNS);
+    await writeDiagnostics(page, logger, "after-chat");
     logger.info("Zoom web client adapter joined or is waiting for admission");
   }
 
@@ -168,6 +274,7 @@ export function createZoomWebClientAdapter(config, logger) {
     logger.warn("Zoom web client reconnecting");
     try {
       await page?.close().catch(() => null);
+      await context?.close().catch(() => null);
       await browser?.close().catch(() => null);
       await new Promise((resolve) => setTimeout(resolve, config.zoomReconnectDelayMs));
       await joinMeeting();
@@ -215,6 +322,7 @@ export function createZoomWebClientAdapter(config, logger) {
     async stop() {
       if (timer) clearInterval(timer);
       await page?.close().catch(() => null);
+      await context?.close().catch(() => null);
       await browser?.close().catch(() => null);
     }
   };

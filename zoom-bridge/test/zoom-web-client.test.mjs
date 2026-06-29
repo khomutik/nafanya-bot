@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildZoomChatPayload, shouldIgnoreZoomMessage } from "../src/adapters/zoom-web-client.mjs";
+import { buildZoomChatPayload, buildZoomWebClientUrl, shouldIgnoreZoomMessage } from "../src/adapters/zoom-web-client.mjs";
 
 test("zoom web client ignores messages from the bot itself", () => {
   assert.equal(
@@ -29,4 +29,9 @@ test("zoom web client builds worker payloads without secrets", () => {
     },
     source: "zoom_web_client"
   });
+});
+
+test("zoom web client uses direct browser join URL", () => {
+  const url = buildZoomWebClientUrl("https://us06web.zoom.us/j/5487249245?pwd=abc");
+  assert.equal(url, "https://us06web.zoom.us/wc/join/5487249245?pwd=abc");
 });

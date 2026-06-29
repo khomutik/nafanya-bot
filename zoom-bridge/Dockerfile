@@ -8,5 +8,4 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit
 
 COPY --chown=pwuser:pwuser src ./src
 
-USER pwuser
-CMD ["node", "src/main.mjs"]
+CMD ["sh", "-lc", "mkdir -p /home/pwuser/.nafanya-zoom-profile && chown -R pwuser:pwuser /home/pwuser/.nafanya-zoom-profile && su -s /bin/sh pwuser -c 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & export DISPLAY=:99; node src/main.mjs'"]

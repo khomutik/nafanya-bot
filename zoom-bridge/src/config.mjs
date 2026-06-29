@@ -43,6 +43,7 @@ export function loadConfig(env = process.env) {
     zoomWorkerMode: workerMode,
     zoomMeetingPasscode: String(env.ZOOM_MEETING_PASSCODE || "111").trim(),
     zoomHeadless: String(env.ZOOM_HEADLESS || "true").trim().toLowerCase() !== "false",
+    zoomBrowserProfileDir: String(env.ZOOM_BROWSER_PROFILE_DIR || "/home/pwuser/.nafanya-zoom-profile").trim() || "/home/pwuser/.nafanya-zoom-profile",
     zoomBrowserSlowMoMs: readPositiveInt(env.ZOOM_BROWSER_SLOW_MO_MS, 0, { min: 0, max: 10000 }),
     zoomReconnectDelayMs: readPositiveInt(env.ZOOM_RECONNECT_DELAY_MS, 5000, { min: 1000, max: 120000 }),
     zoomSdkBotCommand: String(env.ZOOM_SDK_BOT_COMMAND || "").trim(),
