@@ -5,7 +5,7 @@ import { FEW_SHOTS, detectNafanyaMode } from "./bot_dialogue.js";
 import { classifyModeration, getModerationDeleteText, getModerationWarningText } from "./bot_moderation.js";
 import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK_TEXTS, QUEUE_CLOSED_LABEL, QUEUE_OPEN_LABEL, QUEUE_PANEL_TEXT, SERVICE_CONFIRMATION, TIMER_CALLBACK_TEXTS, TIMER_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard, buildQueuePublicKeyboard, buildRootStatusText, buildTimerKeyboard, getQueueInstruction, getQueueModeTitle } from "./bot_panels.js";
 import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
-import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callTimerState } from "./state_clients.js";
+import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState } from "./state_clients.js";
 import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
@@ -2348,13 +2348,23 @@ async function runScheduledTaskOncePerDay(env, taskKey, hour, minute, task, wind
     return false;
   }
   const stateKey = `scheduled_${taskKey}`;
-  const previous = await callAnnouncementState(env, "get", { key: stateKey }).catch(() => ({ messageId: null }));
+  let previous = await callScheduleState(env, "get", { key: stateKey }).catch(() => ({ messageId: null }));
+  if (!previous?.messageId) {
+    const legacyPrevious = await callAnnouncementState(env, "get", { key: stateKey }).catch(() => ({ messageId: null }));
+    if (legacyPrevious?.messageId) {
+      previous = legacyPrevious;
+      await callScheduleState(env, "set_message_id", {
+        key: stateKey,
+        messageId: legacyPrevious.messageId
+      }).catch(() => null);
+    }
+  }
   if (previous?.messageId === clock.dateKey) {
     return false;
   }
   try {
     await task();
-    await callAnnouncementState(env, "set_message_id", {
+    await callScheduleState(env, "set_message_id", {
       key: stateKey,
       messageId: clock.dateKey
     });
@@ -2542,7 +2552,7 @@ async function copyPersonalDayAnnouncement(env, subscription, sourceMessageId, s
 }
 __name(copyPersonalDayAnnouncement, "copyPersonalDayAnnouncement");
 async function sendPersonalDayAnnouncement(env, sourceMessageId, silent = false) {
-  const result = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  const result = await callPersonalDayState(env, "list_personal_subscriptions");
   const subscriptions = (result.subscriptions || []).filter((subscription) => subscription?.enabled && subscription?.chatId);
   await Promise.all(subscriptions.map(async (subscription) => {
     try {

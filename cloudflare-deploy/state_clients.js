@@ -33,6 +33,11 @@ export async function callAnnouncementState(env, action, payload = {}) {
   return callDurableObject(stub, `https://announcement/${action}`, payload, "\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u0439.");
 }
 
+export async function callScheduleState(env, action, payload = {}) {
+  const stub = env.ANNOUNCEMENT_STATE.getByName("schedule");
+  return callDurableObject(stub, `https://announcement/${action}`, payload, "\u041e\u0448\u0438\u0431\u043a\u0430 cron-\u043e\u0442\u043c\u0435\u0442\u043e\u043a.");
+}
+
 export async function callPersonalDayState(env, action, payload = {}) {
   const stub = env.ANNOUNCEMENT_STATE.getByName("main");
   return callDurableObject(stub, `https://announcement/${action}`, payload, "\u041e\u0448\u0438\u0431\u043a\u0430 \u043b\u0438\u0447\u043d\u043e\u0439 \u0440\u0430\u0441\u0441\u044b\u043b\u043a\u0438.");

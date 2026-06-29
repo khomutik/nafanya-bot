@@ -94,7 +94,8 @@ async function testKnowledgeAnswers() {
   assert.ok(sundayRow, "schedule should have a Sunday row with a leader");
   const sundayDate = String(sundayRow[scheduleIdx.date] || "");
   const sundayLeader = String(sundayRow[scheduleIdx.leader] || "").trim();
-  assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeader.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u"));
+  const sundayLeaderPattern = sundayLeader.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeaderPattern}`, "u"));
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u0438\u0442?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u0440\u043e\u0442\u0430\u0446\u0438\u044f \u0443 \u0412\u0430\u0441\u0438?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0412\u0430\u0441\u0438/u);
   assert.match(await answer(runtime, "\u0433\u0434\u0435 \u0438\u043d\u0444\u043e\u043a\u0430\u043d\u0430\u043b?"), /https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u);
@@ -109,11 +110,14 @@ async function testMeetingScheduleAnswers() {
     date: headerIndex(scheduleHeaders, ["дата"]),
     theme: headerIndex(scheduleHeaders, ["тема собрания", "тема"])
   };
-  const topicRow = snapshot.schedule.rows.slice(1).find((row) => String(row[scheduleIdx.date] || "").trim() && String(row[scheduleIdx.theme] || "").trim());
+  const topicRows = snapshot.schedule.rows.slice(1).filter((row) => String(row[scheduleIdx.date] || "").trim() && String(row[scheduleIdx.theme] || "").trim());
+  const topicRow = topicRows[0];
+  const tomorrowTopicRow = topicRows[1] || topicRows[0];
   assert.ok(topicRow, "schedule should have a row with a topic");
   const topicDate = String(topicRow[scheduleIdx.date] || "");
   const topicMonthName = monthNameFromRuDate(topicDate);
   assert.ok(topicMonthName, `Expected supported month in date: ${topicDate}`);
+  const tomorrowTopicDate = String(tomorrowTopicRow[scheduleIdx.date] || "");
 
   assert.equal(
     await answer(noMeetingRuntime, "\u043a\u043e\u0433\u0434\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0435?"),
@@ -137,8 +141,8 @@ async function testMeetingScheduleAnswers() {
   assert.equal(await answer(meetingRuntime, "\u0433\u0440\u0443\u043f\u043f\u0430"), "");
   assert.match(await answer(runtimeForDate(isoFromRuDate(topicDate)), "\u043a\u0430\u043a\u0430\u044f \u0442\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f \u0441\u0435\u0433\u043e\u0434\u043d\u044f?"), new RegExp(`${topicDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0422\\u0435\\u043c\\u0430 \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f`, "u"));
 
-  const tomorrowTopic = await answer(runtimeForDate(isoFromRuDateOffset(topicDate, -1)), "\u043a\u0430\u043a\u0430\u044f \u0437\u0430\u0432\u0442\u0440\u0430 \u0442\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f?");
-  assert.match(tomorrowTopic, new RegExp(`${topicDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0422\\u0435\\u043c\\u0430 \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f`, "u"));
+  const tomorrowTopic = await answer(runtimeForDate(isoFromRuDateOffset(tomorrowTopicDate, -1)), "\u043a\u0430\u043a\u0430\u044f \u0437\u0430\u0432\u0442\u0440\u0430 \u0442\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f?");
+  assert.match(tomorrowTopic, new RegExp(`${tomorrowTopicDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0422\\u0435\\u043c\\u0430 \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f`, "u"));
   const topicDay = String(topicDate).split(".")[0].replace(/^0/u, "");
   assert.match(await answer(noMeetingRuntime, `\u043a\u0430\u043a\u0430\u044f \u0442\u0435\u043c\u0430 ${topicDay} ${topicMonthName}?`), new RegExp(`${topicDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0422\\u0435\\u043c\\u0430 \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f`, "u"));
 
@@ -153,6 +157,7 @@ function testWorkerStaticRules() {
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
   const telegramApi = fs.readFileSync(new URL("./telegram_api.js", import.meta.url), "utf8");
+  const stateClients = fs.readFileSync(new URL("./state_clients.js", import.meta.url), "utf8");
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
@@ -235,6 +240,9 @@ function testWorkerStaticRules() {
   assert.match(worker, /async function isUserAdmin\(env, userId, chatId = INFO_CHAT_ID, chatType = ""\)[\s\S]*isPrivateChat\(chatType\)[\s\S]*getPrivateRoles/u, "Private callback permissions should use bot admin roles");
   assert.match(worker, /ADMIN_MANAGER_USERNAMES/u, "Admin manager usernames should be configurable");
   assert.match(worker, /get_personal_subscription[\s\S]*subscription\?\.username[\s\S]*isAdminDmUser\(env, id, username\)/u, "Private roles should recognize saved usernames from /start");
+  assert.match(stateClients, /function callScheduleState[\s\S]*getByName\("schedule"\)/u, "Cron run markers should use a separate Durable Object instance");
+  assert.match(worker, /let previous = await callScheduleState\(env, "get", \{ key: stateKey \}\)[\s\S]*legacyPrevious = await callAnnouncementState\(env, "get", \{ key: stateKey \}\)[\s\S]*await callScheduleState\(env, "set_message_id"/u, "Cron run markers should migrate old once-per-day state without duplicating sends");
+  assert.match(worker, /async function sendPersonalDayAnnouncement\(env, sourceMessageId, silent = false\) \{\s*const result = await callPersonalDayState\(env, "list_personal_subscriptions"\);/u, "Personal 10-11 delivery should not silently treat storage failures as zero subscribers");
   assert.match(messageHandlers, /canManageAdmins = false[\s\S]*if \(isOwner \|\| canManageAdmins\)/u, "Admin manager role should show add/remove admin buttons");
   assert.match(callbackHandlers, /managerRoles\.canManageAdmins/u, "Admin manager role should be allowed to confirm add/remove admin callbacks");
   assert.match(worker, /chat_id: targetChatId/u, "Chat callback permissions should check the chat where the button was pressed");
