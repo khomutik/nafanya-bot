@@ -87,6 +87,26 @@ async function clickButtonByText(page, patterns) {
   return false;
 }
 
+async function openChatPanel(page) {
+  const clicked = await clickButtonByText(page, CHAT_BUTTON_PATTERNS).catch(() => false)
+    || await clickFirst(page, [
+      'button[aria-label*="chat" i]',
+      'button[title*="chat" i]',
+      '[role="button"][aria-label*="chat" i]',
+      '[role="button"][title*="chat" i]',
+      'button[aria-label*="\u0447\u0430\u0442" i]',
+      'button[title*="\u0447\u0430\u0442" i]',
+      '[role="button"][aria-label*="\u0447\u0430\u0442" i]',
+      '[role="button"][title*="\u0447\u0430\u0442" i]'
+    ]).catch(() => false)
+    || await clickTextByPattern(page, CHAT_BUTTON_PATTERNS).catch(() => false)
+    || await clickVisibleText(page, CHAT_BUTTON_PATTERNS).catch(() => false);
+  if (clicked) {
+    await page.waitForTimeout(800);
+  }
+  return clicked;
+}
+
 async function clickTextByPattern(page, patterns) {
   for (const pattern of patterns) {
     try {
@@ -287,7 +307,7 @@ export function createZoomWebClientAdapter(config, logger) {
     await clickButtonByText(page, JOIN_BUTTON_PATTERNS);
     await page.waitForTimeout(5000);
     await writeDiagnostics(page, logger, "after-join");
-    await clickButtonByText(page, CHAT_BUTTON_PATTERNS);
+    await openChatPanel(page);
     await writeDiagnostics(page, logger, "after-chat");
     logger.info("Zoom web client adapter joined or is waiting for admission");
   }
@@ -336,7 +356,7 @@ export function createZoomWebClientAdapter(config, logger) {
     },
     async sendMessage(text) {
       if (!page) return { sent: false, ack: false };
-      await clickButtonByText(page, CHAT_BUTTON_PATTERNS).catch(() => null);
+      await openChatPanel(page).catch(() => null);
       const result = await sendChatText(page, text);
       if (!result.sent) {
         logger.warn("Zoom web client could not find chat input");
