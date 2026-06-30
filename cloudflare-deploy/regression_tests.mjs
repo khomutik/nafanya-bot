@@ -4,7 +4,7 @@ import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
 import { getQueue111Note, isChatGroup, parseGameCommand, parseQueueEntry } from "./worker.mjs";
-import { handleServiceMessages, handleTechThreadMessage } from "./message_handlers.js";
+import { handleGroupQueueAndGameMessage, handleServiceMessages, handleTechThreadMessage, handleWebhookMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
 
@@ -218,11 +218,12 @@ function testWorkerStaticRules() {
   assert.doesNotMatch(worker, /const anyNumber = normalized\.match/u, "Bill game questions should not catch arbitrary numbers inside text");
   assert.match(worker, /return makeQueueEntry\(message, "first", `\\u0438\\u0433\\u0440\\u0430 \$\{questionNumber\}`/u, "Bill game requests should be queued in the first-priority block");
   assert.match(worker, /const priorityOrder = \{ first: 1, "222": 2, "333": 3, "444": 4 \}[\s\S]*return a\.createdAt - b\.createdAt/u, "Bill queue should keep chronological order inside the first-priority block");
-  assert.match(messageHandlers, /const gameQueueEntry = parseQueueEntry/u, "Bill game command should send a question and add the user to queue");
-  assert.match(messageHandlers, /if \(message\?\.reply_to_message && !message\.reply_to_message\?\.from\?\.is_bot\) \{\s*return null;\s*\}[\s\S]*const queueInfo = await callQueueState/u, "Queue triggers should ignore replies to people but allow replies to bot queue messages");
-  assert.match(messageHandlers, /if \(!queueInfo\.state\?\.isOpen \|\| queueInfo\.state\?\.mode !== "bill"\) \{\s*await sendMessage\(env, chatId, "\\u0418\\u0433\\u0440\\u0430/u, "Game command should answer outside open Bill queue");
+  assert.match(messageHandlers, /await sendMessage\(env, chatId, `\\u0412\\u043e\\u043f\\u0440\\u043e\\u0441 \$\{gameNumber\}/u, "Bill game command should send a question before queue handling");
+  assert.match(messageHandlers, /await sendMessage\(env, chatId, `\\u0412\\u043e\\u043f\\u0440\\u043e\\u0441 \$\{gameNumber\}[\s\S]*const queueInfo = await callQueueState\(env, "get"\);[\s\S]*const gameQueueEntry = parseQueueEntry/u, "Bill game command should add to queue only after answering and only when Bill queue is open");
+  assert.match(messageHandlers, /if \(message\?\.reply_to_message && !message\.reply_to_message\?\.from\?\.is_bot\) \{\s*return null;\s*\}[\s\S]*const gameNumber = parseGameCommand/u, "Queue triggers should ignore replies to people but allow replies to bot queue messages");
   assert.doesNotMatch(messageHandlers, /isGameAllowedNow|21:30 \\u0434\\u043e 24:00|allowBillGameEntries/u, "Bill game should not have a time-of-day restriction");
-  assert.match(messageHandlers, /\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0432\\u043e \\u0432\\u0440\\u0435\\u043c\\u044f \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f/u, "Bill game wording should explain that the game only works during the meeting");
+  assert.doesNotMatch(messageHandlers, /\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0432\\u043e \\u0432\\u0440\\u0435\\u043c\\u044f \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f/u, "Bill game should not claim it only works during the meeting");
+  assert.match(messageHandlers, /if \(message\?\.from\?\.is_bot\) \{\s*return okResponse\(\);/u, "Bot-authored messages should be ignored before routing");
   assert.match(worker, /const speechNote = getQueue111Note\(rawText\);\s*if \(speechNote === null\) \{\s*return null;\s*\}[\s\S]*const label = formatQueue111Label\(speechNote\);/u, "BK queue should keep text before or after 111 as the queue note");
   assert.match(worker, /function parseRsQueueEntry\(message\) \{[\s\S]*return makeQueueEntry\(message, "rs", formatQueue111Label\(speechNote\), rawText\);/u, "RS queue should keep text before or after 111 as the queue note");
   assert.match(messageHandlers, /function parseManualQueueAddBody\(body\)[\s\S]*action: "add_game"[\s\S]*action: "add_111"[\s\S]*function parseManualQueueCommand\(text\)[\s\S]*action: "remove"/u, "Admin text commands should parse manual queue add/game/remove actions");
@@ -273,6 +274,101 @@ function testQueueBehavior() {
   );
   assert.equal(entry?.block, "bk", "BK queue 111 should create a BK queue entry");
   assert.equal(entry?.label, "111 \u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "BK queue entry should keep text after 111");
+}
+
+async function testGameQuestionsWorkWithoutOpenQueue() {
+  const sent = [];
+  let queueReads = 0;
+  let queueAdds = 0;
+  const speakerQuestions = new Map([[1, "\u0422\u0435\u0441\u0442\u043E\u0432\u044B\u0439 \u0432\u043E\u043F\u0440\u043E\u0441"]]);
+  const deps = {
+    isChatGroup: () => true,
+    callQueueState: async (_env, action) => {
+      if (action === "get") {
+        queueReads += 1;
+        return { state: { isOpen: false, mode: null, entries: [] } };
+      }
+      queueAdds += 1;
+      return {};
+    },
+    parseGameCommand,
+    parseQueueEntry,
+    getBillQuestionNumber: parseGameCommand,
+    getSpeakerQuestions: async () => speakerQuestions,
+    sendMessage: async (_env, chatId, text, threadId, replyToMessageId) => {
+      sent.push({ chatId, text, threadId, replyToMessageId });
+    },
+    applyQueueResponse: async () => {}
+  };
+
+  const response = await handleGroupQueueAndGameMessage({}, {
+    chat: { id: -1003547823625 },
+    from: { id: 42, first_name: "\u0410\u043D\u043D\u0430" },
+    message_id: 1001,
+    text: "\u043F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430 \u0418\u0433\u0440\u0430 1"
+  }, "\u043F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430 \u0418\u0433\u0440\u0430 1", -1003547823625, null, deps);
+
+  assert.equal(response.status, 200, "Game command should be handled even when queue is closed");
+  assert.equal(sent.length, 1, "Closed queue game command should still send the question");
+  assert.match(sent[0].text, /^\u0412\u043E\u043F\u0440\u043E\u0441 1:/u);
+  assert.equal(queueReads, 1, "Closed queue should be read only after the game question is sent");
+  assert.equal(queueAdds, 0, "Closed queue game command must not add a queue entry");
+  assert.doesNotMatch(sent[0].text, /\u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F/u);
+}
+
+async function testGameQuestionsStillAddToOpenBillQueue() {
+  const speakerQuestions = new Map([[1, "\u0422\u0435\u0441\u0442\u043E\u0432\u044B\u0439 \u0432\u043E\u043F\u0440\u043E\u0441"]]);
+  let queueAdds = 0;
+  let published = 0;
+  const deps = {
+    isChatGroup: () => true,
+    callQueueState: async (_env, action, payload) => {
+      if (action === "get") {
+        return { state: { isOpen: true, mode: "bill", entries: [] } };
+      }
+      if (action === "add") {
+        queueAdds += 1;
+        assert.equal(payload.entry.label, "\u0438\u0433\u0440\u0430 1");
+        return { publishQueue: true };
+      }
+      return {};
+    },
+    parseGameCommand,
+    parseQueueEntry,
+    getBillQuestionNumber: parseGameCommand,
+    getSpeakerQuestions: async () => speakerQuestions,
+    sendMessage: async () => {},
+    applyQueueResponse: async () => {
+      published += 1;
+    }
+  };
+
+  await handleGroupQueueAndGameMessage({}, {
+    chat: { id: -1003547823625 },
+    from: { id: 42, first_name: "\u0410\u043D\u043D\u0430" },
+    message_id: 1002,
+    text: "\u0438\u0433\u0440\u0430 1"
+  }, "\u0438\u0433\u0440\u0430 1", -1003547823625, null, deps);
+
+  assert.equal(queueAdds, 1, "Open Bill queue game command should still add a queue entry");
+  assert.equal(published, 1, "Open Bill queue should still publish updated queue");
+}
+
+async function testBotMessagesAreIgnored() {
+  let sent = 0;
+  const response = await handleWebhookMessage({}, {
+    chat: { id: -1003547823625, type: "supergroup" },
+    from: { id: 777, is_bot: true, first_name: "\u041D\u0430\u0444\u0430\u043D\u044F" },
+    message_id: 1003,
+    text: "\u0438\u0433\u0440\u0430 65"
+  }, {
+    sendMessage: async () => {
+      sent += 1;
+    }
+  });
+
+  assert.equal(response.status, 200, "Bot-authored messages should be acknowledged");
+  assert.equal(sent, 0, "Bot-authored messages must not trigger replies");
 }
 
 async function testBillPanelWorksInMainGroup() {
@@ -658,6 +754,9 @@ await testOnlyCoordinatorCanSelectReplacement();
 await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
 testQueueBehavior();
+await testGameQuestionsWorkWithoutOpenQueue();
+await testGameQuestionsStillAddToOpenBillQueue();
+await testBotMessagesAreIgnored();
 await testBillPanelWorksInMainGroup();
 await testKnowledgeAnswers();
 await testMeetingScheduleAnswers();
