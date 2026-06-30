@@ -180,7 +180,8 @@ async function testKnowledgeAnswers() {
   assert.ok(sundayRow, "schedule should have a Sunday row with a leader");
   const sundayDate = String(sundayRow[scheduleIdx.date] || "");
   const sundayLeader = String(sundayRow[scheduleIdx.leader] || "").trim();
-  assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeader.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u"));
+  const sundayLeaderPattern = sundayLeader.split(/\s+/u).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+  assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeaderPattern}`, "u"));
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u0438\u0442?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u0440\u043e\u0442\u0430\u0446\u0438\u044f \u0443 \u0412\u0430\u0441\u0438?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0412\u0430\u0441\u0438/u);
   assert.match(await answer(runtime, "\u0433\u0434\u0435 \u0438\u043d\u0444\u043e\u043a\u0430\u043d\u0430\u043b?"), /https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u);
@@ -311,7 +312,9 @@ function testWorkerStaticRules() {
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
-  assert.match(worker, /QUEUE_FOOTER_LINES[\s\S]*t\.me\/\+mta_CKQY2c05ODRi[\s\S]*us06web\.zoom\.us\/j\/5487249245\?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt\.1/u, "Every queue text should include Telegram and Zoom links");
+  assert.match(worker, /var QUEUE_FOOTER_LINES = \[\];/u, "Queue text should not append Telegram or Zoom footer links");
+  const queueModeText = botPanels.match(/export const QUEUE_MODE_TEXT = \{[\s\S]*?\n\};/u)?.[0] || "";
+  assert.doesNotMatch(queueModeText, /help|t\.me\/\+mta_CKQY2c05ODRi|us06web\.zoom\.us\/j\/5487249245/u, "Queue prompts should stay clean without help or link footers");
   assert.match(worker, /if \(action === "remove_by_number"\)[\s\S]*queueState\.entries\.splice\(visibleNumber - 1, 1\)/u, "Queue state should remove entries by visible row number");
   assert.match(worker, /result\.queueText,[\s\S]*buildQueuePublicKeyboard\(\),[\s\S]*result\.parseMode/u, "Published queue messages should include public queue control buttons");
   assert.match(botPanels, /function buildQueuePublicKeyboard\(\)[\s\S]*queue:done[\s\S]*queue:skip[\s\S]*queue:remove[\s\S]*queue:undo[\s\S]*queue:close/u, "Public queue keyboard should keep only active queue controls");

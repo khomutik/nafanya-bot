@@ -4,13 +4,19 @@ import {
   buildZoomChatPayload,
   buildZoomSeenKey,
   buildZoomWebClientUrl,
+  hasRecentSentText,
   normalizeZoomChatFingerprint,
+  rememberSentText,
   shouldIgnoreZoomMessage
 } from "../src/adapters/zoom-web-client.mjs";
 
 test("zoom web client ignores messages from the bot itself", () => {
   assert.equal(
     shouldIgnoreZoomMessage({ sender: "\u041d\u0430\u0444\u0430\u043d\u044f (\u0434\u043e\u043c\u043e\u0432\u043e\u0439 \u0431\u043e\u0442)" }, "\u041d\u0430\u0444\u0430\u043d\u044f (\u0434\u043e\u043c\u043e\u0432\u043e\u0439 \u0431\u043e\u0442)"),
+    true
+  );
+  assert.equal(
+    shouldIgnoreZoomMessage({ sender: "\u041d\u0430\u0444\u0430\u043d\u044f (\u0434\u043e\u043c\u043e" }, "\u041d\u0430\u0444\u0430\u043d\u044f (\u0434\u043e\u043c\u043e\u0432\u043e\u0439 \u0431\u043e\u0442)"),
     true
   );
   assert.equal(shouldIgnoreZoomMessage({ sender: "\u041c\u0430\u0448\u0430" }, "\u041d\u0430\u0444\u0430\u043d\u044f"), false);
@@ -48,4 +54,21 @@ test("zoom web client dedupe keys survive chat DOM reshuffles", () => {
     buildZoomSeenKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "111" }),
     buildZoomSeenKey({ id: "9:\u0431", sender: "\u041c\u0430\u0448\u0430", text: " 111 " })
   );
+});
+
+test("zoom web client suppresses recently sent bot fragments", () => {
+  const sentTexts = new Map();
+  rememberSentText(sentTexts, [
+    "\u0427\u0442\u0435\u043d\u0438\u0435 \u043A\u043D\u0438\u0433\u0438",
+    "\u041F\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111 \u0447\u0438\u0442\u0430\u0442\u044C\" \u0438\u043B\u0438 \"111 \u0432\u044B\u0441\u043A\u0430\u0437\u0430\u0442\u044C\u0441\u044F\"",
+    "",
+    "\u041E\u0427\u0415\u0420\u0415\u0414\u042C \u041E\u0422\u041A\u0420\u042B\u0422\u0410",
+    "",
+    "\u25B6 1. Vladimir \u2014 111"
+  ].join("\n"), 300000);
+  assert.equal(
+    hasRecentSentText(sentTexts, "\u0427\u0442\u0435\u043D\u0438\u0435 \u043A\u043D\u0438\u0433\u0438 \u041F\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111 \u0447\u0438\u0442\u0430\u0442\u044C\""),
+    true
+  );
+  assert.equal(hasRecentSentText(sentTexts, "111"), false);
 });

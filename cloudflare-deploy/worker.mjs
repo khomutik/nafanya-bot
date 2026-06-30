@@ -348,13 +348,7 @@ var TODAY_TOPIC_MESSAGES = [
   { key: "friday", weekday: 5, sourceMessageId: 3135, zoomKey: "theme_friday" },
   { key: "sunday", weekday: 0, sourceMessageId: 3136, zoomKey: "theme_sunday" }
 ];
-var QUEUE_FOOTER_LINES = [
-  "",
-  "\u270D\uFE0F \u041F\u0438\u0448\u0435\u043C \u0432 \u0422\u0435\u043B\u0435\u0433\u0440\u0430\u043C\u0435:",
-  "https://t.me/+mta_CKQY2c05ODRi",
-  "\uD83D\uDDE3\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
-  "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1"
-];
+var QUEUE_FOOTER_LINES = [];
 var ZOOM_BOT_NAME = "\u041D\u0430\u0444\u0430\u043D\u044F (\u0434\u043E\u043C\u043E\u0432\u043E\u0439 \u0431\u043E\u0442)";
 var ZOOM_MESSAGE_SAFE_LIMIT = 950;
 var ZOOM_CHAT_MESSAGE_EVENTS = /* @__PURE__ */ new Set(["meeting.chat_message_sent", "meeting.chat_message_received"]);

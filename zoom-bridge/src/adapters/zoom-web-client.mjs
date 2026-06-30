@@ -15,8 +15,11 @@ const USE_AUDIO_VIDEO_PATTERNS = [
 const DIAGNOSTICS_DIR = "/tmp/nafanya-zoom-bridge";
 
 export function shouldIgnoreZoomMessage(message, botName) {
-  const sender = String(message?.sender || "").trim().toLowerCase();
-  return Boolean(sender && sender === String(botName || "").trim().toLowerCase());
+  const sender = normalizeZoomChatFingerprint(message?.sender);
+  const bot = normalizeZoomChatFingerprint(botName);
+  if (!sender || !bot) return false;
+  return sender === bot
+    || (sender.length >= 6 && (bot.startsWith(sender) || sender.startsWith(bot) || sender.includes(bot) || bot.includes(sender)));
 }
 
 export function buildZoomChatPayload(message) {
@@ -46,6 +49,10 @@ export function normalizeZoomChatFingerprint(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 700);
 }
 
+export function normalizeZoomChatCompact(value) {
+  return normalizeZoomChatFingerprint(value).replace(/[\s.,:;!?()[\]{}"'«»—–-]+/gu, "").slice(0, 700);
+}
+
 export function buildZoomSeenKey(message) {
   return [
     normalizeZoomChatFingerprint(message?.sender),
@@ -72,6 +79,52 @@ function hasRecent(map, key) {
     return false;
   }
   return true;
+}
+
+export function rememberSentText(map, text, ttlMs) {
+  const normalized = normalizeZoomChatFingerprint(text);
+  rememberRecent(map, normalized, ttlMs);
+  const compact = normalizeZoomChatCompact(text);
+  if (compact.length >= 18) {
+    rememberRecent(map, `compact:${compact}`, ttlMs);
+  }
+  for (const line of String(text || "").split(/\n+/u)) {
+    const withoutPartPrefix = line.replace(/^Часть\s+\d+\/\d+\s*/iu, "");
+    const lineKey = normalizeZoomChatFingerprint(withoutPartPrefix);
+    if (lineKey.length >= 18) {
+      rememberRecent(map, lineKey, ttlMs);
+    }
+    const lineCompact = normalizeZoomChatCompact(withoutPartPrefix);
+    if (lineCompact.length >= 18) {
+      rememberRecent(map, `compact:${lineCompact}`, ttlMs);
+    }
+  }
+}
+
+export function hasRecentSentText(map, text) {
+  const normalized = normalizeZoomChatFingerprint(text);
+  if (!normalized) return false;
+  if (hasRecent(map, normalized)) return true;
+  const compact = normalizeZoomChatCompact(text);
+  const now = Date.now();
+  for (const [storedKey, expiresAt] of map.entries()) {
+    if (expiresAt <= now) {
+      map.delete(storedKey);
+      continue;
+    }
+    const stored = String(storedKey);
+    if (stored.startsWith("compact:")) {
+      const storedCompact = stored.slice("compact:".length);
+      if (compact.length >= 18 && (storedCompact.includes(compact) || compact.includes(storedCompact))) {
+        return true;
+      }
+      continue;
+    }
+    if (normalized.length >= 18 && (stored.includes(normalized) || normalized.includes(stored))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function clickFirst(page, selectors, { timeout = 1500 } = {}) {
@@ -328,6 +381,7 @@ export function createZoomWebClientAdapter(config, logger) {
   const seenMessages = new Map();
   const sentTexts = new Map();
   let reconnecting = false;
+  let chatSeeded = false;
 
   async function joinMeeting() {
     const { chromium } = await import("playwright");
@@ -392,6 +446,7 @@ export function createZoomWebClientAdapter(config, logger) {
     await page.waitForTimeout(5000);
     await writeDiagnostics(page, logger, "after-join");
     await openChatPanel(page);
+    chatSeeded = false;
     await writeDiagnostics(page, logger, "after-chat");
     logger.info("Zoom web client adapter joined or is waiting for admission");
   }
@@ -415,13 +470,28 @@ export function createZoomWebClientAdapter(config, logger) {
     if (!page || reconnecting) return;
     try {
       const messages = await readChatMessages(page);
+      if (!chatSeeded) {
+        for (const message of messages) {
+          rememberRecent(seenMessages, buildZoomSeenKey(message), 300000);
+          if (shouldIgnoreZoomMessage(message, config.zoomBotName)) {
+            rememberSentText(sentTexts, message.text, 300000);
+          }
+        }
+        chatSeeded = true;
+        if (messages.length) {
+          logger.info(`Zoom web client seeded ${messages.length} existing chat messages`);
+        }
+        return;
+      }
       for (const message of messages) {
-        const textKey = normalizeZoomChatFingerprint(message.text);
-        if (hasRecent(sentTexts, textKey)) continue;
+        if (shouldIgnoreZoomMessage(message, config.zoomBotName)) {
+          rememberSentText(sentTexts, message.text, 300000);
+          continue;
+        }
+        if (hasRecentSentText(sentTexts, message.text)) continue;
         const seenKey = buildZoomSeenKey(message);
         if (hasRecent(seenMessages, seenKey)) continue;
         rememberRecent(seenMessages, seenKey, 120000);
-        if (shouldIgnoreZoomMessage(message, config.zoomBotName)) continue;
         await onMessage?.(buildZoomChatPayload(message));
       }
     } catch (error) {
@@ -445,7 +515,7 @@ export function createZoomWebClientAdapter(config, logger) {
       if (!result.sent) {
         logger.warn("Zoom web client could not find chat input");
       } else {
-        rememberRecent(sentTexts, normalizeZoomChatFingerprint(text), 300000);
+        rememberSentText(sentTexts, text, 300000);
       }
       return result;
     },
