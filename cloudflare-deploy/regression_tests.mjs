@@ -367,6 +367,10 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /async function publishZoomOnlyMeetingCommand[\s\S]*buildYozhikText[\s\S]*buildBillText/u, "Zoom-only Yozhik and Bill should build text without Telegram sends");
   assert.match(worker, /const zoomOnlyMode = \$\{zoomOnly \? "true" : "false"\}/u, "Zoom-only app should render an explicit client-side mode flag");
   assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
+  assert.match(worker, /function buildZoomOnlyPayloadFromAppCommand[\s\S]*isZoomOnlyAppControl: true/u, "Zoom-only app should be a trusted control surface because Zoom SDK may hide user role");
+  assert.match(worker, /Boolean\(payload\?\.isZoomOnlyAppControl\) \|\| isZoomAdminPayload/u, "Zoom-only app commands should pass admin checks without relying on unsupported Zoom SDK user context");
+  assert.match(worker, /action === "auto_open"[\s\S]*response: \{ ok: true, state \}/u, "Zoom-only queue should be able to auto-open without publishing an empty queue first");
+  assert.match(worker, /getQueueSpeechCodeNote\(text\)[\s\S]*callZoomOnlyQueueState\(env, "auto_open", \{ mode: "bk" \}\)/u, "Zoom-only participant 111/222/333/444 should auto-open BK queue when needed");
   assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");
   assert.doesNotMatch(worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only message handler must not call Telegram send/copy helpers");
   assert.doesNotMatch(worker.match(/async function publishZoomOnlyMeetingCommand[\s\S]*?__name\(publishZoomOnlyMeetingCommand/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendAnnouncementCopyToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only publisher must not call Telegram send/copy helpers");

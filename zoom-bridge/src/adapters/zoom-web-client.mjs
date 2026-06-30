@@ -42,6 +42,38 @@ export function buildZoomWebClientUrl(meetingUrl) {
   return url.toString();
 }
 
+export function normalizeZoomChatFingerprint(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 700);
+}
+
+export function buildZoomSeenKey(message) {
+  return [
+    normalizeZoomChatFingerprint(message?.sender),
+    normalizeZoomChatFingerprint(message?.text)
+  ].join("\n");
+}
+
+function rememberRecent(map, key, ttlMs) {
+  if (!key.trim()) return;
+  const now = Date.now();
+  for (const [storedKey, expiresAt] of map.entries()) {
+    if (expiresAt <= now) {
+      map.delete(storedKey);
+    }
+  }
+  map.set(key, now + ttlMs);
+}
+
+function hasRecent(map, key) {
+  const expiresAt = map.get(key);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    map.delete(key);
+    return false;
+  }
+  return true;
+}
+
 async function clickFirst(page, selectors, { timeout = 1500 } = {}) {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -293,7 +325,8 @@ export function createZoomWebClientAdapter(config, logger) {
   let page = null;
   let timer = null;
   let onMessage = null;
-  const seen = new Set();
+  const seenMessages = new Map();
+  const sentTexts = new Map();
   let reconnecting = false;
 
   async function joinMeeting() {
@@ -383,11 +416,11 @@ export function createZoomWebClientAdapter(config, logger) {
     try {
       const messages = await readChatMessages(page);
       for (const message of messages) {
-        if (seen.has(message.id)) continue;
-        seen.add(message.id);
-        if (seen.size > 1000) {
-          seen.clear();
-        }
+        const textKey = normalizeZoomChatFingerprint(message.text);
+        if (hasRecent(sentTexts, textKey)) continue;
+        const seenKey = buildZoomSeenKey(message);
+        if (hasRecent(seenMessages, seenKey)) continue;
+        rememberRecent(seenMessages, seenKey, 120000);
         if (shouldIgnoreZoomMessage(message, config.zoomBotName)) continue;
         await onMessage?.(buildZoomChatPayload(message));
       }
@@ -411,6 +444,8 @@ export function createZoomWebClientAdapter(config, logger) {
       const result = await sendChatText(page, text);
       if (!result.sent) {
         logger.warn("Zoom web client could not find chat input");
+      } else {
+        rememberRecent(sentTexts, normalizeZoomChatFingerprint(text), 300000);
       }
       return result;
     },

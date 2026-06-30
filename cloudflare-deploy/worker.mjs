@@ -1548,6 +1548,13 @@ function runQueueStateAction(queueState, action, payload = {}, buildText = build
     state.queueMessageId = null;
     return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
   }
+  if (action === "auto_open") {
+    pushQueueHistory(state);
+    state.isOpen = true;
+    state.mode = payload.mode;
+    state.queueMessageId = null;
+    return { state, response: { ok: true, state } };
+  }
   if (action === "close") {
     pushQueueHistory(state);
     state.isOpen = false;
@@ -3344,7 +3351,7 @@ async function handleZoomOnlyMessage(env, payload) {
   const text = message.text;
   if (!text) return { ok: true, handled: false };
   const queueInfo = await callZoomOnlyQueueState(env, "get");
-  const isAdmin = isZoomAdminPayload(payload) || isZoomAdminName(env, displayName);
+  const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName);
   const normalized = normalizeZoomCommand(text);
   const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
   if (meetingKey) {
@@ -3436,7 +3443,12 @@ async function handleZoomOnlyMessage(env, payload) {
     }
     await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`));
   }
-  const entry = parseQueueEntry(message, queueInfo.state, { source: "Zoom" });
+  let queueState = queueInfo.state || createEmptyQueueState();
+  if ((!queueState.isOpen || !queueState.mode) && getQueueSpeechCodeNote(text)) {
+    const opened = await callZoomOnlyQueueState(env, "auto_open", { mode: "bk" });
+    queueState = opened.state || queueState;
+  }
+  const entry = parseQueueEntry(message, queueState, { source: "Zoom" });
   if (entry) {
     const result = await callZoomOnlyQueueState(env, "add", { entry });
     await applyZoomOnlyQueueResponse(env, result);
@@ -3524,6 +3536,20 @@ function buildZoomPayloadFromAppCommand(env, command, userContext = {}) {
   };
 }
 __name(buildZoomPayloadFromAppCommand, "buildZoomPayloadFromAppCommand");
+function buildZoomOnlyPayloadFromAppCommand(env, command, userContext = {}) {
+  const payload = buildZoomPayloadFromAppCommand(env, command, userContext);
+  return {
+    ...payload,
+    isZoomOnlyAppControl: true,
+    user: {
+      ...payload.user,
+      role: payload.user?.role || "zoom-app",
+      isHost: true,
+      isCoHost: true
+    }
+  };
+}
+__name(buildZoomOnlyPayloadFromAppCommand, "buildZoomOnlyPayloadFromAppCommand");
 async function handleZoomAppActionRequest(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
@@ -3558,7 +3584,7 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     return Response.json({ ok: false, error: "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043B\u044F Zoom-only \u043F\u0443\u043B\u044C\u0442\u0430 \u043D\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u0430." }, { status: 400 });
   }
   const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  const result = await handleZoomOnlyMessage(env, buildZoomPayloadFromAppCommand(env, command, payload.userContext || {}));
+  const result = await handleZoomOnlyMessage(env, buildZoomOnlyPayloadFromAppCommand(env, command, payload.userContext || {}));
   const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
   const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
   return Response.json({
