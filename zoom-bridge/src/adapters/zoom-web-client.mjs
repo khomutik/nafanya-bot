@@ -88,8 +88,11 @@ async function clickButtonByText(page, patterns) {
 }
 
 async function openChatPanel(page) {
-  const clicked = await clickButtonByText(page, CHAT_BUTTON_PATTERNS).catch(() => false)
-    || await clickFirst(page, [
+  if (await hasChatInput(page)) return true;
+
+  const strategies = [
+    () => clickButtonByText(page, CHAT_BUTTON_PATTERNS),
+    () => clickFirst(page, [
       'button[aria-label*="chat" i]',
       'button[title*="chat" i]',
       '[role="button"][aria-label*="chat" i]',
@@ -98,13 +101,40 @@ async function openChatPanel(page) {
       'button[title*="\u0447\u0430\u0442" i]',
       '[role="button"][aria-label*="\u0447\u0430\u0442" i]',
       '[role="button"][title*="\u0447\u0430\u0442" i]'
-    ]).catch(() => false)
-    || await clickTextByPattern(page, CHAT_BUTTON_PATTERNS).catch(() => false)
-    || await clickVisibleText(page, CHAT_BUTTON_PATTERNS).catch(() => false);
-  if (clicked) {
-    await page.waitForTimeout(800);
+    ]),
+    () => clickTextByPattern(page, CHAT_BUTTON_PATTERNS),
+    () => clickVisibleText(page, CHAT_BUTTON_PATTERNS),
+    async () => {
+      await page.keyboard.press("Alt+KeyH");
+      return true;
+    },
+    () => page.evaluate(() => {
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
+      const candidates = [...document.querySelectorAll("button, [role='button'], div, span")].filter((element) => {
+        const text = String(element.textContent || "").replace(/\s+/g, " ").trim();
+        const rect = element.getBoundingClientRect();
+        return rect.width > 30
+          && rect.height > 25
+          && rect.left > viewportWidth * 0.35
+          && rect.left < viewportWidth * 0.6
+          && rect.top > viewportHeight * 0.82
+          && /chat|\u0447\u0430\u0442/iu.test(text);
+      });
+      const target = candidates[0];
+      if (!target) return false;
+      target.click();
+      return true;
+    })
+  ];
+
+  for (const strategy of strategies) {
+    const clicked = await strategy().catch(() => false);
+    if (!clicked) continue;
+    await page.waitForTimeout(1000);
+    if (await hasChatInput(page)) return true;
   }
-  return clicked;
+  return false;
 }
 
 async function clickTextByPattern(page, patterns) {
@@ -140,6 +170,27 @@ async function clickVisibleText(page, patterns) {
     }
     return false;
   }, { patternSources, flags });
+}
+
+async function hasChatInput(page) {
+  return page.evaluate(() => {
+    const selectors = [
+      'textarea[aria-label*="chat" i]',
+      'textarea[placeholder*="chat" i]',
+      'textarea[aria-label*="\u0447\u0430\u0442" i]',
+      'textarea[placeholder*="\u0447\u0430\u0442" i]',
+      'div[contenteditable="true"][aria-label*="chat" i]',
+      'div[contenteditable="true"][aria-label*="\u0447\u0430\u0442" i]',
+      'div[contenteditable="true"]'
+    ];
+    return selectors.some((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
+  }).catch(() => false);
 }
 
 async function dismissAudioVideoPrompts(page) {
