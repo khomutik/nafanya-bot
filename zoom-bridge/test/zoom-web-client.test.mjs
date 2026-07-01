@@ -6,6 +6,7 @@ import {
   buildZoomWebClientUrl,
   hasRecentSentText,
   normalizeZoomChatFingerprint,
+  parseZoomChatMessageText,
   rememberSentText,
   shouldIgnoreZoomMessage
 } from "../src/adapters/zoom-web-client.mjs";
@@ -46,6 +47,23 @@ test("zoom web client builds worker payloads without secrets", () => {
 test("zoom web client uses direct browser join URL", () => {
   const url = buildZoomWebClientUrl("https://us06web.zoom.us/j/5487249245?pwd=abc");
   assert.equal(url, "https://us06web.zoom.us/wc/join/5487249245?pwd=abc");
+});
+
+test("zoom web client extracts sender and body from Zoom chat text", () => {
+  assert.deepEqual(
+    parseZoomChatMessageText("\u041c\u0430\u043d\u044f \u0425. 13:09 \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u043b"),
+    {
+      sender: "\u041c\u0430\u043d\u044f \u0425.",
+      text: "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u043b"
+    }
+  );
+  assert.deepEqual(
+    parseZoomChatMessageText("\u041c\u0430\u043d\u044f \u0425. 13:09\n\u043c\u043e\u043b\u0438\u0442\u0432\u0430"),
+    {
+      sender: "\u041c\u0430\u043d\u044f \u0425.",
+      text: "\u043c\u043e\u043b\u0438\u0442\u0432\u0430"
+    }
+  );
 });
 
 test("zoom web client dedupe keys survive chat DOM reshuffles", () => {

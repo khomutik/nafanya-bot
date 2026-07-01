@@ -53,6 +53,47 @@ export function normalizeZoomChatCompact(value) {
   return normalizeZoomChatFingerprint(value).replace(/[\s.,:;!?()[\]{}"'«»—–-]+/gu, "").slice(0, 700);
 }
 
+function cleanZoomChatText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function stripLeadingZoomChatTime(value) {
+  return cleanZoomChatText(String(value || "").replace(/^\d{1,2}:\d{2}(?:\s*(?:AM|PM))?\s*/iu, ""));
+}
+
+export function parseZoomChatMessageText(rawText, explicitSender = "") {
+  const text = cleanZoomChatText(rawText);
+  const sender = cleanZoomChatText(explicitSender).replace(/:$/u, "");
+  if (!text) return { sender, text: "" };
+  if (sender) {
+    const body = text.startsWith(sender)
+      ? stripLeadingZoomChatTime(text.slice(sender.length).replace(/^[:\s]+/u, ""))
+      : text;
+    return { sender, text: body || text };
+  }
+
+  const lines = String(rawText || "").split(/\n+/u).map(cleanZoomChatText).filter(Boolean);
+  if (lines.length >= 2) {
+    const firstLineMatch = lines[0].match(/^(.{1,80}?)\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu);
+    if (firstLineMatch) {
+      return {
+        sender: cleanZoomChatText(firstLineMatch[1]),
+        text: cleanZoomChatText(lines.slice(1).join(" "))
+      };
+    }
+  }
+
+  const inlineMatch = text.match(/^(.{1,80}?)\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?\s+(.+)$/iu);
+  if (inlineMatch) {
+    return {
+      sender: cleanZoomChatText(inlineMatch[1]),
+      text: cleanZoomChatText(inlineMatch[2])
+    };
+  }
+
+  return { sender: "", text };
+}
+
 export function buildZoomSeenKey(message) {
   return [
     normalizeZoomChatFingerprint(message?.sender),
@@ -351,9 +392,9 @@ async function sendChatText(page, text) {
 }
 
 async function readChatMessages(page) {
-  return page.evaluate(() => {
+  const rawMessages = await page.evaluate(() => {
     const nodes = [
-      ...document.querySelectorAll('[class*="chat"] [class*="message"], [class*="Chat"] [class*="message"], [data-testid*="chat"] *')
+      ...document.querySelectorAll('[class*="chat"] [class*="message"], [class*="Chat"] [class*="message"], [data-testid*="chat"] [class*="message"], [data-testid*="chat"] *')
     ];
     const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
     return nodes.map((node, index) => {
@@ -370,6 +411,27 @@ async function readChatMessages(page) {
       };
     }).filter((item) => item && item.text);
   });
+  return rawMessages.map((message) => {
+    const parsed = parseZoomChatMessageText(message.text, message.sender);
+    return {
+      ...message,
+      sender: parsed.sender || message.sender,
+      text: parsed.text
+    };
+  }).filter((item) => item.text);
+}
+
+async function killStaleProfileBrowsers(profileDir, logger) {
+  if (!profileDir || process.platform === "win32") return;
+  const { execFile } = await import("node:child_process");
+  await new Promise((resolve) => {
+    execFile("pkill", ["-f", `--user-data-dir=${profileDir}`], { timeout: 5000 }, (error) => {
+      if (error && error.code !== 1) {
+        logger.warn("Could not clear stale Zoom browser profile process:", error?.message || String(error));
+      }
+      resolve();
+    });
+  });
 }
 
 export function createZoomWebClientAdapter(config, logger) {
@@ -383,7 +445,18 @@ export function createZoomWebClientAdapter(config, logger) {
   let reconnecting = false;
   let chatSeeded = false;
 
+  async function closeBrowser() {
+    await page?.close().catch(() => null);
+    await context?.close().catch(() => null);
+    await browser?.close().catch(() => null);
+    page = null;
+    context = null;
+    browser = null;
+  }
+
   async function joinMeeting() {
+    await closeBrowser();
+    await killStaleProfileBrowsers(config.zoomBrowserProfileDir, logger);
     const { chromium } = await import("playwright");
     const browserArgs = [
       "--use-fake-ui-for-media-stream",
@@ -456,9 +529,7 @@ export function createZoomWebClientAdapter(config, logger) {
     reconnecting = true;
     logger.warn("Zoom web client reconnecting");
     try {
-      await page?.close().catch(() => null);
-      await context?.close().catch(() => null);
-      await browser?.close().catch(() => null);
+      await closeBrowser();
       await new Promise((resolve) => setTimeout(resolve, config.zoomReconnectDelayMs));
       await joinMeeting();
     } finally {
@@ -521,9 +592,7 @@ export function createZoomWebClientAdapter(config, logger) {
     },
     async stop() {
       if (timer) clearInterval(timer);
-      await page?.close().catch(() => null);
-      await context?.close().catch(() => null);
-      await browser?.close().catch(() => null);
+      await closeBrowser();
     }
   };
 }

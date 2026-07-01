@@ -372,6 +372,7 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
   assert.match(worker, /function buildZoomOnlyPayloadFromAppCommand[\s\S]*isZoomOnlyAppControl: true/u, "Zoom-only app should be a trusted control surface because Zoom SDK may hide user role");
   assert.match(worker, /Boolean\(payload\?\.isZoomOnlyAppControl\) \|\| isZoomAdminPayload/u, "Zoom-only app commands should pass admin checks without relying on unsupported Zoom SDK user context");
+  assert.match(worker, /normalizedName\.replace\(\/\\s\*\\\(\[\^\)\]\*\\\)\\s\*\$\/u/u, "Zoom admin names should tolerate Zoom role labels in parentheses");
   assert.match(worker, /action === "auto_open"[\s\S]*response: \{ ok: true, state \}/u, "Zoom-only queue should be able to auto-open without publishing an empty queue first");
   assert.match(worker, /getQueueSpeechCodeNote\(text\)[\s\S]*callZoomOnlyQueueState\(env, "auto_open", \{ mode: "bk" \}\)/u, "Zoom-only participant 111/222/333/444 should auto-open BK queue when needed");
   assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");

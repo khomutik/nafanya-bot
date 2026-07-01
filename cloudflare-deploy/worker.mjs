@@ -3130,7 +3130,9 @@ __name(getZoomAdminNames, "getZoomAdminNames");
 function isZoomAdminName(env, name) {
   const normalizedName = normalizeZoomCommand(name);
   if (!normalizedName) return false;
-  return getZoomAdminNames(env).includes(normalizedName);
+  const normalizedWithoutParentheses = normalizedName.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+  const adminNames = getZoomAdminNames(env);
+  return adminNames.includes(normalizedName) || adminNames.includes(normalizedWithoutParentheses);
 }
 __name(isZoomAdminName, "isZoomAdminName");
 function normalizeZoomCommand(text) {
