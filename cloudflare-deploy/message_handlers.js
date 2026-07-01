@@ -298,7 +298,9 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
     isBillPromptCommand,
     callAnnouncementState,
     parseBillInput,
-    sendBillToGroup
+    sendBillToGroup,
+    enqueueZoomMessages,
+    splitZoomText
   } = deps;
 
   const chatType = message.chat?.type ?? TEXT.unknown;
@@ -338,7 +340,10 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
 
   if (isTechThread(chatId, threadId) && isYozhikCommand(text)) {
     try {
-      await sendYozhikToGroup(env);
+      const messageText = await sendYozhikToGroup(env);
+      if (enqueueZoomMessages) {
+        await enqueueZoomMessages(env, splitZoomText ? splitZoomText(messageText) : messageText).catch(() => null);
+      }
       await sendMessage(env, INFO_CHAT_ID, TEXT.yozhikOk, TECH_THREAD_ID, message.message_id);
     } catch (error) {
       await sendMessage(env, INFO_CHAT_ID, `${TEXT.yozhikError}: ${error.message}`, TECH_THREAD_ID, message.message_id);
@@ -375,7 +380,10 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
       try {
         await callAnnouncementState(env, "set_message_id", { key: billLastRequestKey, messageId: message.message_id });
         await callAnnouncementState(env, "set_message_id", { key: billPromptStateKey, messageId: null });
-        await sendBillToGroup(env, billNumber);
+        const messageText = await sendBillToGroup(env, billNumber);
+        if (enqueueZoomMessages) {
+          await enqueueZoomMessages(env, splitZoomText ? splitZoomText(messageText) : messageText).catch(() => null);
+        }
         if (!isChatGroup(chatId, threadId)) {
           await sendMessage(env, chatId, `${TEXT.billSent} \u2116${billNumber} ${TEXT.billSentTail}`, threadId, message.message_id);
         }

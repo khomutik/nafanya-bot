@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
-import { getQueue111Note, isChatGroup, parseGameCommand, parseQueueEntry } from "./worker.mjs";
+import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, handleStatusRequest, handleZoomOAuthReturn, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
 import { handleGroupQueueAndGameMessage, handleServiceMessages, handleTechThreadMessage, handleWebhookMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
@@ -32,6 +32,92 @@ function env() {
 async function answer(runtime, question) {
   const result = await runtime.findKnowledgeAnswerDetailed(env(), question, { restrained: false });
   return result.answer || "";
+}
+
+async function testZoomWebhookHelpers() {
+  const secret = "zoom-secret";
+  const validationResponse = await buildZoomValidationResponse(
+    { ZOOM_WEBHOOK_SECRET_TOKEN: secret },
+    { event: "endpoint.url_validation", payload: { plainToken: "plain-token" } }
+  );
+  assert.equal(validationResponse.status, 200);
+  const validationJson = await validationResponse.json();
+  assert.equal(validationJson.plainToken, "plain-token");
+  assert.equal(validationJson.encryptedToken, await hmacSha256Hex(secret, "plain-token"));
+
+  const rawBody = JSON.stringify({ event: "meeting.chat_message_sent", payload: { object: { id: 5487249245 } }, event_ts: 1 });
+  const timestamp = "1782400000";
+  const signature = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
+  const signedRequest = new Request("https://example.com/zoom/events", {
+    method: "POST",
+    headers: {
+      "x-zm-request-timestamp": timestamp,
+      "x-zm-signature": signature
+    },
+    body: rawBody
+  });
+  assert.equal(await verifyZoomWebhookSignature(signedRequest, { ZOOM_WEBHOOK_SECRET_TOKEN: secret }, rawBody), true);
+
+  const zoomPayload = buildZoomPayloadFromChatEvent(
+    { ZOOM_ADMIN_NAMES: "\u041c\u0430\u0448\u0430;\u041b\u0438\u043b\u044f" },
+    {
+      event: "meeting.chat_message_received",
+      event_ts: 1782400000000,
+      payload: {
+        object: {
+          id: 5487249245,
+          uuid: "meeting-uuid",
+          chat_message: {
+            message_id: "msg-1",
+            message_content: "111",
+            sender_name: "\u041b\u0438\u043b\u044f",
+            sender_type: "guest",
+            recipient_type: "everyone",
+            recipient_context: "meeting",
+            sender_context: "meeting"
+          }
+        }
+      }
+    }
+  );
+  assert.equal(zoomPayload.text, "111");
+  assert.equal(zoomPayload.user.displayName, "\u041b\u0438\u043b\u044f");
+  assert.equal(zoomPayload.user.isCoHost, true);
+  assert.equal(zoomPayload.recipientType, "everyone");
+  assert.equal(zoomPayload.recipientContext, "meeting");
+}
+
+async function testRootResponseHasZoomRequiredSecurityHeaders() {
+  const response = await handleStatusRequest({});
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains; preload");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.ok(response.headers.get("content-security-policy")?.includes("default-src 'none'"));
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+}
+
+async function testZoomAppHomePage() {
+  const response = await handleRootRequest({});
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
+  assert.match(response.headers.get("content-security-policy") || "", /appssdk\.zoom\.us/u);
+  assert.doesNotMatch(response.headers.get("content-security-policy") || "", /frame-ancestors/u);
+  assert.match(html, /Nafanya Zoom Bridge/u);
+  assert.match(html, /sendMessageToChat/u);
+  assert.match(html, /\u0441\u0435\u0440\u0432\u0435\u0440\u043d\u044b\u0439 Zoom-\u043c\u043e\u0441\u0442/u);
+  assert.match(html, /data-command="\u043c\u043e\u043b\u0438\u0442\u0432\u0430"/u);
+  assert.match(html, /\/zoom\/app\/action/u);
+}
+
+async function testZoomOAuthReturnEndpoint() {
+  const readyResponse = handleZoomOAuthReturn(new Request("https://example.com/oauth"));
+  assert.equal(readyResponse.status, 200);
+  assert.match(await readyResponse.text(), /OAuth return endpoint is ready/u);
+  const codeResponse = handleZoomOAuthReturn(new Request("https://example.com/oauth?code=test-code"));
+  assert.equal(codeResponse.status, 200);
+  assert.match(await codeResponse.text(), /authorization received/u);
+  const errorResponse = handleZoomOAuthReturn(new Request("https://example.com/oauth?error=access_denied"));
+  assert.equal(errorResponse.status, 400);
 }
 
 function headerIndex(headers, names) {
@@ -94,7 +180,7 @@ async function testKnowledgeAnswers() {
   assert.ok(sundayRow, "schedule should have a Sunday row with a leader");
   const sundayDate = String(sundayRow[scheduleIdx.date] || "");
   const sundayLeader = String(sundayRow[scheduleIdx.leader] || "").trim();
-  const sundayLeaderPattern = sundayLeader.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const sundayLeaderPattern = sundayLeader.split(/\s+/u).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
   assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeaderPattern}`, "u"));
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u0438\u0442?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u0440\u043e\u0442\u0430\u0446\u0438\u044f \u0443 \u0412\u0430\u0441\u0438?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0412\u0430\u0441\u0438/u);
@@ -158,8 +244,12 @@ function testWorkerStaticRules() {
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
   const telegramApi = fs.readFileSync(new URL("./telegram_api.js", import.meta.url), "utf8");
   const stateClients = fs.readFileSync(new URL("./state_clients.js", import.meta.url), "utf8");
+  const zoomMeetingTexts = fs.readFileSync(new URL("./zoom_meeting_texts.js", import.meta.url), "utf8");
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
+  assert.match(worker, /record_zoom_debug/u, "Zoom webhook diagnostics should record recent events");
+  assert.match(worker, /url\.pathname === "\/zoom\/debug"/u, "Zoom webhook diagnostics should be available through protected bridge route");
+  assert.match(worker, /zoomDebugEvents = normalized\.zoomDebugEvents[\s\S]*slice\(-25\)/u, "Zoom webhook diagnostics should be bounded");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
   assert.match(messageHandlers, /zoom\|\\u0437\\u0443\\u043c/u, "Zoom link detector should understand Zoom wording");
   assert.match(messageHandlers, /\\u043f\\u0440\\u0438\\u043d\\u0435\\u0441\\u0438/u, "Zoom link detector should understand 'bring link' wording");
@@ -189,26 +279,49 @@ function testWorkerStaticRules() {
   assert.match(worker, /sourceMessageId: 2895/u, "Thursday tech announcement should copy message 2895");
   assert.match(worker, /sourceMessageId: 2896/u, "Friday tech announcement should copy message 2896");
   assert.match(worker, /sourceMessageId: 2897/u, "Sunday tech announcement should copy message 2897");
+  assert.match(worker, /sourceMessageId: 3132[\s\S]*zoomKey: "theme_monday"/u, "Meeting-topic button should use new Monday source 3132");
+  assert.match(worker, /sourceMessageId: 3133[\s\S]*zoomKey: "theme_tuesday"/u, "Meeting-topic button should use new Tuesday source 3133");
+  assert.match(worker, /sourceMessageId: 3134[\s\S]*zoomKey: "theme_thursday"/u, "Meeting-topic button should use new Thursday source 3134");
+  assert.match(worker, /sourceMessageId: 3135[\s\S]*zoomKey: "theme_friday"/u, "Meeting-topic button should use new Friday source 3135");
+  assert.match(worker, /sourceMessageId: 3136[\s\S]*zoomKey: "theme_sunday"/u, "Meeting-topic button should use new Sunday source 3136");
   assert.doesNotMatch(botPanels, /promises9/u, "Meeting panel should not include the 9th-step promises button");
   assert.doesNotMatch(botPanels, /topicsMeetingUrl|url: topicsMeetingUrl/u, "Meeting topics button should not be a link");
   assert.match(botPanels, /callback_data: "meeting:today_topic"/u, "Meeting topics button should publish today's topic");
-  assert.match(botPanels, /meeting:seventh_tradition" \},\s*\n\s*\{ text: "\\u2615[\s\S]*callback_data: "meeting:tea_rules"/u, "Seventh tradition and tea rules should be on one meeting-panel row");
-  assert.match(botPanels, /meeting:speaker_questions" \},\s*\n\s*\{ text: "\\u203C\\uFE0F[\s\S]*callback_data: "meeting:chat_cleanliness"/u, "Speaker questions and chat cleanliness should be on one meeting-panel row");
-  assert.match(botPanels, /meeting:chat_rules" \}[\s\S]*callback_data: "meeting:telemost_link"/u, "Chat rules and Zoom link should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:seventh_tradition" \},\s*\n\s*\{ text: "\\uD83D\\uDE4B[\s\S]*callback_data: "meeting:free_services"/u, "Seventh tradition and free services should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:tea_rules" \},\s*\n\s*\{ text: "\\u2753[\s\S]*callback_data: "meeting:speaker_questions"/u, "Tea rules and speaker questions should be on one meeting-panel row");
+  assert.match(botPanels, /meeting:chat_cleanliness" \},\s*\n\s*\{ text: "\\uD83D\\uDCCC[\s\S]*callback_data: "meeting:chat_rules"/u, "Chat cleanliness and chat rules should be on one meeting-panel row");
+  assert.match(botPanels, /callback_data: "meeting:meeting_schedule"[\s\S]*callback_data: "meeting:telemost_link"/u, "Meeting schedule and links should share the final meeting-panel row");
+  assert.match(botPanels, /text: "\\u0421\\u0441\\u044b\\u043b\\u043a\\u0438"[\s\S]*callback_data: "meeting:telemost_link"/u, "Meeting links button should be renamed to 'Links'");
+  assert.match(worker, /free_services: FREE_SERVICES_ANNOUNCEMENT_ID/u, "Free services meeting button should copy the free-services announcement");
   assert.match(worker, /function isMeetingPanelCommand\(text, \{ allowBare = true \} = \{\}\)[\s\S]*\\u043F\\u0443\\u043B\\u044C\\u0442 \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F[\s\S]*allowBare && bare/u, "Meeting panel command should support strict 'panel meeting' mode");
   assert.match(messageHandlers, /isMeetingPanelCommand\(text, \{ allowBare: !isChatGroup\(chatId, threadId\) \}\)/u, "Group chat should require 'panel meeting' to open meeting panel");
-  assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*WEEKDAY_TECH_ANNOUNCEMENTS\.find/u, "Today's topic should be selected from weekday tech announcements");
+  assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*TODAY_TOPIC_MESSAGES\.find/u, "Today's topic button should be selected from the new topic-message map");
+  assert.match(worker, /function getTodayTopicZoomMessages\(\)[\s\S]*getZoomMeetingMessages\(key\)/u, "Zoom topic messages should use the weekday theme text");
   assert.match(callbackHandlers, /if \(key === "today_topic"\)[\s\S]*copyTechMessageToGroup\(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId\)/u, "Today's topic button should copy the source message from TECHVED");
+  assert.match(callbackHandlers, /getTodayTopicZoomMessages\(\)/u, "Telegram topic button should enqueue the current Zoom theme text");
   assert.match(callbackHandlers, /\\u0421\\u0435\\u0433\\u043E\\u0434\\u043D\\u044F \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F \\u043D\\u0435\\u0442/u, "No-topic days should say today's meeting is absent");
+  assert.match(worker, /"\\u0442\\u0435\\u043C\\u044B \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F": "today_topic"/u, "Zoom should understand 'meeting topics'");
+  assert.match(worker, /"\\u0440\\u0430\\u0441\\u043F\\u0438\\u0441\\u0430\\u043D\\u0438\\u0435": "meeting_schedule"/u, "Zoom should understand schedule command");
+  assert.match(worker, /sendYozhikToGroup\(env\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Yozhik command should publish the actual Yozhik text");
+  assert.match(worker, /sendBillToGroup\(env, zoomBillNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Bill command should publish the actual Bill text");
+  assert.match(messageHandlers, /sendBillToGroup\(env, billNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Telegram Bill panel flow should mirror the Bill text to Zoom");
+  assert.doesNotMatch(worker + zoomMeetingTexts, /\\u0442\\u0435\\u043A\\u0441\\u0442 \\u0434\\u043B\\u044F Zoom \\u043D\\u0443\\u0436\\u043D\\u043E \\u043F\\u0435\\u0440\\u0435\\u043D\\u0435\\u0441\\u0442\\u0438/u, "Zoom meeting texts should not contain placeholder copy");
+  for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
+    assert.match(zoomMeetingTexts, new RegExp(`"${key}"`, "u"), `Zoom meeting text should include ${key}`);
+  }
   assert.match(worker, /tech_11_00`, item\.weekday, 11, 0, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 11:00");
   assert.match(worker, /tech_21_20`, item\.weekday, 21, 20, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 21:20");
   assert.match(worker, /\\u041f\\u043e\\u0434\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0430\\u044e/u, "service reminder OK button should say 'Confirm'");
-  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);[\s\S]*return makeQueueEntry\(message, "speech", "__speech__", rawText, \{ kind: "bill_speech", speechNote \}\)/u, "Bill queue should accept 111 with text before or after it");
+  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);[\s\S]*return makeQueueEntry\(message, "speech", "__speech__", rawText, \{ kind: "bill_speech", speechNote, source \}\)/u, "Bill queue should accept 111 with text before or after it");
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
-  assert.match(worker, /getQueueBlockDividerTitle[\s\S]*111 \/ \\u0418\\u0413\\u0420\\u0410[\s\S]*lines\.push\(`<b>\$\{getQueueBlockDividerTitle\(block\)\}<\/b>`\)/u, "Bill queue text should show visual block dividers");
-  assert.match(worker, /QUEUE_FOOTER_LINES[\s\S]*t\.me\/\+mta_CKQY2c05ODRi[\s\S]*us06web\.zoom\.us\/j\/5487249245\?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt\.1/u, "Every queue text should include Telegram and Zoom links");
+  assert.match(worker, /function formatQueueAuthorLabel\(author\)[\s\S]*return cleanAuthor \|\|/u, "Queue author should not include Telegram or Zoom source markers");
+  assert.match(worker, /function isDuplicatePendingQueueEntry[\s\S]*existing\.status === "pending"[\s\S]*normalizeQueueEntryKey\(existing\.author\) === author/u, "Queue should ignore duplicate pending entries from the same person");
+  assert.match(worker, /function isDuplicatePendingBillSpeechEntry[\s\S]*\(111\|222\|333\|444\)[\s\S]*duplicate: true/u, "Bill queue should ignore repeated 111 before converting it into 222/333/444");
+  assert.match(worker, /var QUEUE_FOOTER_LINES = \[\];/u, "Queue text should not append Telegram or Zoom footer links");
+  const queueModeText = botPanels.match(/export const QUEUE_MODE_TEXT = \{[\s\S]*?\n\};/u)?.[0] || "";
+  assert.doesNotMatch(queueModeText, /help|t\.me\/\+mta_CKQY2c05ODRi|us06web\.zoom\.us\/j\/5487249245/u, "Queue prompts should stay clean without help or link footers");
   assert.match(worker, /if \(action === "remove_by_number"\)[\s\S]*queueState\.entries\.splice\(visibleNumber - 1, 1\)/u, "Queue state should remove entries by visible row number");
   assert.match(worker, /result\.queueText,[\s\S]*buildQueuePublicKeyboard\(\),[\s\S]*result\.parseMode/u, "Published queue messages should include public queue control buttons");
   assert.match(botPanels, /function buildQueuePublicKeyboard\(\)[\s\S]*queue:done[\s\S]*queue:skip[\s\S]*queue:remove[\s\S]*queue:undo[\s\S]*queue:close/u, "Public queue keyboard should keep only active queue controls");
@@ -224,8 +337,9 @@ function testWorkerStaticRules() {
   assert.doesNotMatch(messageHandlers, /isGameAllowedNow|21:30 \\u0434\\u043e 24:00|allowBillGameEntries/u, "Bill game should not have a time-of-day restriction");
   assert.doesNotMatch(messageHandlers, /\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043e\\u043b\\u044c\\u043a\\u043e \\u0432\\u043e \\u0432\\u0440\\u0435\\u043c\\u044f \\u0441\\u043e\\u0431\\u0440\\u0430\\u043d\\u0438\\u044f/u, "Bill game should not claim it only works during the meeting");
   assert.match(messageHandlers, /if \(message\?\.from\?\.is_bot\) \{\s*return okResponse\(\);/u, "Bot-authored messages should be ignored before routing");
-  assert.match(worker, /const speechNote = getQueue111Note\(rawText\);\s*if \(speechNote === null\) \{\s*return null;\s*\}[\s\S]*const label = formatQueue111Label\(speechNote\);/u, "BK queue should keep text before or after 111 as the queue note");
-  assert.match(worker, /function parseRsQueueEntry\(message\) \{[\s\S]*return makeQueueEntry\(message, "rs", formatQueue111Label\(speechNote\), rawText\);/u, "RS queue should keep text before or after 111 as the queue note");
+  assert.match(worker, /function getQueueSpeechCodeNote\(rawText\)[\s\S]*\(111\|222\|333\|444\)/u, "BK and RS queues should accept 111/222/333/444 trigger codes");
+  assert.match(worker, /function parseBkQueueEntry\(message, \{ source = "Telegram" \} = \{\}\)[\s\S]*formatQueue111Label\(codeInfo\.note\)/u, "BK queue should publish every accepted trigger as 111");
+  assert.match(worker, /function parseRsQueueEntry\(message, \{ source = "Telegram" \} = \{\}\)[\s\S]*formatQueue111Label\(codeInfo\.note\)/u, "RS queue should publish every accepted trigger as 111");
   assert.match(messageHandlers, /function parseManualQueueAddBody\(body\)[\s\S]*action: "add_game"[\s\S]*action: "add_111"[\s\S]*function parseManualQueueCommand\(text\)[\s\S]*action: "remove"/u, "Admin text commands should parse manual queue add/game/remove actions");
   assert.doesNotMatch(messageHandlers, /parseBareManualQueueCommand/u, "Bare 111 from admins should stay a normal self queue request");
   assert.match(messageHandlers, /\?:\\s\+\\u0432\\s\+\\u043e\\u0447\\u0435\\u0440\\u0435\\u0434\\u044c\)\?/u, "Manual add command should allow short 'add 111 name' form");
@@ -255,6 +369,33 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /privateKnowledgeQuestion/u, "private chats should query knowledge docs before light talk");
 }
 
+function testZoomOnlyStaticRules() {
+  const worker = fs.readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/webhook"/u, "Zoom-only webhook endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/outbox"/u, "Zoom-only outbox endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/status"/u, "Zoom-only status endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/reset"/u, "Zoom-only reset endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/app\/action"/u, "Zoom-only app action endpoint should exist");
+  assert.match(worker, /action === "clear_zoom_only_state"/u, "Zoom-only polluted state should be resettable");
+  assert.match(worker, /zoomOnlyQueueState: createEmptyQueueState\(\)/u, "Zoom-only queue should live in separate announcement state");
+  assert.match(worker, /zoomOnlyOutbox: \[\]/u, "Zoom-only outbox should be separate from legacy Zoom outbox");
+  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*callZoomOnlyQueueState/u, "Zoom-only messages should use the separate queue state");
+  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*publishZoomOnlyMeetingCommand/u, "Zoom-only meeting commands should use Zoom-only publisher");
+  assert.match(worker, /async function publishZoomOnlyMeetingCommand[\s\S]*buildYozhikText[\s\S]*buildBillText/u, "Zoom-only Yozhik and Bill should build text without Telegram sends");
+  assert.match(worker, /const zoomOnlyMode = \$\{zoomOnly \? "true" : "false"\}/u, "Zoom-only app should render an explicit client-side mode flag");
+  assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
+  assert.match(worker, /function buildZoomOnlyPayloadFromAppCommand[\s\S]*isZoomOnlyAppControl: true/u, "Zoom-only app should be a trusted control surface because Zoom SDK may hide user role");
+  assert.match(worker, /Boolean\(payload\?\.isZoomOnlyAppControl\) \|\| isZoomAdminPayload/u, "Zoom-only app commands should pass admin checks without relying on unsupported Zoom SDK user context");
+  assert.match(worker, /normalizedName\.replace\(\/\\s\*\\\(\[\^\)\]\*\\\)\\s\*\$\/u/u, "Zoom admin names should tolerate Zoom role labels in parentheses");
+  assert.match(worker, /action === "auto_open"[\s\S]*response: \{ ok: true, state \}/u, "Zoom-only queue should be able to auto-open without publishing an empty queue first");
+  assert.match(worker, /getQueueSpeechCodeNote\(text\)[\s\S]*callZoomOnlyQueueState\(env, "auto_open", \{ mode: "bk" \}\)/u, "Zoom-only participant 111/222/333/444 should auto-open BK queue when needed");
+  assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");
+  assert.doesNotMatch(worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only message handler must not call Telegram send/copy helpers");
+  assert.doesNotMatch(worker.match(/async function publishZoomOnlyMeetingCommand[\s\S]*?__name\(publishZoomOnlyMeetingCommand/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendAnnouncementCopyToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only publisher must not call Telegram send/copy helpers");
+  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*\\u0431\\u0438\\u043B\\u043B[\s\S]*return "bill"/u, "Zoom command should open Bill queue explicitly");
+  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*return "bk"[\s\S]*return "rs"/u, "Zoom command should open BK and RS queues explicitly");
+}
+
 function testQueueBehavior() {
   assert.equal(isChatGroup(-1003547823625, null), true, "Main group without topic id should be accepted");
   assert.equal(isChatGroup(-1003547823625, 1), true, "Main group topic id 1 should be accepted");
@@ -274,6 +415,18 @@ function testQueueBehavior() {
   );
   assert.equal(entry?.block, "bk", "BK queue 111 should create a BK queue entry");
   assert.equal(entry?.label, "111 \u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "BK queue entry should keep text after 111");
+  assert.equal(entry?.author, "\u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "Queue author should show the name without a Telegram source marker");
+
+  const convertedEntry = parseQueueEntry(
+    {
+      chat: { id: -1003547823625 },
+      message_id: 1002,
+      text: "333 @anna_lion",
+      from: { id: 42, first_name: "\u0410\u043D\u043D\u0430", username: "anna_lion" }
+    },
+    { isOpen: true, mode: "bk", entries: [] }
+  );
+  assert.equal(convertedEntry?.label, "111 anna_lion", "BK queue should accept 222/333/444 but publish them as 111");
 }
 
 async function testGameQuestionsWorkWithoutOpenQueue() {
@@ -753,10 +906,15 @@ await testVacancyReplacementRequest();
 await testOnlyCoordinatorCanSelectReplacement();
 await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
+await testZoomWebhookHelpers();
+await testRootResponseHasZoomRequiredSecurityHeaders();
+await testZoomAppHomePage();
+await testZoomOAuthReturnEndpoint();
 testQueueBehavior();
 await testGameQuestionsWorkWithoutOpenQueue();
 await testGameQuestionsStillAddToOpenBillQueue();
 await testBotMessagesAreIgnored();
+testZoomOnlyStaticRules();
 await testBillPanelWorksInMainGroup();
 await testKnowledgeAnswers();
 await testMeetingScheduleAnswers();

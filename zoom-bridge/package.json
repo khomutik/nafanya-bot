@@ -1,0 +1,17 @@
+{
+  "name": "nafanya-zoom-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "check": "node --check src/main.mjs && node --check src/config.mjs && node --check src/worker-client.mjs && node --check src/text.mjs && node --check src/adapters/stub-zoom.mjs && node --check src/adapters/meeting-sdk-process.mjs && node --check src/adapters/zoom-web-client.mjs && node --check src/health-server.mjs && node --check src/healthcheck.mjs",
+    "test": "node --test test/text.test.mjs && node --test test/worker-client.test.mjs && node --test test/meeting-sdk-process.test.mjs && node --test test/zoom-web-client.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

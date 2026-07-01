@@ -10,6 +10,7 @@ import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQu
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
+import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 var YANDEX_COMPLETION_ENDPOINT = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion";
@@ -340,13 +341,47 @@ var WEEKDAY_TECH_ANNOUNCEMENTS = [
   { key: "friday", weekday: 5, sourceMessageId: 2896 },
   { key: "sunday", weekday: 0, sourceMessageId: 2897 }
 ];
-var QUEUE_FOOTER_LINES = [
-  "",
-  "\u270D\uFE0F \u041F\u0438\u0448\u0435\u043C \u0432 \u0422\u0435\u043B\u0435\u0433\u0440\u0430\u043C\u0435:",
-  "https://t.me/+mta_CKQY2c05ODRi",
-  "\uD83D\uDDE3\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
-  "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1"
+var TODAY_TOPIC_MESSAGES = [
+  { key: "monday", weekday: 1, sourceMessageId: 3132, zoomKey: "theme_monday" },
+  { key: "tuesday", weekday: 2, sourceMessageId: 3133, zoomKey: "theme_tuesday" },
+  { key: "thursday", weekday: 4, sourceMessageId: 3134, zoomKey: "theme_thursday" },
+  { key: "friday", weekday: 5, sourceMessageId: 3135, zoomKey: "theme_friday" },
+  { key: "sunday", weekday: 0, sourceMessageId: 3136, zoomKey: "theme_sunday" }
 ];
+var QUEUE_FOOTER_LINES = [];
+var ZOOM_BOT_NAME = "\u041D\u0430\u0444\u0430\u043D\u044F (\u0434\u043E\u043C\u043E\u0432\u043E\u0439 \u0431\u043E\u0442)";
+var ZOOM_MESSAGE_SAFE_LIMIT = 950;
+var ZOOM_CHAT_MESSAGE_EVENTS = /* @__PURE__ */ new Set(["meeting.chat_message_sent", "meeting.chat_message_received"]);
+var ZOOM_MEETING_COMMANDS = {
+  "\u043C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B": "minute_silence",
+  "\u043C\u043E\u043B\u0438\u0442\u0432\u0430": "prayer",
+  "\u043F\u0440\u0435\u0430\u043C\u0431\u0443\u043B\u0430": "preambula",
+  "\u043D\u043E\u0432\u0438\u0447\u043A\u0443": "newcomer",
+  "12 \u0448\u0430\u0433\u043E\u0432": "steps12",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432": "steps12",
+  "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439": "traditions12",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439": "traditions12",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F": "meeting_rules",
+  "\u0442\u0435\u043C\u0430": "today_topic",
+  "\u0442\u0435\u043C\u044B": "today_topic",
+  "\u0442\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F": "today_topic",
+  "\u0435\u0436\u0438\u043A": "yozhik",
+  "\u0451\u0436\u0438\u043A": "yozhik",
+  "\u0431\u0438\u043B\u043B": "bill_prompt",
+  "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F": "seventh_tradition",
+  "7-\u044F \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F": "seventh_tradition",
+  "\u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F": "free_services",
+  "\u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F": "free_services",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439": "tea_rules",
+  "\u0432\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443": "speaker_questions",
+  "\u0447\u0438\u0441\u0442\u043E\u0442\u0430 \u0447\u0430\u0442\u0430": "chat_cleanliness",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0442\u0430": "chat_rules",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435": "meeting_schedule",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0439": "meeting_schedule",
+  "\u0441\u0441\u044B\u043B\u043A\u0438": "telemost_link",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 zoom": "telemost_link",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 \u0437\u0443\u043C": "telemost_link"
+};
 var MEDITATION_ANNOUNCEMENT_IDS_BY_HOUR = {
   11: 2375,
   12: 2376,
@@ -400,6 +435,7 @@ var TECH_MESSAGES = {
   meeting_rules: 1701,
   speaker_questions: 1705,
   seventh_tradition: 1708,
+  free_services: FREE_SERVICES_ANNOUNCEMENT_ID,
   promises9: 1710,
   tea_rules: 1711,
   chat_cleanliness: 1712,
@@ -407,6 +443,11 @@ var TECH_MESSAGES = {
   telemost_link: 2597,
   meeting_schedule: 3053
 };
+function getZoomMeetingKeyBySourceMessageId(sourceMessageId) {
+  const match = Object.entries(TECH_MESSAGES).find(([, messageId]) => Number(messageId) === Number(sourceMessageId));
+  return match ? match[0] : null;
+}
+__name(getZoomMeetingKeyBySourceMessageId, "getZoomMeetingKeyBySourceMessageId");
 var YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
 var BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
 var SPEAKER_QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/speaker_questions.json";
@@ -568,9 +609,19 @@ function isBillPromptCommand(text) {
 __name(isBillPromptCommand, "isBillPromptCommand");
 function getTodayTopicSourceMessageId() {
   const clock = getMoscowClock();
-  return WEEKDAY_TECH_ANNOUNCEMENTS.find((item) => item.weekday === clock.weekday)?.sourceMessageId ?? null;
+  return TODAY_TOPIC_MESSAGES.find((item) => item.weekday === clock.weekday)?.sourceMessageId ?? null;
 }
 __name(getTodayTopicSourceMessageId, "getTodayTopicSourceMessageId");
+function getTodayTopicZoomKey() {
+  const clock = getMoscowClock();
+  return ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY[String(clock.weekday)] || TODAY_TOPIC_MESSAGES.find((item) => item.weekday === clock.weekday)?.zoomKey || null;
+}
+__name(getTodayTopicZoomKey, "getTodayTopicZoomKey");
+function getTodayTopicZoomMessages() {
+  const key = getTodayTopicZoomKey();
+  return key ? getZoomMeetingMessages(key) : [];
+}
+__name(getTodayTopicZoomMessages, "getTodayTopicZoomMessages");
 function parseBillInput(text) {
   const normalized = text.trim();
   const match = normalized.match(/^(?:билл\s+)?(\d{1,3})$/i);
@@ -588,6 +639,78 @@ function compact(value) {
   return String(value || "").replace(/\uFEFF/g, "").replace(/\s+/g, " ").trim();
 }
 __name(compact, "compact");
+function stripTelegramHandles(value) {
+  return compact(String(value || "").replace(/\s*\(@[A-Za-z0-9_]{2,64}\)/gu, "").replace(/@([A-Za-z0-9_]{2,64})/gu, "$1"));
+}
+__name(stripTelegramHandles, "stripTelegramHandles");
+function cleanQueueDisplayName(value) {
+  return stripTelegramHandles(value).replace(/\s*\((?:Telegram|Zoom)\)\s*$/giu, "").trim();
+}
+__name(cleanQueueDisplayName, "cleanQueueDisplayName");
+function formatQueueAuthorLabel(author) {
+  const cleanAuthor = cleanQueueDisplayName(author);
+  return cleanAuthor || "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
+}
+__name(formatQueueAuthorLabel, "formatQueueAuthorLabel");
+function normalizeQueueEntryKey(value) {
+  return normalizeText2(cleanQueueDisplayName(value)).replace(/\s+/g, " ");
+}
+__name(normalizeQueueEntryKey, "normalizeQueueEntryKey");
+function isDuplicatePendingQueueEntry(state, entry) {
+  const author = normalizeQueueEntryKey(entry.author);
+  const block = String(entry.block || "");
+  const label = normalizeQueueEntryKey(entry.label);
+  return state.entries.some((existing) => existing.status === "pending" && normalizeQueueEntryKey(existing.author) === author && String(existing.block || "") === block && normalizeQueueEntryKey(existing.label) === label);
+}
+__name(isDuplicatePendingQueueEntry, "isDuplicatePendingQueueEntry");
+function isDuplicatePendingBillSpeechEntry(state, entry) {
+  const author = normalizeQueueEntryKey(entry.author);
+  const note = normalizeQueueEntryKey(entry.speechNote || "");
+  return state.entries.some((existing) => {
+    if (existing.status !== "pending" || normalizeQueueEntryKey(existing.author) !== author) return false;
+    const match = String(existing.label || "").match(/^(111|222|333|444)(?:\s+(.*))?$/u);
+    return Boolean(match) && normalizeQueueEntryKey(match[2] || "") === note;
+  });
+}
+__name(isDuplicatePendingBillSpeechEntry, "isDuplicatePendingBillSpeechEntry");
+function getZoomPayloadDisplayName(payload) {
+  const user = payload?.user || payload?.from || {};
+  return cleanQueueDisplayName(user.displayName || user.display_name || user.senderName || user.sender_name || user.name || user.nickname || payload?.displayName || payload?.display_name || payload?.senderName || payload?.sender_name || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
+}
+__name(getZoomPayloadDisplayName, "getZoomPayloadDisplayName");
+function getZoomOpenQueueMode(text) {
+  const normalized = normalizeZoomCommand(text);
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+(?:\u0431\u0438\u043B\u043B|\u0431\u0438\u043B\u043B\u0430)$/u.test(normalized)) return "bill";
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0431\u043A$/u.test(normalized)) return "bk";
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0440\u0430\u0431\u043E\u0447\u043A\u0430$/u.test(normalized)) return "rs";
+  return null;
+}
+__name(getZoomOpenQueueMode, "getZoomOpenQueueMode");
+function stripHtmlTags(text) {
+  return String(text || "").replace(/<[^>]+>/g, "");
+}
+__name(stripHtmlTags, "stripHtmlTags");
+function cleanZoomText(text) {
+  return stripHtmlTags(text).replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{4,}/g, "\n\n\n").trim();
+}
+__name(cleanZoomText, "cleanZoomText");
+function splitZoomText(text, limit = ZOOM_MESSAGE_SAFE_LIMIT) {
+  const clean = cleanZoomText(text);
+  if (!clean) return [];
+  if (clean.length <= limit) return [clean];
+  const chunks = [];
+  let rest = clean;
+  while (rest.length > limit) {
+    const slice = rest.slice(0, limit + 1);
+    const breakAt = Math.max(slice.lastIndexOf("\n\n"), slice.lastIndexOf("\n"), slice.lastIndexOf(". "), slice.lastIndexOf(" "));
+    const cut = breakAt > Math.floor(limit * 0.55) ? breakAt : limit;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks.length > 1 ? chunks.map((chunk, index) => `\u0427\u0430\u0441\u0442\u044C ${index + 1}/${chunks.length}\n${chunk}`) : chunks;
+}
+__name(splitZoomText, "splitZoomText");
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -601,7 +724,7 @@ function makeQueueEntry(message, block, label, rawText, extra = {}) {
   const messageId = message?.message_id ?? getCurrentTimestamp();
   return {
     id: `${chatId}_${messageId}_${Math.random().toString(36).slice(2, 8)}`,
-    author: extra.author ?? getAuthorLabel(message),
+    author: formatQueueAuthorLabel(extra.author ?? getAuthorLabel(message)),
     rawText,
     label,
     block,
@@ -635,8 +758,22 @@ function getQueue111Note(rawText) {
   return compact(`${before} ${after}`);
 }
 __name(getQueue111Note, "getQueue111Note");
+function getQueueSpeechCodeNote(rawText) {
+  const text = String(rawText || "").trim();
+  const match = text.match(/(^|[\s!.,?:;#-]+)(111|222|333|444)(?=$|[\s!.,?:;#-]+)/);
+  if (!match) {
+    return null;
+  }
+  const numberIndex = match.index + match[1].length;
+  const code = match[2];
+  const before = text.slice(0, numberIndex).replace(/[\s!.,?:;#-]+$/u, "").trim();
+  const after = text.slice(numberIndex + code.length).replace(/^[\s!.,?:;#-]+/u, "").trim();
+  return { code, note: compact(`${before} ${after}`) };
+}
+__name(getQueueSpeechCodeNote, "getQueueSpeechCodeNote");
 function formatQueue111Label(note, code = "111") {
-  return note ? `${code} ${note}` : code;
+  const cleanNote = stripTelegramHandles(note);
+  return cleanNote ? `${code} ${cleanNote}` : code;
 }
 __name(formatQueue111Label, "formatQueue111Label");
 function getQueueBlockDividerTitle(block) {
@@ -678,7 +815,13 @@ function createEmptyAnnouncementState() {
     personalSubscriptions: {},
     adminDmDrafts: {},
     adminDmUsers: {},
-    replacementRequests: {}
+    replacementRequests: {},
+    zoomOutbox: [],
+    zoomOutboxNextId: 1,
+    zoomDebugEvents: [],
+    zoomOnlyQueueState: createEmptyQueueState(),
+    zoomOnlyOutbox: [],
+    zoomOnlyOutboxNextId: 1
   };
 }
 __name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
@@ -699,6 +842,33 @@ function normalizeAnnouncementState(announcementState) {
   if (!normalized.replacementRequests || typeof normalized.replacementRequests !== "object") {
     normalized.replacementRequests = {};
   }
+  if (!Array.isArray(normalized.zoomOutbox)) {
+    normalized.zoomOutbox = [];
+  }
+  normalized.zoomOutbox = normalized.zoomOutbox.filter((item) => item && typeof item === "object");
+  if (!Array.isArray(normalized.zoomDebugEvents)) {
+    normalized.zoomDebugEvents = [];
+  }
+  normalized.zoomDebugEvents = normalized.zoomDebugEvents.filter((item) => item && typeof item === "object").slice(-25);
+  if (!normalized.zoomOnlyQueueState || typeof normalized.zoomOnlyQueueState !== "object") {
+    normalized.zoomOnlyQueueState = createEmptyQueueState();
+  }
+  normalized.zoomOnlyQueueState = {
+    ...createEmptyQueueState(),
+    ...normalized.zoomOnlyQueueState,
+    entries: Array.isArray(normalized.zoomOnlyQueueState.entries) ? normalized.zoomOnlyQueueState.entries : [],
+    history: Array.isArray(normalized.zoomOnlyQueueState.history) ? normalized.zoomOnlyQueueState.history : []
+  };
+  if (!Array.isArray(normalized.zoomOnlyOutbox)) {
+    normalized.zoomOnlyOutbox = [];
+  }
+  normalized.zoomOnlyOutbox = normalized.zoomOnlyOutbox.filter((item) => item && typeof item === "object");
+  const maxExistingId = normalized.zoomOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
+  const nextId = Number(normalized.zoomOutboxNextId);
+  normalized.zoomOutboxNextId = Number.isInteger(nextId) && nextId > maxExistingId ? nextId : maxExistingId + 1;
+  const maxZoomOnlyId = normalized.zoomOnlyOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
+  const nextZoomOnlyId = Number(normalized.zoomOnlyOutboxNextId);
+  normalized.zoomOnlyOutboxNextId = Number.isInteger(nextZoomOnlyId) && nextZoomOnlyId > maxZoomOnlyId ? nextZoomOnlyId : maxZoomOnlyId + 1;
   return normalized;
 }
 __name(normalizeAnnouncementState, "normalizeAnnouncementState");
@@ -777,6 +947,32 @@ function buildQueueText(state) {
   return lines.join("\n");
 }
 __name(buildQueueText, "buildQueueText");
+function stripQueueHtml(text) {
+  return String(text || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+}
+__name(stripQueueHtml, "stripQueueHtml");
+function buildZoomOnlyQueueText(state) {
+  const title = stripQueueHtml(getQueueModeTitle(state.mode));
+  const instruction = state.mode === "bill"
+    ? "\u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\" \u0434\u043b\u044f \u0432\u044b\u0441\u043a\u0430\u0437\u044b\u0432\u0430\u043d\u0438\u044f \u0438\u043b\u0438 \"\u0438\u0433\u0440\u0430 \u043d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430 \u043e\u0442 1 \u0434\u043e 500\" \u0434\u043b\u044f \u0443\u0447\u0430\u0441\u0442\u0438\u044f \u0432 \u0438\u0433\u0440\u0435 \"500 \u043f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432\""
+    : stripQueueHtml(getQueueInstruction(state.mode));
+  const base = [title, instruction, "", state.isOpen ? QUEUE_OPEN_LABEL : QUEUE_CLOSED_LABEL, ""];
+  if (!state.entries.length) {
+    base.push("\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E.");
+    return base.join("\n");
+  }
+  for (const [index, entry] of state.entries.entries()) {
+    let marker = "\u2022";
+    if (entry.status === "done") {
+      marker = "\u2705";
+    } else if (entry.isActive) {
+      marker = "\u25B6";
+    }
+    base.push(`${marker} ${index + 1}. ${entry.author} \u2014 ${entry.label}`);
+  }
+  return base.join("\n");
+}
+__name(buildZoomOnlyQueueText, "buildZoomOnlyQueueText");
 function getEntryBlock(state, entry) {
   if (state.mode === "bill") {
     return entry.block;
@@ -785,6 +981,10 @@ function getEntryBlock(state, entry) {
 }
 __name(getEntryBlock, "getEntryBlock");
 function addQueueEntryToState(state, entry) {
+  if (isDuplicatePendingQueueEntry(state, entry)) {
+    ensureSingleActiveEntry(state);
+    return;
+  }
   state.entries.push(entry);
   if (state.mode === "bill") {
     const priorityOrder = { first: 1, "222": 2, "333": 3, "444": 4 };
@@ -843,43 +1043,39 @@ function getBillSpeechBlock(label) {
   return label;
 }
 __name(getBillSpeechBlock, "getBillSpeechBlock");
-function parseBillQueueEntry(message, state, { allowGameEntries = true } = {}) {
+function parseBillQueueEntry(message, state, { allowGameEntries = true, source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
   const normalized = normalizeText2(rawText);
   const questionNumber = getBillQuestionNumber(rawText);
   if (questionNumber !== null) {
     if (!allowGameEntries) return null;
-    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText);
+    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText, { source });
   }
   const trigger = normalized.match(/^(222|333|444)(?:[\s!.,?:;#-]*)$/);
   const speechNote = getQueue111Note(rawText);
   if (!trigger && speechNote === null) {
     return null;
   }
-  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote });
+  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote, source });
 }
 __name(parseBillQueueEntry, "parseBillQueueEntry");
-function parseBkQueueEntry(message) {
+function parseBkQueueEntry(message, { source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
-  const normalized = normalizeText2(rawText);
-  if (/\b222\b|\b333\b|\b444\b/.test(normalized)) {
+  const codeInfo = getQueueSpeechCodeNote(rawText);
+  if (!codeInfo) {
     return null;
   }
-  const speechNote = getQueue111Note(rawText);
-  if (speechNote === null) {
-    return null;
-  }
-  const label = formatQueue111Label(speechNote);
-  return makeQueueEntry(message, "bk", label, rawText);
+  const label = formatQueue111Label(codeInfo.note);
+  return makeQueueEntry(message, "bk", label, rawText, { source });
 }
 __name(parseBkQueueEntry, "parseBkQueueEntry");
-function parseRsQueueEntry(message) {
+function parseRsQueueEntry(message, { source = "Telegram" } = {}) {
   const rawText = String(message.text || "").trim();
-  const speechNote = getQueue111Note(rawText);
-  if (speechNote === null) {
+  const codeInfo = getQueueSpeechCodeNote(rawText);
+  if (!codeInfo) {
     return null;
   }
-  return makeQueueEntry(message, "rs", formatQueue111Label(speechNote), rawText);
+  return makeQueueEntry(message, "rs", formatQueue111Label(codeInfo.note), rawText, { source });
 }
 __name(parseRsQueueEntry, "parseRsQueueEntry");
 function parseQueueEntry(message, state, options = {}) {
@@ -887,13 +1083,13 @@ function parseQueueEntry(message, state, options = {}) {
     return null;
   }
   if (state.mode === "bill") {
-    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false });
+    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false, source: options.source || "Telegram" });
   }
   if (state.mode === "bk") {
-    return parseBkQueueEntry(message);
+    return parseBkQueueEntry(message, { source: options.source || "Telegram" });
   }
   if (state.mode === "rs") {
-    return parseRsQueueEntry(message);
+    return parseRsQueueEntry(message, { source: options.source || "Telegram" });
   }
   return null;
 }
@@ -964,12 +1160,20 @@ var QueueStateDurableObject = class {
         });
       }
       if (action === "add") {
-        pushQueueHistory(queueState);
         if (payload.entry?.kind === "bill_speech") {
+          if (isDuplicatePendingBillSpeechEntry(queueState, payload.entry)) {
+            return Response.json({ ok: true, duplicate: true });
+          }
+          pushQueueHistory(queueState);
           const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
           payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
           payload.entry.block = getBillSpeechBlock(nextCode);
           payload.entry.kind = null;
+        } else {
+          if (isDuplicatePendingQueueEntry(queueState, payload.entry)) {
+            return Response.json({ ok: true, duplicate: true });
+          }
+          pushQueueHistory(queueState);
         }
         addQueueEntryToState(queueState, payload.entry);
         const previousMessageId = queueState.queueMessageId;
@@ -1382,6 +1586,133 @@ var LightTalkStateDurableObject = class {
     await this.state.storage.deleteAlarm();
   }
 };
+function runQueueStateAction(queueState, action, payload = {}, buildText = buildQueueText) {
+  let state = {
+    ...createEmptyQueueState(),
+    ...(queueState || {}),
+    entries: Array.isArray(queueState?.entries) ? queueState.entries : [],
+    history: Array.isArray(queueState?.history) ? queueState.history : []
+  };
+  if (action === "get") {
+    return { state, response: { ok: true, state } };
+  }
+  if (action === "clear") {
+    state = createEmptyQueueState();
+    return { state, response: { ok: true, cleared: true } };
+  }
+  if (action === "open") {
+    pushQueueHistory(state);
+    state.isOpen = true;
+    state.mode = payload.mode;
+    state.entries = [];
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "auto_open") {
+    pushQueueHistory(state);
+    state.isOpen = true;
+    state.mode = payload.mode;
+    state.queueMessageId = null;
+    return { state, response: { ok: true, state } };
+  }
+  if (action === "close") {
+    pushQueueHistory(state);
+    state.isOpen = false;
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "add") {
+    if (payload.entry?.kind === "bill_speech") {
+      if (isDuplicatePendingBillSpeechEntry(state, payload.entry)) {
+        return { state, response: { ok: true, duplicate: true } };
+      }
+      pushQueueHistory(state);
+      const nextCode = getNextBillSpeechCode(state, payload.entry.author);
+      payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
+      payload.entry.block = getBillSpeechBlock(nextCode);
+      payload.entry.kind = null;
+    } else {
+      if (isDuplicatePendingQueueEntry(state, payload.entry)) {
+        return { state, response: { ok: true, duplicate: true } };
+      }
+      pushQueueHistory(state);
+    }
+    addQueueEntryToState(state, payload.entry);
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "done") {
+    const activeIndex = getCurrentActiveIndex(state);
+    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u043E\u0442\u043C\u0435\u0447\u0430\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
+    pushQueueHistory(state);
+    state.entries[activeIndex].status = "done";
+    state.entries[activeIndex].isActive = false;
+    activateFirstPending(state);
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "remove") {
+    const activeIndex = getCurrentActiveIndex(state);
+    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u0443\u0434\u0430\u043B\u044F\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
+    pushQueueHistory(state);
+    state.entries.splice(activeIndex, 1);
+    activateFirstPending(state);
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "remove_by_number") {
+    const visibleNumber = Number(payload.index);
+    if (!Number.isInteger(visibleNumber) || visibleNumber < 1 || visibleNumber > state.entries.length) {
+      throw new Error("\u041D\u0435\u0442 \u0442\u0430\u043A\u043E\u0433\u043E \u043D\u043E\u043C\u0435\u0440\u0430 \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438.");
+    }
+    pushQueueHistory(state);
+    state.entries.splice(visibleNumber - 1, 1);
+    ensureSingleActiveEntry(state);
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "skip") {
+    const activeIndex = getCurrentActiveIndex(state);
+    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
+    const currentEntry = state.entries[activeIndex];
+    const block = getEntryBlock(state, currentEntry);
+    let targetIndex = -1;
+    for (let i = activeIndex + 1; i < state.entries.length; i += 1) {
+      if (state.entries[i].status === "pending" && getEntryBlock(state, state.entries[i]) === block) {
+        targetIndex = i;
+        break;
+      }
+    }
+    if (targetIndex === -1) {
+      for (let i = activeIndex + 1; i < state.entries.length; i += 1) {
+        if (state.entries[i].status === "pending") {
+          targetIndex = i;
+          break;
+        }
+      }
+    }
+    if (targetIndex === -1) throw new Error("\u041D\u0438\u0436\u0435 \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0431\u043E\u043B\u044C\u0448\u0435 \u043D\u0438\u043A\u043E\u0433\u043E \u043D\u0435\u0442.");
+    pushQueueHistory(state);
+    const nextEntry = state.entries[targetIndex];
+    state.entries[activeIndex] = nextEntry;
+    state.entries[targetIndex] = currentEntry;
+    activateFirstPending(state);
+    state.queueMessageId = null;
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  if (action === "undo") {
+    if (!state.history.length) throw new Error("\u041E\u0442\u043A\u0430\u0442\u044B\u0432\u0430\u0442\u044C \u043F\u043E\u043A\u0430 \u043D\u0435\u0447\u0435\u0433\u043E.");
+    const snapshot = state.history.pop();
+    state = {
+      ...snapshot,
+      history: state.history,
+      queueMessageId: null
+    };
+    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
+  }
+  throw new Error("\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043E\u0447\u0435\u0440\u0435\u0434\u0438.");
+}
+__name(runQueueStateAction, "runQueueStateAction");
 var AnnouncementStateDurableObject = class {
   static {
     __name(this, "AnnouncementStateDurableObject");
@@ -1422,6 +1753,145 @@ var AnnouncementStateDurableObject = class {
         }
         await this.saveState(announcementState);
         return Response.json({ ok: true, messageId: announcementState.messageIds[key] ?? null });
+      }
+      if (action === "enqueue_zoom_messages") {
+        const messages = Array.isArray(payload.messages) ? payload.messages : [];
+        const createdAt = Date.now();
+        const queued = messages
+          .map((message) => String(message || "").trim())
+          .filter(Boolean)
+          .map((text) => {
+            const item = {
+              id: announcementState.zoomOutboxNextId,
+              text,
+              createdAt
+            };
+            announcementState.zoomOutboxNextId += 1;
+            return item;
+          });
+        if (queued.length) {
+          announcementState.zoomOutbox.push(...queued);
+          if (announcementState.zoomOutbox.length > 200) {
+            announcementState.zoomOutbox = announcementState.zoomOutbox.slice(-200);
+          }
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, queued });
+      }
+      if (action === "get_zoom_outbox_marker") {
+        return Response.json({
+          ok: true,
+          nextId: announcementState.zoomOutboxNextId
+        });
+      }
+      if (action === "pull_zoom_messages") {
+        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+        const minId = Number(payload.minId) || 0;
+        const messages = announcementState.zoomOutbox.filter((item) => !minId || Number(item.id) >= minId);
+        return Response.json({
+          ok: true,
+          messages: messages.slice(0, limit)
+        });
+      }
+      if (action === "ack_zoom_messages") {
+        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
+        if (ids.size) {
+          announcementState.zoomOutbox = announcementState.zoomOutbox.filter((item) => !ids.has(Number(item.id)));
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, remaining: announcementState.zoomOutbox.length });
+      }
+      if (action === "record_zoom_debug") {
+        const event = payload.event && typeof payload.event === "object" ? payload.event : {};
+        announcementState.zoomDebugEvents.push({
+          ...event,
+          recordedAt: Date.now()
+        });
+        announcementState.zoomDebugEvents = announcementState.zoomDebugEvents.slice(-25);
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, count: announcementState.zoomDebugEvents.length });
+      }
+      if (action === "pull_zoom_debug") {
+        return Response.json({ ok: true, events: announcementState.zoomDebugEvents.slice(-25) });
+      }
+      if (action === "clear_zoom_debug") {
+        announcementState.zoomDebugEvents = [];
+        await this.saveState(announcementState);
+        return Response.json({ ok: true });
+      }
+      if (action === "enqueue_zoom_only_messages") {
+        const messages = Array.isArray(payload.messages) ? payload.messages : [];
+        const createdAt = Date.now();
+        const queued = messages
+          .map((message) => String(message || "").trim())
+          .filter(Boolean)
+          .map((text) => {
+            const item = {
+              id: announcementState.zoomOnlyOutboxNextId,
+              text,
+              createdAt
+            };
+            announcementState.zoomOnlyOutboxNextId += 1;
+            return item;
+          });
+        if (queued.length) {
+          announcementState.zoomOnlyOutbox.push(...queued);
+          if (announcementState.zoomOnlyOutbox.length > 300) {
+            announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.slice(-300);
+          }
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, queued });
+      }
+      if (action === "get_zoom_only_outbox_marker") {
+        return Response.json({
+          ok: true,
+          nextId: announcementState.zoomOnlyOutboxNextId
+        });
+      }
+      if (action === "pull_zoom_only_messages") {
+        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+        const minId = Number(payload.minId) || 0;
+        const messages = announcementState.zoomOnlyOutbox.filter((item) => !minId || Number(item.id) >= minId);
+        return Response.json({
+          ok: true,
+          messages: messages.slice(0, limit)
+        });
+      }
+      if (action === "ack_zoom_only_messages") {
+        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
+        if (ids.size) {
+          announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.filter((item) => !ids.has(Number(item.id)));
+          await this.saveState(announcementState);
+        }
+        return Response.json({ ok: true, remaining: announcementState.zoomOnlyOutbox.length });
+      }
+      if (action === "zoom_only_queue") {
+        const queueResult = runQueueStateAction(announcementState.zoomOnlyQueueState, payload.queueAction || "get", payload.queuePayload || {}, buildZoomOnlyQueueText);
+        announcementState.zoomOnlyQueueState = queueResult.state;
+        await this.saveState(announcementState);
+        return Response.json(queueResult.response);
+      }
+      if (action === "clear_zoom_only_state") {
+        announcementState.zoomOnlyQueueState = createEmptyQueueState();
+        announcementState.zoomOnlyOutbox = [];
+        announcementState.zoomOnlyOutboxNextId = 1;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true });
+      }
+      if (action === "zoom_only_status") {
+        const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
+        return Response.json({
+          ok: true,
+          queue: {
+            isOpen: Boolean(queue.isOpen),
+            mode: queue.mode || "bk",
+            entriesCount: Array.isArray(queue.entries) ? queue.entries.length : 0,
+            historyCount: Array.isArray(queue.history) ? queue.history.length : 0
+          },
+          outboxSize: announcementState.zoomOnlyOutbox.length,
+          nextOutboxId: announcementState.zoomOnlyOutboxNextId
+        });
       }
       if (action === "get_personal_subscription") {
         const userId = String(payload.userId || "").trim();
@@ -1734,6 +2204,32 @@ function getAuthorLabel(message) {
   return "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
 }
 __name(getAuthorLabel, "getAuthorLabel");
+async function enqueueZoomMessages(env, messages) {
+  const cleanMessages = (Array.isArray(messages) ? messages : [messages]).map((message) => String(message || "").trim()).filter(Boolean);
+  if (!cleanMessages.length) return null;
+  return callAnnouncementState(env, "enqueue_zoom_messages", { messages: cleanMessages });
+}
+__name(enqueueZoomMessages, "enqueueZoomMessages");
+async function enqueueZoomOnlyMessages(env, messages) {
+  const cleanMessages = (Array.isArray(messages) ? messages : [messages]).map((message) => String(message || "").trim()).filter(Boolean);
+  if (!cleanMessages.length) return null;
+  return callAnnouncementState(env, "enqueue_zoom_only_messages", { messages: cleanMessages });
+}
+__name(enqueueZoomOnlyMessages, "enqueueZoomOnlyMessages");
+function plainZoomText(text) {
+  return String(text || "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/<br\s*\/?>/giu, "\n").replace(/<\/p>/giu, "\n\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+}
+__name(plainZoomText, "plainZoomText");
+function getZoomMeetingMessages(key) {
+  const configured = ZOOM_MEETING_MESSAGE_TEXTS[key];
+  const parts = Array.isArray(configured) ? configured : [configured];
+  return parts.flatMap((part) => splitZoomText(plainZoomText(part))).filter(Boolean);
+}
+__name(getZoomMeetingMessages, "getZoomMeetingMessages");
+async function callZoomOnlyQueueState(env, queueAction, queuePayload = {}) {
+  return callAnnouncementState(env, "zoom_only_queue", { queueAction, queuePayload });
+}
+__name(callZoomOnlyQueueState, "callZoomOnlyQueueState");
 async function applyQueueResponse(env, result) {
   if (result.publishQueue) {
     let deletedPreviousMessage = true;
@@ -1767,9 +2263,17 @@ async function applyQueueResponse(env, result) {
     await callQueueState(env, "set_message_id", {
       messageId
     });
+    await enqueueZoomMessages(env, splitZoomText(result.queueText)).catch((error) => notifyOwnerTechError(env, {
+      module: "Zoom",
+      operation: "queue outbox",
+      error,
+      details: { source: "queue" },
+      hint: "\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0432 Telegram \u0443\u0436\u0435 \u043E\u043F\u0443\u0431\u043B\u0438\u043A\u043E\u0432\u0430\u043D\u0430, \u043D\u043E Zoom-outbox \u043D\u0435 \u043F\u0440\u0438\u043D\u044F\u043B \u0442\u0435\u043A\u0441\u0442."
+    }));
   }
   if (result.closeMessage) {
     await sendMessage(env, CHAT_GROUP_ID, result.closeMessage, null, null, null, null, true);
+    await enqueueZoomMessages(env, splitZoomText(result.closeMessage)).catch(() => null);
   }
   if (result.cleared && result.previousMessageId) {
     const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, result.previousMessageId);
@@ -2396,6 +2900,12 @@ function splitTitleAndBody(text) {
 }
 __name(splitTitleAndBody, "splitTitleAndBody");
 async function sendYozhikToGroup(env, { disableNotification = true } = {}) {
+  const messageText = await buildYozhikText();
+  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+  return messageText;
+}
+__name(sendYozhikToGroup, "sendYozhikToGroup");
+async function buildYozhikText() {
   const data = await fetchJsonWithCache(YOZHIK_JSON_URL, "yozhik");
   const key = getMoscowDateKey();
   const text = data[key];
@@ -2403,12 +2913,11 @@ async function sendYozhikToGroup(env, { disableNotification = true } = {}) {
     throw new Error(`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0401\u0436\u0438\u043A \u043D\u0430 \u0434\u0430\u0442\u0443 ${key}`);
   }
   const humanDate = getMoscowHumanDate();
-  const messageText = `\u0415\u0436\u0435\u0434\u043D\u0435\u0432\u043D\u044B\u0435 \u0440\u0430\u0437\u043C\u044B\u0448\u043B\u0435\u043D\u0438\u044F \u043D\u0430 ${humanDate}
+  return `\u0415\u0436\u0435\u0434\u043D\u0435\u0432\u043D\u044B\u0435 \u0440\u0430\u0437\u043C\u044B\u0448\u043B\u0435\u043D\u0438\u044F \u043D\u0430 ${humanDate}
 
 ${text}`;
-  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
 }
-__name(sendYozhikToGroup, "sendYozhikToGroup");
+__name(buildYozhikText, "buildYozhikText");
 function getAnnouncementKey(sourceMessageId) {
   if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID) {
     return "info_channel_announcement";
@@ -2629,6 +3138,16 @@ async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
       }
     }
   }
+  const zoomKey = getZoomMeetingKeyBySourceMessageId(sourceMessageId);
+  if (zoomKey) {
+    await enqueueZoomMessages(env, getZoomMeetingMessages(zoomKey)).catch((error) => notifyOwnerTechError(env, {
+      module: "Zoom",
+      operation: "meeting outbox",
+      error,
+      details: { source_message_id: sourceMessageId, zoom_key: zoomKey },
+      hint: "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0432 Telegram \u0443\u0448\u043B\u043E, \u043D\u043E \u0432 Zoom-outbox \u043D\u0435 \u043F\u043E\u043F\u0430\u043B\u043E."
+    }));
+  }
   return copied;
 }
 __name(sendAnnouncementCopyToGroup, "sendAnnouncementCopyToGroup");
@@ -2654,6 +3173,12 @@ async function sendTechMessageCopyToInfoThread(env, sourceMessageId, targetThrea
 }
 __name(sendTechMessageCopyToInfoThread, "sendTechMessageCopyToInfoThread");
 async function sendBillToGroup(env, billNumber, { disableNotification = true } = {}) {
+  const messageText = await buildBillText(billNumber);
+  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
+  return messageText;
+}
+__name(sendBillToGroup, "sendBillToGroup");
+async function buildBillText(billNumber) {
   if (!Number.isInteger(billNumber) || billNumber < 1 || billNumber > 332) {
     throw new Error("\u041D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430 \u0434\u043E\u043B\u0436\u0435\u043D \u0431\u044B\u0442\u044C \u043E\u0442 1 \u0434\u043E 332.");
   }
@@ -2664,32 +3189,934 @@ async function sendBillToGroup(env, billNumber, { disableNotification = true } =
   }
   const { title, body } = splitTitleAndBody(text);
   const header = title ? `\u041A\u0430\u043A \u044D\u0442\u043E \u0432\u0438\u0434\u0438\u0442 \u0411\u0438\u043B\u043B. \u2116${billNumber}. ${title}` : `\u041A\u0430\u043A \u044D\u0442\u043E \u0432\u0438\u0434\u0438\u0442 \u0411\u0438\u043B\u043B. \u2116${billNumber}`;
-  const messageText = body ? `${header}
+  return body ? `${header}
 
 ${body}` : `${header}
 
 ${text}`;
-  await sendMessage(env, CHAT_GROUP_ID, messageText, null, null, null, null, disableNotification || shouldSilenceBotChat(CHAT_GROUP_ID));
 }
-__name(sendBillToGroup, "sendBillToGroup");
+__name(buildBillText, "buildBillText");
+function isZoomBridgeAuthorized(request, env) {
+  const expected = String(env?.ZOOM_BRIDGE_SECRET || "").trim();
+  if (!expected) return false;
+  const actual = String(request.headers.get("x-nafanya-zoom-secret") || "").trim();
+  return actual && actual === expected;
+}
+__name(isZoomBridgeAuthorized, "isZoomBridgeAuthorized");
+function buildZoomMessage(payload) {
+  const name = getZoomPayloadDisplayName(payload);
+  return {
+    text: String(payload?.text || payload?.message || "").trim(),
+    message_id: payload?.messageId || payload?.id || getCurrentTimestamp(),
+    chat: { id: "zoom", type: "zoom" },
+    from: { first_name: name }
+  };
+}
+__name(buildZoomMessage, "buildZoomMessage");
+function isZoomAdminPayload(payload) {
+  const user = payload?.user || payload?.from || {};
+  const role = String(user.role || payload?.role || "").toLowerCase();
+  return Boolean(user.isHost || user.isCoHost || payload?.isHost || payload?.isCoHost || ["host", "cohost", "co-host", "organizer", "coorganizer"].includes(role));
+}
+__name(isZoomAdminPayload, "isZoomAdminPayload");
+function getZoomAdminNames(env) {
+  return String(env?.ZOOM_ADMIN_NAMES || "").split(/[,;\n]/u).map((name) => normalizeZoomCommand(name)).filter(Boolean);
+}
+__name(getZoomAdminNames, "getZoomAdminNames");
+function isZoomAdminName(env, name) {
+  const normalizedName = normalizeZoomCommand(name);
+  if (!normalizedName) return false;
+  const normalizedWithoutParentheses = normalizedName.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+  const adminNames = getZoomAdminNames(env);
+  return adminNames.includes(normalizedName) || adminNames.includes(normalizedWithoutParentheses);
+}
+__name(isZoomAdminName, "isZoomAdminName");
+function normalizeZoomCommand(text) {
+  return normalizeText2(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
+}
+__name(normalizeZoomCommand, "normalizeZoomCommand");
+function parseZoomManualQueueCommand(text) {
+  const normalized = normalizeZoomCommand(text);
+  const removeMatch = normalized.match(/^(?:\u0443\u0434\u0430\u043B\u0438\u0442\u044C|\u0443\u0434\u0430\u043B\u0438|\u0443\u0431\u0440\u0430\u0442\u044C|\u0443\u0431\u0435\u0440\u0438)(?:\s+(\d{1,3}))?$/u);
+  if (removeMatch) return { action: "remove", index: removeMatch[1] ? Number(removeMatch[1]) : null };
+  const addMatch = normalized.match(/^(?:\u0434\u043E\u0431\u0430\u0432\u044C|\u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C)\s+(.+)$/u);
+  if (!addMatch) return null;
+  const body = addMatch[1].trim();
+  const gameMatch = body.match(/^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+(\d{1,3})\s+(.+)$/u);
+  if (gameMatch) return { action: "add_game", number: Number(gameMatch[1]), author: stripTelegramHandles(gameMatch[2]) };
+  const codeMatch = body.match(/^(111|222|333|444)\s+(.+)$/u);
+  if (codeMatch) return { action: "add_code", code: codeMatch[1], author: stripTelegramHandles(codeMatch[2]) };
+  return { action: "invalid_add" };
+}
+__name(parseZoomManualQueueCommand, "parseZoomManualQueueCommand");
+async function publishMeetingFromZoomCommand(env, key) {
+  if (key === "yozhik") {
+    const messageText = await sendYozhikToGroup(env);
+    await enqueueZoomMessages(env, splitZoomText(messageText));
+    return { ok: true, handled: true };
+  }
+  if (key === "bill_prompt") {
+    await enqueueZoomMessages(env, ["\u0411\u0438\u043B\u043B: \u0432\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u043E\u0442 1 \u0434\u043E 332."]);
+    await sendMessage(env, CHAT_GROUP_ID, "\u0412\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430.", null, null, null, null, true);
+    return { ok: true, handled: true };
+  }
+  if (key === "today_topic") {
+    const sourceMessageId = getTodayTopicSourceMessageId();
+    if (!sourceMessageId) {
+      await enqueueZoomMessages(env, ["\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043D\u0435\u0442."]);
+      return { ok: true, handled: true };
+    }
+    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
+    await enqueueZoomMessages(env, getTodayTopicZoomMessages());
+    return { ok: true, handled: true };
+  }
+  const sourceMessageId = TECH_MESSAGES[key];
+  if (!sourceMessageId) return { ok: false, handled: false, error: "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435." };
+  if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID || sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID) {
+    await sendAnnouncementCopyToGroup(env, sourceMessageId);
+  } else {
+    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
+    await enqueueZoomMessages(env, getZoomMeetingMessages(key));
+  }
+  return { ok: true, handled: true };
+}
+__name(publishMeetingFromZoomCommand, "publishMeetingFromZoomCommand");
+async function handleZoomBridgeMessage(env, payload) {
+  const message = buildZoomMessage(payload);
+  const text = message.text;
+  if (!text) return { ok: true, handled: false };
+  const queueInfo = await callQueueState(env, "get");
+  const isAdmin = isZoomAdminPayload(payload);
+  const normalized = normalizeZoomCommand(text);
+  const openMode = getZoomOpenQueueMode(text);
+  if (openMode) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const result = await callQueueState(env, "open", { mode: openMode });
+    await applyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
+  const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
+  if (meetingKey) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    return publishMeetingFromZoomCommand(env, meetingKey);
+  }
+  const zoomBillNumber = parseBillInput(text);
+  if (zoomBillNumber !== null && /^\/?\u0431\u0438\u043B\u043B\s+\d{1,3}$/iu.test(text.trim())) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const messageText = await sendBillToGroup(env, zoomBillNumber);
+    await enqueueZoomMessages(env, splitZoomText(messageText));
+    return { ok: true, handled: true };
+  }
+  if (isAdmin) {
+    const manual = parseZoomManualQueueCommand(text);
+    if (manual) {
+      if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
+        await enqueueZoomMessages(env, ["\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0441\u0435\u0439\u0447\u0430\u0441 \u0437\u0430\u043A\u0440\u044B\u0442\u0430."]);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "remove") {
+        const result = manual.index ? await callQueueState(env, "remove_by_number", { index: manual.index }) : await callQueueState(env, "remove");
+        await applyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_code" && manual.author) {
+        const label = queueInfo.state.mode === "bill" ? manual.code : "111";
+        const entry = makeManualQueueEntry(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
+        const result = await callQueueState(env, "add", { entry });
+        await applyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_game" && manual.author) {
+        if (queueInfo.state.mode !== "bill") {
+          await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0443 \u043C\u043E\u0436\u043D\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0411\u0438\u043B\u043B."]);
+          return { ok: true, handled: true };
+        }
+        const speakerQuestions = await getSpeakerQuestions();
+        const question = speakerQuestions.get(manual.number);
+        if (!question) {
+          await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
+          return { ok: true, handled: true };
+        }
+        const entry = makeManualQueueEntry(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
+        const result = await callQueueState(env, "add", { entry });
+        await applyQueueResponse(env, result);
+        const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`;
+        await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
+        await enqueueZoomMessages(env, splitZoomText(questionText));
+        return { ok: true, handled: true };
+      }
+      await enqueueZoomMessages(env, ["\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u043D\u0435 \u043F\u043E\u043D\u044F\u0442\u043D\u0430."]);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u0432\u044B\u0441\u043A\u0430\u0437\u0430\u043B\u0441\u044F") {
+      const result = await callQueueState(env, "done");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442") {
+      const result = await callQueueState(env, "skip");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C") {
+      const result = await callQueueState(env, "undo");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+    if (normalized === "\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
+      const result = await callQueueState(env, "close");
+      await applyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+  }
+  if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
+    await enqueueZoomMessages(env, splitZoomText(buildQueueText(queueInfo.state || createEmptyQueueState())));
+    return { ok: true, handled: true };
+  }
+  const gameNumber = parseGameCommand(text);
+  if (gameNumber !== null) {
+    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
+      await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F."]);
+      return { ok: true, handled: true };
+    }
+    const speakerQuestions = await getSpeakerQuestions();
+    const question = speakerQuestions.get(gameNumber);
+    if (question) {
+      const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`;
+      await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
+      await enqueueZoomMessages(env, splitZoomText(questionText));
+    } else {
+      await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
+      return { ok: true, handled: true };
+    }
+  }
+  const entry = parseQueueEntry(message, queueInfo.state, { source: "Zoom" });
+  if (entry) {
+    const result = await callQueueState(env, "add", { entry });
+    await applyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
+  return { ok: true, handled: false };
+}
+__name(handleZoomBridgeMessage, "handleZoomBridgeMessage");
+async function applyZoomOnlyQueueResponse(env, result) {
+  if (result.publishQueue && result.queueText) {
+    await enqueueZoomOnlyMessages(env, splitZoomText(result.queueText));
+  }
+  if (result.closeMessage) {
+    await enqueueZoomOnlyMessages(env, splitZoomText(result.closeMessage));
+  }
+}
+__name(applyZoomOnlyQueueResponse, "applyZoomOnlyQueueResponse");
+async function publishZoomOnlyMeetingCommand(env, key) {
+  if (key === "yozhik") {
+    const messageText = await buildYozhikText();
+    await enqueueZoomOnlyMessages(env, splitZoomText(messageText));
+    return { ok: true, handled: true };
+  }
+  if (key === "bill_prompt") {
+    await enqueueZoomOnlyMessages(env, ["\u0411\u0438\u043B\u043B: \u0432\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u043E\u0442 1 \u0434\u043E 332."]);
+    return { ok: true, handled: true };
+  }
+  if (key === "today_topic") {
+    const messages = getTodayTopicSourceMessageId() ? getTodayTopicZoomMessages() : ["\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043D\u0435\u0442."];
+    await enqueueZoomOnlyMessages(env, messages);
+    return { ok: true, handled: true };
+  }
+  if (!ZOOM_MEETING_MESSAGE_TEXTS[key]) {
+    return { ok: false, handled: false, error: "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u043E Zoom-\u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435." };
+  }
+  await enqueueZoomOnlyMessages(env, getZoomMeetingMessages(key));
+  return { ok: true, handled: true };
+}
+__name(publishZoomOnlyMeetingCommand, "publishZoomOnlyMeetingCommand");
+async function handleZoomOnlyMessage(env, payload) {
+  const displayName = getZoomPayloadDisplayName(payload);
+  if (normalizeZoomCommand(displayName) === normalizeZoomCommand(ZOOM_BOT_NAME)) {
+    return { ok: true, handled: false, ignored: "self" };
+  }
+  const message = buildZoomMessage(payload);
+  const text = message.text;
+  if (!text) return { ok: true, handled: false };
+  const queueInfo = await callZoomOnlyQueueState(env, "get");
+  const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName);
+  const normalized = normalizeZoomCommand(text);
+  const openMode = getZoomOpenQueueMode(text);
+  if (openMode) {
+    if (!isAdmin) {
+      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const result = await callZoomOnlyQueueState(env, "open", { mode: openMode });
+    await applyZoomOnlyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
+  const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
+  if (meetingKey) {
+    if (!isAdmin) {
+      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    return publishZoomOnlyMeetingCommand(env, meetingKey);
+  }
+  const zoomBillNumber = parseBillInput(text);
+  if (zoomBillNumber !== null && /^\/?\u0431\u0438\u043B\u043B\s+\d{1,3}$/iu.test(text.trim())) {
+    if (!isAdmin) {
+      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    await enqueueZoomOnlyMessages(env, splitZoomText(await buildBillText(zoomBillNumber)));
+    return { ok: true, handled: true };
+  }
+  if (isAdmin) {
+    const manual = parseZoomManualQueueCommand(text);
+    if (manual) {
+      if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
+        await enqueueZoomOnlyMessages(env, ["\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0441\u0435\u0439\u0447\u0430\u0441 \u0437\u0430\u043A\u0440\u044B\u0442\u0430."]);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "remove") {
+        const result = manual.index ? await callZoomOnlyQueueState(env, "remove_by_number", { index: manual.index }) : await callZoomOnlyQueueState(env, "remove");
+        await applyZoomOnlyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_code" && manual.author) {
+        const label = queueInfo.state.mode === "bill" ? manual.code : "111";
+        const entry = makeManualQueueEntry(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
+        const result = await callZoomOnlyQueueState(env, "add", { entry });
+        await applyZoomOnlyQueueResponse(env, result);
+        return { ok: true, handled: true };
+      }
+      if (manual.action === "add_game" && manual.author) {
+        if (queueInfo.state.mode !== "bill") {
+          await enqueueZoomOnlyMessages(env, ["\u0418\u0433\u0440\u0443 \u043C\u043E\u0436\u043D\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0411\u0438\u043B\u043B."]);
+          return { ok: true, handled: true };
+        }
+        const question = (await getSpeakerQuestions()).get(manual.number);
+        if (!question) {
+          await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
+          return { ok: true, handled: true };
+        }
+        const entry = makeManualQueueEntry(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
+        const result = await callZoomOnlyQueueState(env, "add", { entry });
+        await applyZoomOnlyQueueResponse(env, result);
+        await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`));
+        return { ok: true, handled: true };
+      }
+      await enqueueZoomOnlyMessages(env, ["\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u043D\u0435 \u043F\u043E\u043D\u044F\u0442\u043D\u0430."]);
+      return { ok: true, handled: true };
+    }
+    const adminActions = {
+      "\u0432\u044B\u0441\u043A\u0430\u0437\u0430\u043B\u0441\u044F": "done",
+      "\u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442": "skip",
+      "\u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C": "undo",
+      "\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u0447\u0435\u0440\u0435\u0434\u044C": "close"
+    };
+    if (adminActions[normalized]) {
+      const result = await callZoomOnlyQueueState(env, adminActions[normalized]);
+      await applyZoomOnlyQueueResponse(env, result);
+      return { ok: true, handled: true };
+    }
+  }
+  if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
+    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueText(queueInfo.state || createEmptyQueueState())));
+    return { ok: true, handled: true };
+  }
+  const gameNumber = parseGameCommand(text);
+  if (gameNumber !== null) {
+    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
+      await enqueueZoomOnlyMessages(env, ["\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F."]);
+      return { ok: true, handled: true };
+    }
+    const question = (await getSpeakerQuestions()).get(gameNumber);
+    if (!question) {
+      await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
+      return { ok: true, handled: true };
+    }
+    await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`));
+  }
+  let queueState = queueInfo.state || createEmptyQueueState();
+  if ((!queueState.isOpen || !queueState.mode) && getQueueSpeechCodeNote(text)) {
+    const opened = await callZoomOnlyQueueState(env, "auto_open", { mode: "bk" });
+    queueState = opened.state || queueState;
+  }
+  const entry = parseQueueEntry(message, queueState, { source: "Zoom" });
+  if (entry) {
+    const result = await callZoomOnlyQueueState(env, "add", { entry });
+    await applyZoomOnlyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
+  return { ok: true, handled: false };
+}
+__name(handleZoomOnlyMessage, "handleZoomOnlyMessage");
+async function handleZoomBridgeRequest(request, env) {
+  if (!isZoomBridgeAuthorized(request, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const url = new URL(request.url);
+  if (request.method === "POST" && url.pathname === "/zoom/webhook") {
+    const payload = await request.json();
+    return Response.json(await handleZoomBridgeMessage(env, payload));
+  }
+  if (request.method === "POST" && url.pathname === "/zoom/outbox") {
+    const payload = await request.json().catch(() => ({}));
+    if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
+      await callAnnouncementState(env, "ack_zoom_messages", { ids: payload.ackIds });
+    }
+    const result = await callAnnouncementState(env, "pull_zoom_messages", { limit: payload.limit || 20 });
+    return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
+  }
+  if (request.method === "POST" && url.pathname === "/zoom/debug") {
+    const payload = await request.json().catch(() => ({}));
+    if (payload.clear) {
+      await callAnnouncementState(env, "clear_zoom_debug");
+    }
+    const result = await callAnnouncementState(env, "pull_zoom_debug");
+    return Response.json({ ok: true, events: result.events || [] });
+  }
+  return textResponse("Not found", 404);
+}
+__name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
+async function handleZoomOnlyBridgeRequest(request, env) {
+  if (!isZoomBridgeAuthorized(request, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  const url = new URL(request.url);
+  if (request.method === "POST" && url.pathname === "/zoom-only/webhook") {
+    const payload = await request.json();
+    return Response.json(await handleZoomOnlyMessage(env, payload));
+  }
+  if (request.method === "POST" && url.pathname === "/zoom-only/outbox") {
+    const payload = await request.json().catch(() => ({}));
+    if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
+      await callAnnouncementState(env, "ack_zoom_only_messages", { ids: payload.ackIds });
+    }
+    const result = await callAnnouncementState(env, "pull_zoom_only_messages", { limit: payload.limit || 20 });
+    return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
+  }
+  if (url.pathname === "/zoom-only/status") {
+    const result = await callAnnouncementState(env, "zoom_only_status");
+    return Response.json(result);
+  }
+  if (request.method === "POST" && url.pathname === "/zoom-only/reset") {
+    const result = await callAnnouncementState(env, "clear_zoom_only_state");
+    return Response.json(result);
+  }
+  return textResponse("Not found", 404);
+}
+__name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
+function isZoomAppControlCommand(command) {
+  const normalized = normalizeZoomCommand(command);
+  if (ZOOM_APP_ALLOWED_COMMANDS.has(normalized)) return true;
+  if (/^\/?\u0431\u0438\u043b\u043b\s+\d{1,3}$/iu.test(normalized)) return true;
+  if (/^(?:111|222|333|444)$/u.test(normalized)) return true;
+  if (/^\u0438\u0433\u0440\u0430\s+\d{1,3}$/iu.test(normalized)) return true;
+  if (parseZoomManualQueueCommand(command)) return true;
+  return false;
+}
+__name(isZoomAppControlCommand, "isZoomAppControlCommand");
+function buildZoomPayloadFromAppCommand(env, command, userContext = {}) {
+  const role = String(userContext.role || "").toLowerCase();
+  const displayName = stripTelegramHandles(userContext.screenName || userContext.displayName || userContext.name || "Zoom App");
+  const nameIsAdmin = isZoomAdminName(env, displayName);
+  return {
+    id: `zoom-app-${Date.now()}`,
+    text: command,
+    user: {
+      displayName,
+      role,
+      isHost: role === "host",
+      isCoHost: role === "cohost" || role === "co-host" || nameIsAdmin
+    },
+    source: "zoom_app"
+  };
+}
+__name(buildZoomPayloadFromAppCommand, "buildZoomPayloadFromAppCommand");
+function buildZoomOnlyPayloadFromAppCommand(env, command, userContext = {}) {
+  const payload = buildZoomPayloadFromAppCommand(env, command, userContext);
+  return {
+    ...payload,
+    isZoomOnlyAppControl: true,
+    user: {
+      ...payload.user,
+      role: payload.user?.role || "zoom-app",
+      isHost: true,
+      isCoHost: true
+    }
+  };
+}
+__name(buildZoomOnlyPayloadFromAppCommand, "buildZoomOnlyPayloadFromAppCommand");
+async function handleZoomAppActionRequest(request, env) {
+  if (request.method !== "POST") {
+    return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  }
+  const payload = await request.json().catch(() => ({}));
+  const command = String(payload.command || "").trim();
+  if (!command || !isZoomAppControlCommand(command)) {
+    return Response.json({ ok: false, error: "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043b\u044f Zoom-\u043f\u0443\u043b\u044c\u0442\u0430 \u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0430." }, { status: 400 });
+  }
+  const marker = await callAnnouncementState(env, "get_zoom_outbox_marker").catch(() => ({ nextId: 1 }));
+  const result = await handleZoomBridgeMessage(env, buildZoomPayloadFromAppCommand(env, command, payload.userContext || {}));
+  const outbox = await callAnnouncementState(env, "pull_zoom_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
+  if (messages.length) {
+    await callAnnouncementState(env, "ack_zoom_messages", { ids: messages.map((message) => message.id) }).catch(() => null);
+  }
+  return Response.json({
+    ok: true,
+    handled: Boolean(result?.handled),
+    denied: Boolean(result?.denied),
+    messages: messages.map((message) => ({ id: message.id, text: String(message.text || "") })).filter((message) => message.text)
+  });
+}
+__name(handleZoomAppActionRequest, "handleZoomAppActionRequest");
+async function handleZoomOnlyAppActionRequest(request, env) {
+  if (request.method !== "POST") {
+    return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  }
+  const payload = await request.json().catch(() => ({}));
+  const command = String(payload.command || "").trim();
+  if (!command || !isZoomAppControlCommand(command)) {
+    return Response.json({ ok: false, error: "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043B\u044F Zoom-only \u043F\u0443\u043B\u044C\u0442\u0430 \u043D\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u0430." }, { status: 400 });
+  }
+  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
+  const result = await handleZoomOnlyMessage(env, buildZoomOnlyPayloadFromAppCommand(env, command, payload.userContext || {}));
+  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
+  return Response.json({
+    ok: true,
+    handled: Boolean(result?.handled),
+    denied: Boolean(result?.denied),
+    messages: messages.map((message) => ({ id: message.id, text: String(message.text || "") })).filter((message) => message.text)
+  });
+}
+__name(handleZoomOnlyAppActionRequest, "handleZoomOnlyAppActionRequest");
+function zoomDebugTextPreview(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
+}
+__name(zoomDebugTextPreview, "zoomDebugTextPreview");
+async function recordZoomDebugEvent(env, event) {
+  try {
+    await callAnnouncementState(env, "record_zoom_debug", { event });
+  } catch (error) {
+    console.warn("zoom debug record failed", error?.message || String(error));
+  }
+}
+__name(recordZoomDebugEvent, "recordZoomDebugEvent");
+function bytesToHex(bytes) {
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+__name(bytesToHex, "bytesToHex");
+async function hmacSha256Hex(secret, message) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
+  return bytesToHex(signature);
+}
+__name(hmacSha256Hex, "hmacSha256Hex");
+function constantTimeEqual(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) {
+    diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return diff === 0;
+}
+__name(constantTimeEqual, "constantTimeEqual");
+async function verifyZoomWebhookSignature(request, env, rawBody) {
+  const secret = String(env?.ZOOM_WEBHOOK_SECRET_TOKEN || "").trim();
+  if (!secret) return false;
+  const timestamp = String(request.headers.get("x-zm-request-timestamp") || "").trim();
+  const signature = String(request.headers.get("x-zm-signature") || "").trim();
+  if (!timestamp || !signature) return false;
+  const expected = `v0=${await hmacSha256Hex(secret, `v0:${timestamp}:${rawBody}`)}`;
+  return constantTimeEqual(signature, expected);
+}
+__name(verifyZoomWebhookSignature, "verifyZoomWebhookSignature");
+async function buildZoomValidationResponse(env, payload) {
+  const secret = String(env?.ZOOM_WEBHOOK_SECRET_TOKEN || "").trim();
+  const plainToken = String(payload?.payload?.plainToken || "").trim();
+  if (!secret || !plainToken) {
+    return Response.json({ ok: false, error: "validation_failed" }, { status: 400 });
+  }
+  return Response.json({
+    plainToken,
+    encryptedToken: await hmacSha256Hex(secret, plainToken)
+  });
+}
+__name(buildZoomValidationResponse, "buildZoomValidationResponse");
+function buildZoomPayloadFromChatEvent(env, payload) {
+  const object = payload?.payload?.object || {};
+  const chatMessage = object.chat_message || {};
+  const senderName = stripTelegramHandles(chatMessage.sender_name || "\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a Zoom");
+  const senderType = String(chatMessage.sender_type || "").toLowerCase();
+  return {
+    id: chatMessage.message_id || `${payload?.event_ts || Date.now()}`,
+    text: chatMessage.message_content || "",
+    user: {
+      displayName: senderName,
+      role: senderType,
+      isHost: senderType === "host",
+      isCoHost: isZoomAdminName(env, senderName)
+    },
+    zoomEvent: payload?.event || "",
+    meetingId: object.id || null,
+    meetingUuid: object.uuid || null,
+    recipientType: chatMessage.recipient_type || "",
+    recipientContext: chatMessage.recipient_context || "",
+    senderContext: chatMessage.sender_context || ""
+  };
+}
+__name(buildZoomPayloadFromChatEvent, "buildZoomPayloadFromChatEvent");
+async function handleZoomWebhookEvent(request, env) {
+  const rawBody = await request.text();
+  const payload = JSON.parse(rawBody || "{}");
+  if (payload.event === "endpoint.url_validation") {
+    await recordZoomDebugEvent(env, { kind: "validation", event: payload.event });
+    return buildZoomValidationResponse(env, payload);
+  }
+  const authorized = await verifyZoomWebhookSignature(request, env, rawBody);
+  if (!authorized) {
+    await recordZoomDebugEvent(env, { kind: "unauthorized", event: payload.event || "", hasSignature: Boolean(request.headers.get("x-zm-signature")) });
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (!ZOOM_CHAT_MESSAGE_EVENTS.has(String(payload.event || ""))) {
+    await recordZoomDebugEvent(env, { kind: "ignored_event", event: payload.event || "" });
+    return Response.json({ ok: true, handled: false });
+  }
+  const zoomPayload = buildZoomPayloadFromChatEvent(env, payload);
+  const text = String(zoomPayload.text || "").trim();
+  const recipientType = String(zoomPayload.recipientType || "").toLowerCase();
+  const recipientContext = String(zoomPayload.recipientContext || "").toLowerCase();
+  if (!text || recipientType !== "everyone" || recipientContext !== "meeting") {
+    await recordZoomDebugEvent(env, {
+      kind: "ignored_chat",
+      event: payload.event || "",
+      textPreview: zoomDebugTextPreview(text),
+      sender: zoomPayload.user?.displayName || "",
+      recipientType,
+      recipientContext
+    });
+    return Response.json({ ok: true, handled: false });
+  }
+  const result = await handleZoomBridgeMessage(env, zoomPayload);
+  await recordZoomDebugEvent(env, {
+    kind: "handled_chat",
+    event: payload.event || "",
+    textPreview: zoomDebugTextPreview(text),
+    sender: zoomPayload.user?.displayName || "",
+    recipientType,
+    recipientContext,
+    handled: Boolean(result?.handled),
+    denied: Boolean(result?.denied)
+  });
+  return Response.json(result);
+}
+__name(handleZoomWebhookEvent, "handleZoomWebhookEvent");
 function okResponse() {
   return new Response("ok");
 }
 __name(okResponse, "okResponse");
+var SECURITY_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+  "referrer-policy": "no-referrer"
+};
+function withSecurityHeaders(headers = {}) {
+  return { ...SECURITY_HEADERS, ...headers };
+}
+__name(withSecurityHeaders, "withSecurityHeaders");
 function textResponse(text, status = 200) {
   return new Response(text, {
     status,
-    headers: { "content-type": "text/plain; charset=UTF-8" }
+    headers: withSecurityHeaders({ "content-type": "text/plain; charset=UTF-8" })
   });
 }
 __name(textResponse, "textResponse");
+var ZOOM_APP_SECURITY_HEADERS = {
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://appssdk.zoom.us",
+    "style-src 'self' 'unsafe-inline'",
+    "connect-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "base-uri 'none'"
+  ].join("; "),
+  "referrer-policy": "no-referrer"
+};
+function htmlResponse(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      ...ZOOM_APP_SECURITY_HEADERS,
+      "content-type": "text/html; charset=UTF-8"
+    }
+  });
+}
+__name(htmlResponse, "htmlResponse");
+var ZOOM_APP_ACTIONS = [
+  { command: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", label: "\u041c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", icon: "\u{1f92b}" },
+  { command: "\u043c\u043e\u043b\u0438\u0442\u0432\u0430", label: "\u041c\u043e\u043b\u0438\u0442\u0432\u0430", icon: "\u{1f64f}" },
+  { command: "\u043f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", label: "\u041f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", icon: "\u{1f4dc}" },
+  { command: "\u043d\u043e\u0432\u0438\u0447\u043a\u0443", label: "\u041d\u043e\u0432\u0438\u0447\u043a\u0443", icon: "\u{1f44b}" },
+  { command: "12 \u0448\u0430\u0433\u043e\u0432", label: "12 \u0428\u0430\u0433\u043e\u0432", icon: "12" },
+  { command: "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439", label: "12 \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u0439", icon: "12" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f4d8}" },
+  { command: "\u0442\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u0422\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f5c2}\ufe0f" },
+  { command: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", icon: "\u{1f4c5}" },
+  { command: "\u0441\u043b\u0443\u0436\u0435\u043d\u0438\u044f", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f", icon: "\u{1f4cc}" },
+  { command: "\u0441\u0441\u044b\u043b\u043a\u0438", label: "\u0421\u0441\u044b\u043b\u043a\u0438", icon: "\u{1f517}" },
+  { command: "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f", label: "7-\u044f \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044f", icon: "\u{1f4b0}" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", icon: "\u2615" },
+  { command: "\u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", icon: "\u2753" },
+  { command: "\u0447\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", icon: "\u203c\ufe0f" },
+  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", icon: "\u{1f4cc}" },
+  { command: "\u0435\u0436\u0438\u043a", label: "\u0401\u0436\u0438\u043a", icon: "\u{1f994}" },
+  { command: "\u0431\u0438\u043b\u043b", label: "\u0411\u0438\u043b\u043b", icon: "\u{1f4d9}" }
+];
+var ZOOM_APP_ALLOWED_COMMANDS = new Set([
+  ...ZOOM_APP_ACTIONS.map((action) => normalizeZoomCommand(action.command)),
+  "\u0432\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f",
+  "\u043f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",
+  "\u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c",
+  "\u0437\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c",
+  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u043a",
+  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u043b",
+  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0430",
+  "\u043e\u0447\u0435\u0440\u0435\u0434\u044c"
+]);
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+__name(escapeHtml, "escapeHtml");
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
+}
+__name(escapeAttr, "escapeAttr");
+function buildZoomAppHtml({ actionPath = "/zoom/app/action", zoomOnly = false } = {}) {
+  const buttons = ZOOM_APP_ACTIONS.map((action) => `<button class="action" type="button" data-command="${escapeAttr(action.command)}"><span class="icon">${escapeHtml(action.icon)}</span><span>${escapeHtml(action.label)}</span></button>`).join("");
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nafanya Zoom Bridge</title>
+  <script src="https://appssdk.zoom.us/sdk.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f7f5f2; color: #211f1b; }
+    .shell { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.15; }
+    .badge { flex: 0 0 auto; border: 1px solid #d8d1c6; border-radius: 999px; padding: 6px 10px; font-size: 12px; background: #fff; color: #5f574d; }
+    .status { min-height: 40px; border-radius: 8px; padding: 10px 12px; background: #fff; border: 1px solid #ded8ce; color: #4b443d; font-size: 13px; }
+    .status.good { border-color: #9fc89e; background: #f2fbf1; }
+    .status.warn { border-color: #e3c16a; background: #fff8e5; }
+    .status.bad { border-color: #db8b83; background: #fff0ee; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .action { min-height: 52px; border: 1px solid #cfc7bb; border-radius: 8px; background: #fff; color: #241f1a; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; justify-content: flex-start; padding: 10px 12px; text-align: left; cursor: pointer; }
+    .action:active { transform: translateY(1px); }
+    .action[disabled] { opacity: 0.58; cursor: wait; }
+    .icon { flex: 0 0 26px; width: 26px; text-align: center; font-weight: 800; }
+    .manual { margin-top: auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .manual input { min-width: 0; border-radius: 8px; border: 1px solid #cfc7bb; padding: 10px 12px; font-size: 15px; background: #fff; color: #211f1b; }
+    .manual button { border-radius: 8px; border: 0; padding: 10px 14px; background: #214c8f; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .log { max-height: 155px; overflow: auto; border-radius: 8px; background: #2a2622; color: #fff7eb; padding: 10px; font-size: 12px; white-space: pre-wrap; }
+    @media (max-width: 380px) { .grid { grid-template-columns: 1fr; } .shell { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="top">
+      <div>
+        <h1>Нафаня</h1>
+        <div>Пульт собрания</div>
+      </div>
+      <div class="badge" id="roleBadge">Zoom App</div>
+    </section>
+    <div class="status warn" id="status">Подключаю Zoom SDK...</div>
+    <section class="grid">${buttons}</section>
+    <form class="manual" id="manualForm">
+      <input id="manualInput" autocomplete="off" placeholder="билл 17, очередь, отменить">
+      <button type="submit">OK</button>
+    </form>
+    <pre class="log" id="log">Жду команду.</pre>
+  </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const roleBadge = document.getElementById("roleBadge");
+    const manualInput = document.getElementById("manualInput");
+    const buttons = [...document.querySelectorAll(".action")];
+    const zoomOnlyMode = ${zoomOnly ? "true" : "false"};
+    let zoomReady = false;
+    let userContext = {};
+
+    function setStatus(text, kind = "warn") {
+      statusEl.textContent = text;
+      statusEl.className = "status " + kind;
+    }
+
+    function addLog(text) {
+      const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
+    }
+
+    function normalizeRole(role) {
+      return String(role || "").toLowerCase().replace(/[-_\\s]+/g, "");
+    }
+
+    function canControl() {
+      const role = normalizeRole(userContext.role);
+      return role === "host" || role === "cohost" || role === "co-host";
+    }
+
+    async function initZoom() {
+      if (!window.zoomSdk) {
+        setStatus("Открыто вне Zoom-клиента. Для отправки в чат Zoom открой пульт из кнопки Приложения в самой конференции.", "warn");
+        return;
+      }
+      try {
+        const config = await zoomSdk.config({
+          version: "0.16",
+          capabilities: ["getUserContext", "sendMessageToChat", "showNotification"],
+          popoutSize: { width: 420, height: 760 }
+        });
+        zoomReady = !config.unsupportedApis?.includes("sendMessageToChat");
+        userContext = await zoomSdk.getUserContext().catch(() => ({}));
+        const name = userContext.screenName || "Zoom";
+        const role = userContext.role || config.runningContext || "";
+        roleBadge.textContent = name + (role ? " / " + role : "");
+        if (config.runningContext !== "inMeeting") {
+          setStatus("Пульт открыт не внутри конференции. Для отправки в чат открой его из кнопки Приложения в самой конференции.", "warn");
+        } else if (zoomOnlyMode) {
+          setStatus("Готов. Нажми кнопку, серверный Zoom-мост напишет в чат конференции.", "good");
+        } else if (!zoomReady) {
+          setStatus("Пульт открыт внутри конференции. Сообщения отправит серверный Zoom-мост.", "warn");
+        } else {
+          setStatus("Готов. Нажми кнопку, Нафаня отправит текст в чат Zoom.", "good");
+        }
+        addLog("SDK: " + JSON.stringify({ runningContext: config.runningContext, unsupportedApis: config.unsupportedApis || [], user: userContext }));
+      } catch (error) {
+        setStatus("Zoom SDK не настроился: " + (error?.message || String(error)), "bad");
+        addLog("Ошибка SDK: " + JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      }
+    }
+
+    async function sendToZoomChat(text) {
+      if (!zoomReady || !window.zoomSdk?.sendMessageToChat) {
+        addLog("Zoom chat пропущен: SDK не разрешил отправку.");
+        return false;
+      }
+      await zoomSdk.sendMessageToChat({ message: text });
+      return true;
+    }
+
+    async function runCommand(command) {
+      const clean = String(command || "").trim();
+      if (!clean) return;
+      buttons.forEach((button) => button.disabled = true);
+      setStatus("Выполняю: " + clean, "warn");
+      addLog("Команда: " + clean);
+      try {
+        const response = await fetch("${escapeAttr(actionPath)}", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command: clean, userContext })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ("HTTP " + response.status));
+        }
+        let sent = 0;
+        if (!zoomOnlyMode) {
+          for (const item of data.messages || []) {
+            if (await sendToZoomChat(item.text)) sent += 1;
+          }
+        }
+        if (data.denied) {
+          setStatus("Команда не выполнена: нужны права организатора или соорганизатора.", "bad");
+        } else if (zoomOnlyMode && (data.messages || []).length) {
+          setStatus("Команда принята. Серверный Нафаня напишет в чат Zoom.", "good");
+        } else if ((data.messages || []).length && sent === 0) {
+          setStatus("Команда ушла в Worker; серверный мост напишет в чат Zoom.", "warn");
+        } else {
+          setStatus("Готово. Сообщений в Zoom: " + sent + ".", "good");
+        }
+        addLog("Ответ: " + JSON.stringify({ handled: data.handled, messages: (data.messages || []).length, sent }));
+      } catch (error) {
+        setStatus("Ошибка: " + (error?.message || String(error)), "bad");
+        addLog("Ошибка команды: " + (error?.stack || error?.message || String(error)));
+      } finally {
+        buttons.forEach((button) => button.disabled = false);
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => runCommand(button.dataset.command));
+    });
+    document.getElementById("manualForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = manualInput.value;
+      manualInput.value = "";
+      runCommand(value);
+    });
+    initZoom();
+  </script>
+</body>
+</html>`;
+}
+__name(buildZoomAppHtml, "buildZoomAppHtml");
 async function handleRootRequest(env) {
+  return htmlResponse(buildZoomAppHtml());
+}
+__name(handleRootRequest, "handleRootRequest");
+async function handleZoomOnlyAppRequest(env) {
+  return htmlResponse(buildZoomAppHtml({ actionPath: "/zoom-only/app/action", zoomOnly: true }));
+}
+__name(handleZoomOnlyAppRequest, "handleZoomOnlyAppRequest");
+async function handleStatusRequest(env) {
   const tokenStatus = env.BOT_TOKEN ? "\u0435\u0441\u0442\u044C" : "\u043D\u0435\u0442";
   const speakerQuestions = await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map());
   const text = buildRootStatusText(tokenStatus, speakerQuestions.size);
   return textResponse(text);
 }
-__name(handleRootRequest, "handleRootRequest");
+__name(handleStatusRequest, "handleStatusRequest");
+function handleZoomOAuthReturn(request) {
+  const url = new URL(request.url);
+  const error = String(url.searchParams.get("error") || "").trim();
+  if (error) {
+    const description = String(url.searchParams.get("error_description") || error).trim();
+    return textResponse(`Zoom authorization failed: ${description}`, 400);
+  }
+  const code = String(url.searchParams.get("code") || "").trim();
+  const text = code ? "Nafanya Zoom Bridge authorization received. You can close this tab and return to Zoom Marketplace." : "Nafanya Zoom Bridge OAuth return endpoint is ready.";
+  return textResponse(text);
+}
+__name(handleZoomOAuthReturn, "handleZoomOAuthReturn");
 const knowledgeRuntime = createKnowledgeRuntime({
   QUERY_HINT,
   FAQ_HINT,
@@ -2733,9 +4160,13 @@ const callbackHandlerDeps = {
   CHAT_GROUP_ID,
   callQueueState,
   applyQueueResponse,
+  enqueueZoomMessages,
+  getZoomMeetingMessages,
   callTimerState,
   TIMER_DEFAULT_SECONDS,
-  getTodayTopicSourceMessageId
+  getTodayTopicSourceMessageId,
+  getTodayTopicZoomMessages,
+  splitZoomText
 };
 const messageHandlerDeps = {
   sendMessage: sendMessageWithInfoSilence,
@@ -2811,7 +4242,9 @@ const messageHandlerDeps = {
   makeManualQueueEntry,
   getSpeakerQuestions,
   getTodayTopicSourceMessageId,
-  applyQueueResponse
+  applyQueueResponse,
+  enqueueZoomMessages,
+  splitZoomText
 };
   async function handleWebhookUpdate(request, env) {
     try {
@@ -2840,11 +4273,35 @@ __name(handleWebhookUpdate, "handleWebhookUpdate");
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/") {
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/zoom/app")) {
       return handleRootRequest(env);
+    }
+    if (request.method === "GET" && url.pathname === "/zoom-only/app") {
+      return handleZoomOnlyAppRequest(env);
+    }
+    if (request.method === "GET" && url.pathname === "/status") {
+      return handleStatusRequest(env);
+    }
+    if (request.method === "GET" && url.pathname === "/oauth") {
+      return handleZoomOAuthReturn(request);
+    }
+    if (url.pathname === "/zoom/app/action") {
+      return handleZoomAppActionRequest(request, env);
+    }
+    if (url.pathname === "/zoom-only/app/action") {
+      return handleZoomOnlyAppActionRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
+    }
+    if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox" || url.pathname === "/zoom/debug")) {
+      return handleZoomBridgeRequest(request, env);
+    }
+    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/reset")) {
+      return handleZoomOnlyBridgeRequest(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/zoom/events") {
+      return handleZoomWebhookEvent(request, env);
     }
     return textResponse("Not found", 404);
   },
@@ -2886,6 +4343,13 @@ var worker_default = {
 };
 export {
   AnnouncementStateDurableObject,
+  buildZoomPayloadFromChatEvent,
+  buildZoomValidationResponse,
+  hmacSha256Hex,
+  handleRootRequest,
+  handleStatusRequest,
+  handleZoomOAuthReturn,
+  handleZoomWebhookEvent,
   LightTalkStateDurableObject,
   getQueue111Note,
   isChatGroup,
@@ -2893,6 +4357,7 @@ export {
   parseQueueEntry,
   QueueStateDurableObject,
   TimerStateDurableObject,
+  verifyZoomWebhookSignature,
   worker_default as default
 };
 //# sourceMappingURL=worker.js.map
