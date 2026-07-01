@@ -26,6 +26,7 @@ export function looksLikeOwnZoomOutput(text) {
   const value = cleanZoomChatText(text);
   if (!value) return false;
   if (/^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(value)) return true;
+  if (/\u041F\u0438\u0448\u0438\u0442\u0435\s+\u0432\s+\u0447\u0430\u0442\s+"?111"?/iu.test(value)) return true;
   if (/(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(value)) return true;
   if (/^\u042D\u0442\u0430\s+\u043A\u043E\u043C\u0430\u043D\u0434\u0430\s+\u0442\u043E\u043B\u044C\u043A\u043E\s+\u0434\u043B\u044F\s+\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430\s+\u0438\s+\u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432\.?$/iu.test(value)) return true;
   if (/^\u041A\u043E\u043C\u0430\u043D\u0434\u0430\s+\u043D\u0435\s+\u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0430:/iu.test(value)) return true;
@@ -69,7 +70,9 @@ function cleanZoomChatText(value) {
 }
 
 function cleanZoomChatSender(value) {
-  return cleanZoomChatText(value)
+  const text = cleanZoomChatText(value);
+  if (looksLikeOwnZoomOutput(text)) return "";
+  return text
     .replace(/\s+\u041A\u043E\u043C\u0443\s+\u0412\u0441\u0435\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
     .replace(/\s+\u041A\u043E\u043C\u0443\s+\S.{0,60}?\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
     .replace(/\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
@@ -479,17 +482,24 @@ async function readChatMessages(page) {
       .replace(/\s*\([^)]*\)\s*$/u, "")
       .replace(/:$/u, "")
       .trim();
+    const looksLikeOwnOutput = (value) => {
+      const text = clean(value);
+      return /^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(text)
+        || /\u041F\u0438\u0448\u0438\u0442\u0435\s+\u0432\s+\u0447\u0430\u0442\s+"?111"?/iu.test(text)
+        || /(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(text)
+        || /^\u041F\u043E\u043A\u0430\s+\u043F\u0443\u0441\u0442\u043E\.?$/iu.test(text);
+    };
     const findSenderNear = (node) => {
       let current = node;
       for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
         const senderNode = current.querySelector?.('[class*="sender"], [class*="name"], [data-testid*="sender"]');
         const sender = cleanSender(senderNode?.textContent || "");
-        if (sender && !looksLikeBody(sender)) return sender;
+        if (sender && !looksLikeBody(sender) && !looksLikeOwnOutput(sender)) return sender;
 
         let previous = current.previousElementSibling;
         for (let index = 0; previous && index < 4; index += 1, previous = previous.previousElementSibling) {
           const previousText = cleanSender(previous.textContent || "");
-          if (!previousText || looksLikeBody(previousText)) continue;
+          if (!previousText || looksLikeBody(previousText) || looksLikeOwnOutput(previousText)) continue;
           const match = previousText.match(/(?:^|\s)(\u0412\u044B|.{2,80}?)\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu);
           if (match) return cleanSender(match[1]);
           if (previousText.length <= 80 && !/^(?:\u0412\u0441\u0435|\u041D\u043E\u0432\u044B\u0439 \u0447\u0430\u0442|\u041A\u043E\u043C\u0443)$/iu.test(previousText)) {
@@ -515,6 +525,7 @@ async function readChatMessages(page) {
       const senderNode = node.querySelector('[class*="sender"], [class*="name"], [data-testid*="sender"]');
       const sender = cleanSender(senderNode?.textContent || "");
       let fallbackSender = sender || findSenderNear(node);
+      if (looksLikeOwnOutput(fallbackSender)) fallbackSender = "";
       if (!fallbackSender && looksLikeBody(text)) fallbackSender = ownParticipant;
       if (fallbackSender === "\u0412\u044B") fallbackSender = ownParticipant;
       if (looksLikeBody(fallbackSender)) fallbackSender = ownParticipant;
@@ -649,7 +660,7 @@ export function createZoomWebClientAdapter(config, logger) {
       if (!chatSeeded) {
         for (const message of messages) {
           rememberRecent(seenMessages, buildZoomSeenKey(message), 300000);
-          if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text)) {
+          if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text) || looksLikeOwnZoomOutput(message.sender)) {
             rememberSentText(sentTexts, message.text, 300000);
           }
         }
@@ -660,7 +671,7 @@ export function createZoomWebClientAdapter(config, logger) {
         return;
       }
       for (const message of messages) {
-        if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text)) {
+        if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text) || looksLikeOwnZoomOutput(message.sender)) {
           rememberSentText(sentTexts, message.text, 300000);
           continue;
         }

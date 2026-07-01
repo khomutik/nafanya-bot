@@ -694,6 +694,16 @@ function cleanZoomText(text) {
   return stripHtmlTags(text).replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{4,}/g, "\n\n\n").trim();
 }
 __name(cleanZoomText, "cleanZoomText");
+function looksLikeZoomOnlyBotEcho(text) {
+  const value = cleanZoomText(text);
+  if (!value) return false;
+  if (/^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(value)) return true;
+  if (/\u041F\u0438\u0448\u0438\u0442\u0435\s+\u0432\s+\u0447\u0430\u0442\s+"?111"?/iu.test(value)) return true;
+  if (/(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(value)) return true;
+  if (/^\u041F\u043E\u043A\u0430\s+\u043F\u0443\u0441\u0442\u043E\.?$/iu.test(value)) return true;
+  return false;
+}
+__name(looksLikeZoomOnlyBotEcho, "looksLikeZoomOnlyBotEcho");
 function splitZoomText(text, limit = ZOOM_MESSAGE_SAFE_LIMIT) {
   const clean = cleanZoomText(text);
   if (!clean) return [];
@@ -3460,9 +3470,15 @@ async function handleZoomOnlyMessage(env, payload) {
   if (normalizeZoomCommand(displayName) === normalizeZoomCommand(ZOOM_BOT_NAME)) {
     return { ok: true, handled: false, ignored: "self" };
   }
+  if (looksLikeZoomOnlyBotEcho(displayName) || looksLikeZoomOnlyBotEcho(payload?.sender) || looksLikeZoomOnlyBotEcho(payload?.senderName)) {
+    return { ok: true, handled: false, ignored: "self_echo" };
+  }
   const message = buildZoomMessage(payload);
   const text = message.text;
   if (!text) return { ok: true, handled: false };
+  if (looksLikeZoomOnlyBotEcho(text)) {
+    return { ok: true, handled: false, ignored: "self_echo" };
+  }
   const queueInfo = await callZoomOnlyQueueState(env, "get");
   const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName) || payload?.source === "zoom_web_client";
   const normalized = normalizeZoomCommand(text);
