@@ -220,6 +220,31 @@ async function fillFirst(page, selectors, value, { timeout = 1500 } = {}) {
   return false;
 }
 
+async function fillMeetingCredentials(page, config) {
+  await page.locator('#input-for-name').first().waitFor({ state: "visible", timeout: 5000 }).catch(() => null);
+  const nameFilled = await fillFirst(page, [
+    '#input-for-name',
+    'input[name="inputname"]',
+    'input[placeholder*="name" i]',
+    'input[aria-label*="name" i]',
+    'input[placeholder*="\u0438\u043c\u044f" i]',
+    'input[aria-label*="\u0438\u043c\u044f" i]',
+    'input[type="text"]',
+    'input:not([type])'
+  ], config.zoomBotName).catch(() => null);
+  const visibleName = await page.locator('#input-for-name').first().inputValue({ timeout: 1000 }).catch(() => "");
+  if (config.zoomMeetingPasscode) {
+    await fillFirst(page, [
+      'input[type="password"]',
+      'input[placeholder*="passcode" i]',
+      'input[aria-label*="passcode" i]',
+      'input[placeholder*="\u043a\u043e\u0434" i]',
+      'input[aria-label*="\u043a\u043e\u0434" i]'
+    ], config.zoomMeetingPasscode).catch(() => null);
+  }
+  return Boolean(nameFilled || visibleName);
+}
+
 async function clickButtonByText(page, patterns) {
   for (const pattern of patterns) {
     try {
@@ -512,26 +537,8 @@ export function createZoomWebClientAdapter(config, logger) {
       'button:has-text("Join from Your Browser")',
       'button:has-text("\u0412\u043e\u0439\u0442\u0438 \u0438\u0437 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430")'
     ], { timeout: 2500 }).catch(() => null);
-    await fillFirst(page, [
-      '#input-for-name',
-      'input[name="inputname"]',
-      'input[placeholder*="name" i]',
-      'input[aria-label*="name" i]',
-      'input[placeholder*="\u0438\u043c\u044f" i]',
-      'input[aria-label*="\u0438\u043c\u044f" i]',
-      'input[type="text"]',
-      'input:not([type])'
-    ], config.zoomBotName).catch(() => null);
+    await fillMeetingCredentials(page, config);
     await page.waitForTimeout(500);
-    if (config.zoomMeetingPasscode) {
-      await fillFirst(page, [
-        'input[type="password"]',
-        'input[placeholder*="passcode" i]',
-        'input[aria-label*="passcode" i]',
-        'input[placeholder*="\u043a\u043e\u0434" i]',
-        'input[aria-label*="\u043a\u043e\u0434" i]'
-      ], config.zoomMeetingPasscode).catch(() => null);
-    }
     await writeDiagnostics(page, logger, "after-name");
     if (config.zoomAvatarVideoPath) {
       await acceptAudioVideoPrompts(page);
@@ -539,6 +546,13 @@ export function createZoomWebClientAdapter(config, logger) {
       await dismissAudioVideoPrompts(page);
     }
     await writeDiagnostics(page, logger, "after-av-choice");
+    await page.waitForTimeout(2000);
+    const finalNameFilled = await fillMeetingCredentials(page, config);
+    if (!finalNameFilled) {
+      logger.warn("Zoom web client could not confirm bot name input before join");
+    }
+    await page.waitForTimeout(500);
+    await writeDiagnostics(page, logger, "after-name-final");
     await clickButtonByText(page, JOIN_BUTTON_PATTERNS);
     await page.waitForTimeout(5000);
     await writeDiagnostics(page, logger, "after-join");

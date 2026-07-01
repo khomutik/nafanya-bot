@@ -16,6 +16,8 @@ node_modules/
 .wrangler/
 __pycache__/
 *.pyc
+zoom-bridge/logs/
+zoom-bridge/assets/*.y4m
 
 # Local editor/system noise
 .DS_Store
