@@ -425,7 +425,7 @@ async function killStaleProfileBrowsers(profileDir, logger) {
   if (!profileDir || process.platform === "win32") return;
   const { execFile } = await import("node:child_process");
   await new Promise((resolve) => {
-    execFile("pkill", ["-f", `--user-data-dir=${profileDir}`], { timeout: 5000 }, (error) => {
+    execFile("pkill", ["-f", "--", `--user-data-dir=${profileDir}`], { timeout: 5000 }, (error) => {
       if (error && error.code !== 1) {
         logger.warn("Could not clear stale Zoom browser profile process:", error?.message || String(error));
       }
