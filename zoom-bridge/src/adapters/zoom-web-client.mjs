@@ -68,6 +68,16 @@ function cleanZoomChatText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function cleanZoomChatSender(value) {
+  return cleanZoomChatText(value)
+    .replace(/\s+\u041A\u043E\u043C\u0443\s+\u0412\u0441\u0435\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
+    .replace(/\s+\u041A\u043E\u043C\u0443\s+\S.{0,60}?\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
+    .replace(/\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
+    .replace(/\s*\([^)]*\)\s*$/u, "")
+    .replace(/:$/u, "")
+    .trim();
+}
+
 function stripLeadingZoomChatTime(value) {
   return cleanZoomChatText(String(value || "").replace(/^\d{1,2}:\d{2}(?:\s*(?:AM|PM))?\s*/iu, ""));
 }
@@ -83,7 +93,7 @@ function looksLikeZoomChatBody(value) {
 
 export function parseZoomChatMessageText(rawText, explicitSender = "") {
   const text = cleanZoomChatText(rawText);
-  const sender = cleanZoomChatText(explicitSender).replace(/:$/u, "");
+  const sender = cleanZoomChatSender(explicitSender);
   if (!text) return { sender, text: "" };
   if (sender && !looksLikeZoomChatBody(sender)) {
     const body = text.startsWith(sender)
@@ -116,6 +126,7 @@ export function parseZoomChatMessageText(rawText, explicitSender = "") {
 
 export function buildZoomSeenKey(message) {
   return [
+    normalizeZoomChatFingerprint(message?.id),
     normalizeZoomChatFingerprint(message?.sender),
     normalizeZoomChatFingerprint(message?.text)
   ].join("\n");
@@ -462,6 +473,8 @@ async function readChatMessages(page) {
         || /^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+\d{1,3}/iu.test(text);
     };
     const cleanSender = (value) => clean(value)
+      .replace(/\s+\u041A\u043E\u043C\u0443\s+\u0412\u0441\u0435\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
+      .replace(/\s+\u041A\u043E\u043C\u0443\s+\S.{0,60}?\s*\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
       .replace(/\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
       .replace(/\s*\([^)]*\)\s*$/u, "")
       .replace(/:$/u, "")

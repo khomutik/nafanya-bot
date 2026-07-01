@@ -80,11 +80,22 @@ test("zoom web client extracts sender and body from Zoom chat text", () => {
       text: "111"
     }
   );
+  assert.deepEqual(
+    parseZoomChatMessageText("111", "\u0410\u0410 \u041F\u043E\u0447\u0442\u0438 \u043D\u043E\u0440\u043C\u0430\u043B\u044C\u043D\u044B\u0435 \u041A\u043E\u043C\u0443 \u0412\u0441\u043520:01"),
+    {
+      sender: "\u0410\u0410 \u041F\u043E\u0447\u0442\u0438 \u043D\u043E\u0440\u043C\u0430\u043B\u044C\u043D\u044B\u0435",
+      text: "111"
+    }
+  );
 });
 
-test("zoom web client dedupe keys survive chat DOM reshuffles", () => {
+test("zoom web client dedupe keys allow repeated short commands", () => {
   assert.equal(normalizeZoomChatFingerprint("  \u041E\u0447\u0435\u0440\u0435\u0434\u044C\n\n\u041F\u043E\u043A\u0430   \u043F\u0443\u0441\u0442\u043E. "), "\u043e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442\u043e.");
   assert.equal(
+    buildZoomSeenKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "111" }),
+    buildZoomSeenKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: " 111 " })
+  );
+  assert.notEqual(
     buildZoomSeenKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "111" }),
     buildZoomSeenKey({ id: "9:\u0431", sender: "\u041c\u0430\u0448\u0430", text: " 111 " })
   );

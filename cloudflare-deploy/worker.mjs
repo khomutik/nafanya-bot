@@ -1162,7 +1162,12 @@ var QueueStateDurableObject = class {
       if (action === "add") {
         if (payload.entry?.kind === "bill_speech") {
           if (isDuplicatePendingBillSpeechEntry(queueState, payload.entry)) {
-            return Response.json({ ok: true, duplicate: true });
+            return Response.json({
+              ok: true,
+              duplicate: true,
+              publishQueue: true,
+              queueText: buildQueueText(queueState)
+            });
           }
           pushQueueHistory(queueState);
           const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
@@ -1171,7 +1176,12 @@ var QueueStateDurableObject = class {
           payload.entry.kind = null;
         } else {
           if (isDuplicatePendingQueueEntry(queueState, payload.entry)) {
-            return Response.json({ ok: true, duplicate: true });
+            return Response.json({
+              ok: true,
+              duplicate: true,
+              publishQueue: true,
+              queueText: buildQueueText(queueState)
+            });
           }
           pushQueueHistory(queueState);
         }
