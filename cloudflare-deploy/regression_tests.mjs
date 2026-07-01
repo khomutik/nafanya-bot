@@ -312,6 +312,9 @@ function testWorkerStaticRules() {
   assert.match(botPanels, /title: "\\u0427\\u0442\\u0435\\u043d\\u0438\\u0435 \\u043A\\u043D\\u0438\\u0433\\u0438"/u, "BK queue title should say 'Reading book'");
   assert.match(worker, /const trigger = normalized\.match\(\/\^\(222\|333\|444\)/u, "Bill queue should still accept plain repeat triggers");
   assert.match(worker, /lines\.push\(`\$\{marker\} \$\{index \+ 1\}\. \$\{entry\.author\}/u, "Queue text should show visible row numbers");
+  assert.match(worker, /function formatQueueAuthorLabel\(author\)[\s\S]*return cleanAuthor \|\|/u, "Queue author should not include Telegram or Zoom source markers");
+  assert.match(worker, /function isDuplicatePendingQueueEntry[\s\S]*existing\.status === "pending"[\s\S]*normalizeQueueEntryKey\(existing\.author\) === author/u, "Queue should ignore duplicate pending entries from the same person");
+  assert.match(worker, /function isDuplicatePendingBillSpeechEntry[\s\S]*\(111\|222\|333\|444\)[\s\S]*duplicate: true/u, "Bill queue should ignore repeated 111 before converting it into 222/333/444");
   assert.match(worker, /var QUEUE_FOOTER_LINES = \[\];/u, "Queue text should not append Telegram or Zoom footer links");
   const queueModeText = botPanels.match(/export const QUEUE_MODE_TEXT = \{[\s\S]*?\n\};/u)?.[0] || "";
   assert.doesNotMatch(queueModeText, /help|t\.me\/\+mta_CKQY2c05ODRi|us06web\.zoom\.us\/j\/5487249245/u, "Queue prompts should stay clean without help or link footers");
@@ -380,9 +383,8 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");
   assert.doesNotMatch(worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only message handler must not call Telegram send/copy helpers");
   assert.doesNotMatch(worker.match(/async function publishZoomOnlyMeetingCommand[\s\S]*?__name\(publishZoomOnlyMeetingCommand/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendAnnouncementCopyToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only publisher must not call Telegram send/copy helpers");
-  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0431\\u043A" \? "bk"/u, "Zoom-only admin command should open BK queue");
-  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0431\\u0438\\u043B\\u043B" \? "bill"/u, "Zoom-only admin command should open Bill queue");
-  assert.match(worker, /normalized === "\\u043E\\u0442\\u043A\\u0440\\u044B\\u0442\\u044C \\u0440\\u0430\\u0431\\u043E\\u0447\\u043A\\u0430" \? "rs"/u, "Zoom-only admin command should open RS queue");
+  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*\\u0431\\u0438\\u043B\\u043B[\s\S]*return "bill"/u, "Zoom command should open Bill queue explicitly");
+  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*return "bk"[\s\S]*return "rs"/u, "Zoom command should open BK and RS queues explicitly");
 }
 
 function testQueueBehavior() {
@@ -404,7 +406,7 @@ function testQueueBehavior() {
   );
   assert.equal(entry?.block, "bk", "BK queue 111 should create a BK queue entry");
   assert.equal(entry?.label, "111 \u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "BK queue entry should keep text after 111");
-  assert.equal(entry?.author, "\u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D (Telegram)", "Queue author should include the Telegram source marker");
+  assert.equal(entry?.author, "\u0410\u043D\u043D\u0430 \u041B\u0438\u043E\u043D", "Queue author should show the name without a Telegram source marker");
 
   const convertedEntry = parseQueueEntry(
     {

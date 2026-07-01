@@ -643,13 +643,49 @@ function stripTelegramHandles(value) {
   return compact(String(value || "").replace(/\s*\(@[A-Za-z0-9_]{2,64}\)/gu, "").replace(/@([A-Za-z0-9_]{2,64})/gu, "$1"));
 }
 __name(stripTelegramHandles, "stripTelegramHandles");
-function formatQueueAuthorLabel(author, source = "Telegram") {
-  const cleanAuthor = stripTelegramHandles(author) || "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
-  const cleanSource = stripTelegramHandles(source) || "Telegram";
-  const sourcePattern = new RegExp(`\\s*\\(${cleanSource.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\s*$`, "u");
-  return `${cleanAuthor.replace(sourcePattern, "").trim()} (${cleanSource})`;
+function cleanQueueDisplayName(value) {
+  return stripTelegramHandles(value).replace(/\s*\((?:Telegram|Zoom)\)\s*$/giu, "").trim();
+}
+__name(cleanQueueDisplayName, "cleanQueueDisplayName");
+function formatQueueAuthorLabel(author) {
+  const cleanAuthor = cleanQueueDisplayName(author);
+  return cleanAuthor || "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
 }
 __name(formatQueueAuthorLabel, "formatQueueAuthorLabel");
+function normalizeQueueEntryKey(value) {
+  return normalizeText2(cleanQueueDisplayName(value)).replace(/\s+/g, " ");
+}
+__name(normalizeQueueEntryKey, "normalizeQueueEntryKey");
+function isDuplicatePendingQueueEntry(state, entry) {
+  const author = normalizeQueueEntryKey(entry.author);
+  const block = String(entry.block || "");
+  const label = normalizeQueueEntryKey(entry.label);
+  return state.entries.some((existing) => existing.status === "pending" && normalizeQueueEntryKey(existing.author) === author && String(existing.block || "") === block && normalizeQueueEntryKey(existing.label) === label);
+}
+__name(isDuplicatePendingQueueEntry, "isDuplicatePendingQueueEntry");
+function isDuplicatePendingBillSpeechEntry(state, entry) {
+  const author = normalizeQueueEntryKey(entry.author);
+  const note = normalizeQueueEntryKey(entry.speechNote || "");
+  return state.entries.some((existing) => {
+    if (existing.status !== "pending" || normalizeQueueEntryKey(existing.author) !== author) return false;
+    const match = String(existing.label || "").match(/^(111|222|333|444)(?:\s+(.*))?$/u);
+    return Boolean(match) && normalizeQueueEntryKey(match[2] || "") === note;
+  });
+}
+__name(isDuplicatePendingBillSpeechEntry, "isDuplicatePendingBillSpeechEntry");
+function getZoomPayloadDisplayName(payload) {
+  const user = payload?.user || payload?.from || {};
+  return cleanQueueDisplayName(user.displayName || user.display_name || user.senderName || user.sender_name || user.name || user.nickname || payload?.displayName || payload?.display_name || payload?.senderName || payload?.sender_name || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
+}
+__name(getZoomPayloadDisplayName, "getZoomPayloadDisplayName");
+function getZoomOpenQueueMode(text) {
+  const normalized = normalizeZoomCommand(text);
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+(?:\u0431\u0438\u043B\u043B|\u0431\u0438\u043B\u043B\u0430)$/u.test(normalized)) return "bill";
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0431\u043A$/u.test(normalized)) return "bk";
+  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0440\u0430\u0431\u043E\u0447\u043A\u0430$/u.test(normalized)) return "rs";
+  return null;
+}
+__name(getZoomOpenQueueMode, "getZoomOpenQueueMode");
 function stripHtmlTags(text) {
   return String(text || "").replace(/<[^>]+>/g, "");
 }
@@ -688,7 +724,7 @@ function makeQueueEntry(message, block, label, rawText, extra = {}) {
   const messageId = message?.message_id ?? getCurrentTimestamp();
   return {
     id: `${chatId}_${messageId}_${Math.random().toString(36).slice(2, 8)}`,
-    author: formatQueueAuthorLabel(extra.author ?? getAuthorLabel(message), extra.source || "Telegram"),
+    author: formatQueueAuthorLabel(extra.author ?? getAuthorLabel(message)),
     rawText,
     label,
     block,
@@ -925,6 +961,10 @@ function getEntryBlock(state, entry) {
 }
 __name(getEntryBlock, "getEntryBlock");
 function addQueueEntryToState(state, entry) {
+  if (isDuplicatePendingQueueEntry(state, entry)) {
+    ensureSingleActiveEntry(state);
+    return;
+  }
   state.entries.push(entry);
   if (state.mode === "bill") {
     const priorityOrder = { first: 1, "222": 2, "333": 3, "444": 4 };
@@ -1100,12 +1140,20 @@ var QueueStateDurableObject = class {
         });
       }
       if (action === "add") {
-        pushQueueHistory(queueState);
         if (payload.entry?.kind === "bill_speech") {
+          if (isDuplicatePendingBillSpeechEntry(queueState, payload.entry)) {
+            return Response.json({ ok: true, duplicate: true });
+          }
+          pushQueueHistory(queueState);
           const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
           payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
           payload.entry.block = getBillSpeechBlock(nextCode);
           payload.entry.kind = null;
+        } else {
+          if (isDuplicatePendingQueueEntry(queueState, payload.entry)) {
+            return Response.json({ ok: true, duplicate: true });
+          }
+          pushQueueHistory(queueState);
         }
         addQueueEntryToState(queueState, payload.entry);
         const previousMessageId = queueState.queueMessageId;
@@ -1554,12 +1602,20 @@ function runQueueStateAction(queueState, action, payload = {}, buildText = build
     return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
   }
   if (action === "add") {
-    pushQueueHistory(state);
     if (payload.entry?.kind === "bill_speech") {
+      if (isDuplicatePendingBillSpeechEntry(state, payload.entry)) {
+        return { state, response: { ok: true, duplicate: true } };
+      }
+      pushQueueHistory(state);
       const nextCode = getNextBillSpeechCode(state, payload.entry.author);
       payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
       payload.entry.block = getBillSpeechBlock(nextCode);
       payload.entry.kind = null;
+    } else {
+      if (isDuplicatePendingQueueEntry(state, payload.entry)) {
+        return { state, response: { ok: true, duplicate: true } };
+      }
+      pushQueueHistory(state);
     }
     addQueueEntryToState(state, payload.entry);
     state.queueMessageId = null;
@@ -3118,8 +3174,7 @@ function isZoomBridgeAuthorized(request, env) {
 }
 __name(isZoomBridgeAuthorized, "isZoomBridgeAuthorized");
 function buildZoomMessage(payload) {
-  const user = payload?.user || payload?.from || {};
-  const name = stripTelegramHandles(user.displayName || user.name || user.nickname || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
+  const name = getZoomPayloadDisplayName(payload);
   return {
     text: String(payload?.text || payload?.message || "").trim(),
     message_id: payload?.messageId || payload?.id || getCurrentTimestamp(),
@@ -3203,6 +3258,16 @@ async function handleZoomBridgeMessage(env, payload) {
   const queueInfo = await callQueueState(env, "get");
   const isAdmin = isZoomAdminPayload(payload);
   const normalized = normalizeZoomCommand(text);
+  const openMode = getZoomOpenQueueMode(text);
+  if (openMode) {
+    if (!isAdmin) {
+      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const result = await callQueueState(env, "open", { mode: openMode });
+    await applyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
   const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
   if (meetingKey) {
     if (!isAdmin) {
@@ -3313,11 +3378,6 @@ async function handleZoomBridgeMessage(env, payload) {
   return { ok: true, handled: false };
 }
 __name(handleZoomBridgeMessage, "handleZoomBridgeMessage");
-function getZoomPayloadDisplayName(payload) {
-  const user = payload?.user || payload?.from || {};
-  return stripTelegramHandles(user.displayName || user.name || user.nickname || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
-}
-__name(getZoomPayloadDisplayName, "getZoomPayloadDisplayName");
 async function applyZoomOnlyQueueResponse(env, result) {
   if (result.publishQueue && result.queueText) {
     await enqueueZoomOnlyMessages(env, splitZoomText(result.queueText));
@@ -3360,6 +3420,16 @@ async function handleZoomOnlyMessage(env, payload) {
   const queueInfo = await callZoomOnlyQueueState(env, "get");
   const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName);
   const normalized = normalizeZoomCommand(text);
+  const openMode = getZoomOpenQueueMode(text);
+  if (openMode) {
+    if (!isAdmin) {
+      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
+      return { ok: true, handled: true, denied: true };
+    }
+    const result = await callZoomOnlyQueueState(env, "open", { mode: openMode });
+    await applyZoomOnlyQueueResponse(env, result);
+    return { ok: true, handled: true };
+  }
   const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
   if (meetingKey) {
     if (!isAdmin) {
@@ -3378,12 +3448,6 @@ async function handleZoomOnlyMessage(env, payload) {
     return { ok: true, handled: true };
   }
   if (isAdmin) {
-    const openMode = normalized === "\u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0431\u043A" ? "bk" : normalized === "\u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0431\u0438\u043B\u043B" ? "bill" : normalized === "\u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0440\u0430\u0431\u043E\u0447\u043A\u0430" ? "rs" : null;
-    if (openMode) {
-      const result = await callZoomOnlyQueueState(env, "open", { mode: openMode });
-      await applyZoomOnlyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
     const manual = parseZoomManualQueueCommand(text);
     if (manual) {
       if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
