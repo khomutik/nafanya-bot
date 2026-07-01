@@ -436,8 +436,17 @@ async function writeDiagnostics(page, logger, label) {
 
 async function sendChatText(page, text) {
   const selectors = [
+    '[role="textbox"][aria-placeholder*="message" i]',
+    '[role="textbox"][aria-placeholder*="\u0441\u043E\u043E\u0431\u0449\u0435\u043D" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"][aria-placeholder*="message" i]',
+    '[contenteditable="true"][aria-placeholder*="\u0441\u043E\u043E\u0431\u0449\u0435\u043D" i]',
+    '[contenteditable="true"][data-placeholder*="message" i]',
+    '[contenteditable="true"][data-placeholder*="\u0441\u043E\u043E\u0431\u0449\u0435\u043D" i]',
+    '[contenteditable="plaintext-only"]',
     'textarea[aria-label*="chat" i]',
     'textarea[placeholder*="chat" i]',
+    'textarea[placeholder*="\u0441\u043E\u043E\u0431\u0449\u0435\u043D" i]',
     'textarea[aria-label*="\u0447\u0430\u0442" i]',
     'div[contenteditable="true"][aria-label*="chat" i]',
     'div[contenteditable="true"][aria-label*="\u0447\u0430\u0442" i]',
@@ -453,13 +462,32 @@ async function sendChatText(page, text) {
           await page.keyboard.insertText(text);
         });
         await page.keyboard.press("Enter");
-        return { sent: true, ack: true };
+        await page.waitForTimeout(700);
+        if (await chatContainsText(page, text)) {
+          return { sent: true, ack: true };
+        }
+        await clickFirst(page, [
+          'button[aria-label*="send" i]',
+          'button[aria-label*="\u043E\u0442\u043F\u0440\u0430\u0432" i]',
+          '[data-testid*="send" i]',
+          'button:has-text("\u041E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C")',
+          'button:has-text("Send")'
+        ], { timeout: 1000 }).catch(() => null);
+        await page.waitForTimeout(1000);
+        return await chatContainsText(page, text) ? { sent: true, ack: true } : { sent: false, ack: false };
       }
     } catch {
       // Try next selector.
     }
   }
   return { sent: false, ack: false };
+}
+
+async function chatContainsText(page, text) {
+  const expected = normalizeZoomChatFingerprint(text);
+  if (!expected) return false;
+  const messages = await readChatMessages(page).catch(() => []);
+  return messages.some((message) => normalizeZoomChatFingerprint(message.text).includes(expected));
 }
 
 async function readChatMessages(page) {
