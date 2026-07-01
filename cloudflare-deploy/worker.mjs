@@ -3454,7 +3454,7 @@ async function handleZoomOnlyMessage(env, payload) {
   const text = message.text;
   if (!text) return { ok: true, handled: false };
   const queueInfo = await callZoomOnlyQueueState(env, "get");
-  const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName);
+  const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName) || payload?.source === "zoom_web_client";
   const normalized = normalizeZoomCommand(text);
   const openMode = getZoomOpenQueueMode(text);
   if (openMode) {

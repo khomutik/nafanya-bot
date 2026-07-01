@@ -386,6 +386,7 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
   assert.match(worker, /function buildZoomOnlyPayloadFromAppCommand[\s\S]*isZoomOnlyAppControl: true/u, "Zoom-only app should be a trusted control surface because Zoom SDK may hide user role");
   assert.match(worker, /Boolean\(payload\?\.isZoomOnlyAppControl\) \|\| isZoomAdminPayload/u, "Zoom-only app commands should pass admin checks without relying on unsupported Zoom SDK user context");
+  assert.match(worker, /payload\?\.source === "zoom_web_client"/u, "Zoom-only web client bridge commands should be trusted because the bridge is already secret-protected");
   assert.match(worker, /normalizedName\.replace\(\/\\s\*\\\(\[\^\)\]\*\\\)\\s\*\$\/u/u, "Zoom admin names should tolerate Zoom role labels in parentheses");
   assert.match(worker, /normalizedWithoutEllipsis\.length >= 6 && adminName\.startsWith\(normalizedWithoutEllipsis\)/u, "Zoom admin names should tolerate truncated participant labels");
   assert.match(worker, /action === "auto_open"[\s\S]*response: \{ ok: true, state \}/u, "Zoom-only queue should be able to auto-open without publishing an empty queue first");

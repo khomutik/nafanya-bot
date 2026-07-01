@@ -104,7 +104,11 @@ async function run() {
   }
 
   await adapter.start({
-    onMessage: async (payload) => workerClient.sendIncomingMessage(payload)
+    onMessage: async (payload) => {
+      const displayName = payload?.user?.displayName || payload?.senderName || payload?.sender || "";
+      logger.info(`Zoom incoming message: sender=${JSON.stringify(displayName)} text=${JSON.stringify(payload?.text || "")}`);
+      return workerClient.sendIncomingMessage(payload);
+    }
   });
   logger.info("Nafanya Zoom bridge started");
   await pollOnce();
