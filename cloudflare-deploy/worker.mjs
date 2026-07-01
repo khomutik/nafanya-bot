@@ -3227,8 +3227,14 @@ function isZoomAdminName(env, name) {
   const normalizedName = normalizeZoomCommand(name);
   if (!normalizedName) return false;
   const normalizedWithoutParentheses = normalizedName.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+  const normalizedWithoutEllipsis = normalizedWithoutParentheses.replace(/(?:\.\.\.|…)\s*$/u, "").trim();
   const adminNames = getZoomAdminNames(env);
-  return adminNames.includes(normalizedName) || adminNames.includes(normalizedWithoutParentheses);
+  return adminNames.some((adminName) => {
+    if (adminName === normalizedName || adminName === normalizedWithoutParentheses || adminName === normalizedWithoutEllipsis) {
+      return true;
+    }
+    return normalizedWithoutEllipsis.length >= 6 && adminName.startsWith(normalizedWithoutEllipsis);
+  });
 }
 __name(isZoomAdminName, "isZoomAdminName");
 function normalizeZoomCommand(text) {
