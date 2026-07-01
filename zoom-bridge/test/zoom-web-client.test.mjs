@@ -5,6 +5,7 @@ import {
   buildZoomSeenKey,
   buildZoomWebClientUrl,
   hasRecentSentText,
+  looksLikeOwnZoomOutput,
   normalizeZoomChatFingerprint,
   parseZoomChatMessageText,
   rememberSentText,
@@ -21,6 +22,14 @@ test("zoom web client ignores messages from the bot itself", () => {
     true
   );
   assert.equal(shouldIgnoreZoomMessage({ sender: "\u041c\u0430\u0448\u0430" }, "\u041d\u0430\u0444\u0430\u043d\u044f"), false);
+});
+
+test("zoom web client recognizes its own visible output even when Zoom drops sender", () => {
+  assert.equal(looksLikeOwnZoomOutput("\u041E\u0447\u0435\u0440\u0435\u0434\u044C\n\n\u041E\u0427\u0415\u0420\u0415\u0414\u042C \u041E\u0422\u041A\u0420\u042B\u0422\u0410\n\n\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E."), true);
+  assert.equal(looksLikeOwnZoomOutput("\u0427\u0430\u0441\u0442\u044C 2/3 \u0414\u043B\u0438\u043D\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442"), true);
+  assert.equal(looksLikeOwnZoomOutput("\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."), true);
+  assert.equal(looksLikeOwnZoomOutput("\u043E\u0447\u0435\u0440\u0435\u0434\u044C"), false);
+  assert.equal(looksLikeOwnZoomOutput("111"), false);
 });
 
 test("zoom web client builds worker payloads without secrets", () => {

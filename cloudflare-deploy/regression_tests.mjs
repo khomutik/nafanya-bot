@@ -362,7 +362,9 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /url\.pathname === "\/zoom-only\/webhook"/u, "Zoom-only webhook endpoint should exist");
   assert.match(worker, /url\.pathname === "\/zoom-only\/outbox"/u, "Zoom-only outbox endpoint should exist");
   assert.match(worker, /url\.pathname === "\/zoom-only\/status"/u, "Zoom-only status endpoint should exist");
+  assert.match(worker, /url\.pathname === "\/zoom-only\/reset"/u, "Zoom-only reset endpoint should exist");
   assert.match(worker, /url\.pathname === "\/zoom-only\/app\/action"/u, "Zoom-only app action endpoint should exist");
+  assert.match(worker, /action === "clear_zoom_only_state"/u, "Zoom-only polluted state should be resettable");
   assert.match(worker, /zoomOnlyQueueState: createEmptyQueueState\(\)/u, "Zoom-only queue should live in separate announcement state");
   assert.match(worker, /zoomOnlyOutbox: \[\]/u, "Zoom-only outbox should be separate from legacy Zoom outbox");
   assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*callZoomOnlyQueueState/u, "Zoom-only messages should use the separate queue state");

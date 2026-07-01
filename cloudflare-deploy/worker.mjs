@@ -896,13 +896,11 @@ function stripQueueHtml(text) {
 }
 __name(stripQueueHtml, "stripQueueHtml");
 function buildZoomOnlyQueueText(state) {
-  const base = [
-    stripQueueHtml(getQueueModeTitle(state.mode)),
-    stripQueueHtml(getQueueInstruction(state.mode)),
-    "",
-    state.isOpen ? QUEUE_OPEN_LABEL : QUEUE_CLOSED_LABEL,
-    ""
-  ];
+  const title = stripQueueHtml(getQueueModeTitle(state.mode));
+  const instruction = state.mode === "bill"
+    ? "\u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\" \u0434\u043b\u044f \u0432\u044b\u0441\u043a\u0430\u0437\u044b\u0432\u0430\u043d\u0438\u044f \u0438\u043b\u0438 \"\u0438\u0433\u0440\u0430 \u043d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430 \u043e\u0442 1 \u0434\u043e 500\" \u0434\u043b\u044f \u0443\u0447\u0430\u0441\u0442\u0438\u044f \u0432 \u0438\u0433\u0440\u0435 \"500 \u043f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432\""
+    : stripQueueHtml(getQueueInstruction(state.mode));
+  const base = [title, instruction, "", state.isOpen ? QUEUE_OPEN_LABEL : QUEUE_CLOSED_LABEL, ""];
   if (!state.entries.length) {
     base.push("\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E.");
     return base.join("\n");
@@ -1798,10 +1796,23 @@ var AnnouncementStateDurableObject = class {
         await this.saveState(announcementState);
         return Response.json(queueResult.response);
       }
+      if (action === "clear_zoom_only_state") {
+        announcementState.zoomOnlyQueueState = createEmptyQueueState();
+        announcementState.zoomOnlyOutbox = [];
+        announcementState.zoomOnlyOutboxNextId = 1;
+        await this.saveState(announcementState);
+        return Response.json({ ok: true });
+      }
       if (action === "zoom_only_status") {
+        const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
         return Response.json({
           ok: true,
-          queue: announcementState.zoomOnlyQueueState,
+          queue: {
+            isOpen: Boolean(queue.isOpen),
+            mode: queue.mode || "bk",
+            entriesCount: Array.isArray(queue.entries) ? queue.entries.length : 0,
+            historyCount: Array.isArray(queue.history) ? queue.history.length : 0
+          },
           outboxSize: announcementState.zoomOnlyOutbox.length,
           nextOutboxId: announcementState.zoomOnlyOutboxNextId
         });
@@ -3502,6 +3513,10 @@ async function handleZoomOnlyBridgeRequest(request, env) {
     const result = await callAnnouncementState(env, "zoom_only_status");
     return Response.json(result);
   }
+  if (request.method === "POST" && url.pathname === "/zoom-only/reset") {
+    const result = await callAnnouncementState(env, "clear_zoom_only_state");
+    return Response.json(result);
+  }
   return textResponse("Not found", 404);
 }
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
@@ -4188,7 +4203,7 @@ var worker_default = {
     if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox" || url.pathname === "/zoom/debug")) {
       return handleZoomBridgeRequest(request, env);
     }
-    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status")) {
+    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/reset")) {
       return handleZoomOnlyBridgeRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/zoom/events") {

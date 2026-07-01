@@ -22,6 +22,17 @@ export function shouldIgnoreZoomMessage(message, botName) {
     || (sender.length >= 6 && (bot.startsWith(sender) || sender.startsWith(bot) || sender.includes(bot) || bot.includes(sender)));
 }
 
+export function looksLikeOwnZoomOutput(text) {
+  const value = cleanZoomChatText(text);
+  if (!value) return false;
+  if (/^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(value)) return true;
+  if (/(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(value)) return true;
+  if (/^\u042D\u0442\u0430\s+\u043A\u043E\u043C\u0430\u043D\u0434\u0430\s+\u0442\u043E\u043B\u044C\u043A\u043E\s+\u0434\u043B\u044F\s+\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430\s+\u0438\s+\u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432\.?$/iu.test(value)) return true;
+  if (/^\u041A\u043E\u043C\u0430\u043D\u0434\u0430\s+\u043D\u0435\s+\u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0430:/iu.test(value)) return true;
+  if (/^\u041F\u043E\u043A\u0430\s+\u043F\u0443\u0441\u0442\u043E\.?$/iu.test(value)) return true;
+  return false;
+}
+
 export function buildZoomChatPayload(message) {
   return {
     id: message.id,
@@ -544,7 +555,7 @@ export function createZoomWebClientAdapter(config, logger) {
       if (!chatSeeded) {
         for (const message of messages) {
           rememberRecent(seenMessages, buildZoomSeenKey(message), 300000);
-          if (shouldIgnoreZoomMessage(message, config.zoomBotName)) {
+          if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text)) {
             rememberSentText(sentTexts, message.text, 300000);
           }
         }
@@ -555,7 +566,7 @@ export function createZoomWebClientAdapter(config, logger) {
         return;
       }
       for (const message of messages) {
-        if (shouldIgnoreZoomMessage(message, config.zoomBotName)) {
+        if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text)) {
           rememberSentText(sentTexts, message.text, 300000);
           continue;
         }
@@ -563,7 +574,11 @@ export function createZoomWebClientAdapter(config, logger) {
         const seenKey = buildZoomSeenKey(message);
         if (hasRecent(seenMessages, seenKey)) continue;
         rememberRecent(seenMessages, seenKey, 120000);
-        await onMessage?.(buildZoomChatPayload(message));
+        try {
+          await onMessage?.(buildZoomChatPayload(message));
+        } catch (error) {
+          logger.warn("Zoom web client could not deliver chat message to Worker:", error?.message || String(error));
+        }
       }
     } catch (error) {
       logger.warn("Zoom web client chat poll failed:", error?.message || String(error));
