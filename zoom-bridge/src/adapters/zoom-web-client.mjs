@@ -72,11 +72,20 @@ function stripLeadingZoomChatTime(value) {
   return cleanZoomChatText(String(value || "").replace(/^\d{1,2}:\d{2}(?:\s*(?:AM|PM))?\s*/iu, ""));
 }
 
+function looksLikeZoomChatBody(value) {
+  const text = cleanZoomChatText(value).toLowerCase();
+  if (!text) return false;
+  return /^(?:111|222|333|444)$/u.test(text)
+    || /^\/?\u0431\u0438\u043B\u043B(?:\s+\d{1,3})?$/iu.test(text)
+    || /^(?:\u043E\u0442\u043A\u0440\u044B\u0442\u044C|\u043E\u0442\u043A\u0440\u043E\u0439)\s+/iu.test(text)
+    || /^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+\d{1,3}/iu.test(text);
+}
+
 export function parseZoomChatMessageText(rawText, explicitSender = "") {
   const text = cleanZoomChatText(rawText);
   const sender = cleanZoomChatText(explicitSender).replace(/:$/u, "");
   if (!text) return { sender, text: "" };
-  if (sender) {
+  if (sender && !looksLikeZoomChatBody(sender)) {
     const body = text.startsWith(sender)
       ? stripLeadingZoomChatTime(text.slice(sender.length).replace(/^[:\s]+/u, ""))
       : text;
@@ -445,12 +454,57 @@ async function readChatMessages(page) {
       ...document.querySelectorAll('[class*="chat"] [class*="message"], [class*="Chat"] [class*="message"], [data-testid*="chat"] [class*="message"], [data-testid*="chat"] *')
     ];
     const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const looksLikeBody = (value) => {
+      const text = clean(value).toLowerCase();
+      return /^(?:111|222|333|444)$/u.test(text)
+        || /^\/?\u0431\u0438\u043B\u043B(?:\s+\d{1,3})?$/iu.test(text)
+        || /^(?:\u043E\u0442\u043A\u0440\u044B\u0442\u044C|\u043E\u0442\u043A\u0440\u043E\u0439)\s+/iu.test(text)
+        || /^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+\d{1,3}/iu.test(text);
+    };
+    const cleanSender = (value) => clean(value)
+      .replace(/\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu, "")
+      .replace(/\s*\([^)]*\)\s*$/u, "")
+      .replace(/:$/u, "")
+      .trim();
+    const findSenderNear = (node) => {
+      let current = node;
+      for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+        const senderNode = current.querySelector?.('[class*="sender"], [class*="name"], [data-testid*="sender"]');
+        const sender = cleanSender(senderNode?.textContent || "");
+        if (sender && !looksLikeBody(sender)) return sender;
+
+        let previous = current.previousElementSibling;
+        for (let index = 0; previous && index < 4; index += 1, previous = previous.previousElementSibling) {
+          const previousText = cleanSender(previous.textContent || "");
+          if (!previousText || looksLikeBody(previousText)) continue;
+          const match = previousText.match(/(?:^|\s)(\u0412\u044B|.{2,80}?)\s+\d{1,2}:\d{2}(?:\s*(?:AM|PM))?$/iu);
+          if (match) return cleanSender(match[1]);
+          if (previousText.length <= 80 && !/^(?:\u0412\u0441\u0435|\u041D\u043E\u0432\u044B\u0439 \u0447\u0430\u0442|\u041A\u043E\u043C\u0443)$/iu.test(previousText)) {
+            return previousText;
+          }
+        }
+      }
+      return "";
+    };
+    const ownParticipant = (() => {
+      const items = [...document.querySelectorAll('[class*="participant"], [aria-label*="participant" i], [aria-label*="\u0443\u0447\u0430\u0441\u0442" i], [role="listitem"]')];
+      for (const item of items) {
+        const text = clean(item.textContent || "");
+        if (!/(?:\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440|host|me|\u044F)/iu.test(text)) continue;
+        const withoutRole = cleanSender(text.replace(/\s*\([^)]*(?:\u044F|me|host|\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440)[^)]*\)\s*/iu, " "));
+        if (withoutRole) return withoutRole;
+      }
+      return "\u0412\u044B";
+    })();
     return nodes.map((node, index) => {
       const text = clean(node.textContent);
       if (!text) return null;
       const senderNode = node.querySelector('[class*="sender"], [class*="name"], [data-testid*="sender"]');
-      const sender = clean(senderNode?.textContent || "").replace(/:$/u, "");
-      const fallbackSender = sender || clean(text.split(":")[0] || "");
+      const sender = cleanSender(senderNode?.textContent || "");
+      let fallbackSender = sender || findSenderNear(node);
+      if (!fallbackSender && looksLikeBody(text)) fallbackSender = ownParticipant;
+      if (fallbackSender === "\u0412\u044B") fallbackSender = ownParticipant;
+      if (looksLikeBody(fallbackSender)) fallbackSender = ownParticipant;
       const messageText = sender && text.startsWith(sender) ? clean(text.slice(sender.length).replace(/^[:\s]+/u, "")) : text;
       return {
         id: `${index}:${text}`,

@@ -73,6 +73,13 @@ test("zoom web client extracts sender and body from Zoom chat text", () => {
       text: "\u043c\u043e\u043b\u0438\u0442\u0432\u0430"
     }
   );
+  assert.deepEqual(
+    parseZoomChatMessageText("111", "111"),
+    {
+      sender: "",
+      text: "111"
+    }
+  );
 });
 
 test("zoom web client dedupe keys survive chat DOM reshuffles", () => {
