@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildZoomChatPayload,
+  buildZoomCommandDedupeKey,
   buildZoomContentKey,
   buildZoomSeenKey,
   buildZoomWebClientUrl,
+  dedupeZoomChatMessages,
   hasRecentSentText,
   looksLikeOwnZoomOutput,
   normalizeZoomChatFingerprint,
@@ -108,6 +110,43 @@ test("zoom web client dedupe keys allow repeated short commands", () => {
     buildZoomContentKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" }),
     buildZoomContentKey({ id: "9:\u0431", sender: "\u041c\u0430\u0448\u0430", text: " \u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b " })
   );
+});
+
+test("zoom web client collapses duplicated Zoom DOM fragments for fixed commands", () => {
+  const messages = dedupeZoomChatMessages([
+    { id: "1", sender: "\u041c\u0430\u0448\u0430", text: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" },
+    { id: "2", sender: "\u041c\u0430\u0448\u0430 \u041a\u043e\u043c\u0443 \u0412\u0441\u0435 19:17", text: " \u043c\u0438\u043d\u0443\u0442\u0430   \u0442\u0438\u0448\u0438\u043d\u044b " }
+  ]);
+  assert.equal(messages.length, 1);
+  assert.equal(
+    buildZoomCommandDedupeKey({ sender: "\u041c\u0430\u0448\u0430", text: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" }),
+    "\u043c\u0438\u043d\u0443\u0442\u0430\u0442\u0438\u0448\u0438\u043d\u044b"
+  );
+});
+
+test("zoom web client does not collapse distinct fixed commands or queue entries", () => {
+  const commands = [
+    "12 \u0448\u0430\u0433\u043e\u0432",
+    "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439",
+    "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f",
+    "\u0442\u0435\u043c\u044b",
+    "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f",
+    "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439",
+    "\u0441\u043b\u0443\u0436\u0435\u043d\u0438\u044f",
+    "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
+    "\u0441\u0441\u044b\u043b\u043a\u0438"
+  ];
+  const messages = dedupeZoomChatMessages(commands.map((text, index) => ({
+    id: String(index),
+    sender: "\u041c\u0430\u0448\u0430",
+    text
+  })));
+  assert.equal(messages.length, commands.length);
+  assert.equal(buildZoomCommandDedupeKey({ sender: "\u041c\u0430\u0448\u0430", text: "111" }), "");
+  assert.equal(dedupeZoomChatMessages([
+    { id: "1", sender: "\u0410\u043d\u043d\u0430", text: "111" },
+    { id: "2", sender: "\u0412\u0435\u0440\u0430", text: "111" }
+  ]).length, 2);
 });
 
 test("zoom web client suppresses recently sent bot fragments", () => {

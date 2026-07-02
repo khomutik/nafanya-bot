@@ -2238,10 +2238,17 @@ function plainZoomText(text) {
   return String(text || "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/<br\s*\/?>/giu, "\n").replace(/<\/p>/giu, "\n\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 }
 __name(plainZoomText, "plainZoomText");
+function isManualZoomPart(text) {
+  return /^\s*\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+:/iu.test(String(text || ""));
+}
+__name(isManualZoomPart, "isManualZoomPart");
 function getZoomMeetingMessages(key) {
   const configured = ZOOM_MEETING_MESSAGE_TEXTS[key];
   const parts = Array.isArray(configured) ? configured : [configured];
-  return parts.flatMap((part) => splitZoomText(plainZoomText(part))).filter(Boolean);
+  return parts.flatMap((part) => {
+    const plain = plainZoomText(part);
+    return isManualZoomPart(plain) ? [plain] : splitZoomText(plain);
+  }).filter(Boolean);
 }
 __name(getZoomMeetingMessages, "getZoomMeetingMessages");
 async function callZoomOnlyQueueState(env, queueAction, queuePayload = {}) {
@@ -3929,6 +3936,8 @@ var ZOOM_APP_ALLOWED_COMMANDS = new Set([
   "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u043a",
   "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u043b",
   "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0430",
+  "\u0442\u0435\u043c\u0430",
+  "\u0442\u0435\u043c\u044b",
   "\u043e\u0447\u0435\u0440\u0435\u0434\u044c"
 ]);
 function escapeHtml(value) {

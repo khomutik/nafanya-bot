@@ -145,6 +145,38 @@ export function buildZoomContentKey(message) {
   ].join("\n");
 }
 
+export function buildZoomCommandDedupeKey(message) {
+  const text = normalizeZoomChatFingerprint(message?.text);
+  if (!text) return "";
+  const fixedCommandPattern = /^(?:минут[ауы]\s+тишины|молитва|преамбула|новичку|12\s+шагов|двенадцать\s+шагов|12\s+традиций|двенадцать\s+традиций|правила\s+собрания|темы|темы\s+собрания|7\s*традиция|7-я\s+традиция|седьмая\s+традиция|правила\s+чайной|служения|свободные\s+служения|расписание|расписание\s+собраний|ссылки|ссылка\s+на\s+zoom|ссылка\s+на\s+зум|ежик|ёжик|билл)$/iu;
+  const adminCommandPattern = /^(?:открыть|открой)\s+(?:билл|билла|бк|рабочка)$|^(?:высказался|пропускает|отменить|закрыть\s+очередь)$/iu;
+  if (!fixedCommandPattern.test(text) && !adminCommandPattern.test(text)) return "";
+  return normalizeZoomChatCompact(text);
+}
+
+export function dedupeZoomChatMessages(messages) {
+  const seenExact = new Set();
+  const seenCommands = new Set();
+  const result = [];
+  for (const message of messages) {
+    const textKey = normalizeZoomChatFingerprint(message?.text);
+    if (!textKey) continue;
+    const commandKey = buildZoomCommandDedupeKey(message);
+    if (commandKey) {
+      if (seenCommands.has(commandKey)) continue;
+      seenCommands.add(commandKey);
+    }
+    const exactKey = [
+      normalizeZoomChatFingerprint(message?.sender),
+      textKey
+    ].join("\n");
+    if (seenExact.has(exactKey)) continue;
+    seenExact.add(exactKey);
+    result.push(message);
+  }
+  return result;
+}
+
 function rememberRecent(map, key, ttlMs) {
   if (!key.trim()) return;
   const now = Date.now();
@@ -652,14 +684,14 @@ async function readChatMessages(page) {
       };
     }).filter((item) => item && item.text);
   });
-  return rawMessages.map((message) => {
+  return dedupeZoomChatMessages(rawMessages.map((message) => {
     const parsed = parseZoomChatMessageText(message.text, message.sender);
     return {
       ...message,
       sender: parsed.sender || message.sender,
       text: parsed.text
     };
-  }).filter((item) => item.text);
+  }).filter((item) => item.text));
 }
 
 async function killStaleProfileBrowsers(profileDir, logger) {
@@ -776,6 +808,10 @@ export function createZoomWebClientAdapter(config, logger) {
       if (!chatSeeded) {
         for (const message of messages) {
           rememberRecent(seenMessages, buildZoomSeenKey(message), 300000);
+          const commandKey = buildZoomCommandDedupeKey(message);
+          if (commandKey) {
+            rememberRecent(seenMessages, `command:${commandKey}`, 300000);
+          }
           if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text) || looksLikeOwnZoomOutput(message.sender)) {
             rememberSentText(sentTexts, message.text, 300000);
           }
@@ -794,10 +830,15 @@ export function createZoomWebClientAdapter(config, logger) {
         if (hasRecentSentText(sentTexts, message.text)) continue;
         const seenKey = buildZoomSeenKey(message);
         const contentKey = buildZoomContentKey(message);
+        const commandKey = buildZoomCommandDedupeKey(message);
+        if (commandKey && hasRecent(seenMessages, `command:${commandKey}`)) continue;
         if (hasRecent(seenMessages, contentKey)) continue;
         if (hasRecent(seenMessages, seenKey)) continue;
         rememberRecent(seenMessages, seenKey, 120000);
         rememberRecent(seenMessages, contentKey, 15000);
+        if (commandKey) {
+          rememberRecent(seenMessages, `command:${commandKey}`, 15000);
+        }
         try {
           await onMessage?.(buildZoomChatPayload(message));
         } catch (error) {

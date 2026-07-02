@@ -7,6 +7,7 @@ import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256H
 import { handleGroupQueueAndGameMessage, handleServiceMessages, handleTechThreadMessage, handleWebhookMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
+import { ZOOM_MEETING_MESSAGE_TEXTS } from "./zoom_meeting_texts.js";
 
 const root = new URL("../", import.meta.url);
 const serviceAccountPath = process.env.SA_PATH || new URL("../\u0414\u043e\u0441\u0442\u0443\u043f\u044b/nafanya-493610-8cea2c43c14d.json", import.meta.url);
@@ -297,10 +298,13 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /isMeetingPanelCommand\(text, \{ allowBare: !isChatGroup\(chatId, threadId\) \}\)/u, "Group chat should require 'panel meeting' to open meeting panel");
   assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*TODAY_TOPIC_MESSAGES\.find/u, "Today's topic button should be selected from the new topic-message map");
   assert.match(worker, /function getTodayTopicZoomMessages\(\)[\s\S]*getZoomMeetingMessages\(key\)/u, "Zoom topic messages should use the weekday theme text");
+  assert.match(worker, /function isManualZoomPart\(text\)/u, "Zoom meeting messages should detect manually split parts");
+  assert.match(worker, /isManualZoomPart\(plain\) \? \[plain\] : splitZoomText\(plain\)/u, "Manually split Zoom parts should not be split again");
   assert.match(callbackHandlers, /if \(key === "today_topic"\)[\s\S]*copyTechMessageToGroup\(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId\)/u, "Today's topic button should copy the source message from TECHVED");
   assert.match(callbackHandlers, /getTodayTopicZoomMessages\(\)/u, "Telegram topic button should enqueue the current Zoom theme text");
   assert.match(callbackHandlers, /\\u0421\\u0435\\u0433\\u043E\\u0434\\u043D\\u044F \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F \\u043D\\u0435\\u0442/u, "No-topic days should say today's meeting is absent");
   assert.match(worker, /"\\u0442\\u0435\\u043C\\u044B \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F": "today_topic"/u, "Zoom should understand 'meeting topics'");
+  assert.match(worker, /ZOOM_APP_ALLOWED_COMMANDS[\s\S]*"\\u0442\\u0435\\u043c\\u044b"/u, "Zoom app manual input should allow short 'topics' command");
   assert.match(worker, /"\\u0440\\u0430\\u0441\\u043F\\u0438\\u0441\\u0430\\u043D\\u0438\\u0435": "meeting_schedule"/u, "Zoom should understand schedule command");
   assert.match(worker, /sendYozhikToGroup\(env\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Yozhik command should publish the actual Yozhik text");
   assert.match(worker, /sendBillToGroup\(env, zoomBillNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Bill command should publish the actual Bill text");
@@ -309,6 +313,20 @@ function testWorkerStaticRules() {
   for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
     assert.match(zoomMeetingTexts, new RegExp(`"${key}"`, "u"), `Zoom meeting text should include ${key}`);
   }
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.steps12.length, 2, "Zoom 12 steps should be manually split into two parts");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length, 2, "Zoom 12 traditions should be manually split into two parts");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0428\u0410\u0413\u041E\u0412 \u0410\u0410/u, "Zoom 12 steps part 1 should keep its manual header");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[1], /^\u0427\u0430\u0441\u0442\u044c 2\/2: 8/u, "Zoom 12 steps part 2 should keep its manual header");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u0419 \u0410\u0410/u, "Zoom 12 traditions part 1 should keep its manual header");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[1], /^\u0427\u0430\u0441\u0442\u044c 2\/2: 8/u, "Zoom 12 traditions part 2 should keep its manual header");
+  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.steps12.join("\n"), /\u0427\u0430\u0441\u0442\u044c 1\/2\s*\n\u0427\u0430\u0441\u0442\u044c 1\/2:/u, "Zoom 12 steps should not get a duplicate part header");
+  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.traditions12.join("\n"), /\u0427\u0430\u0441\u0442\u044c 1\/2\s*\n\u0427\u0430\u0441\u0442\u044c 1\/2:/u, "Zoom 12 traditions should not get a duplicate part header");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0], /\u0427\u0415\u0422\u0412\u0415\u0420\u0413[\s\S]*\u0416\u0438\u0442\u044c \u0442\u0440\u0435\u0437\u0432\u044b\u043c\u0438/u, "Zoom schedule should put newcomer/living sober on Thursday");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0], /\u041f\u042f\u0422\u041d\u0418\u0426\u0410[\s\S]*12 \u0448\u0430\u0433\u043e\u0432 \u0438 12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439[\s\S]*\u0421\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0430\u044f/u, "Zoom schedule should put 12x12 and speaker meeting on Friday");
+  assert.ok(
+    ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0].indexOf("\u0421\u043e\u0431\u0440\u0430\u043d\u0438\u044f \u0432 Zoom") < ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0].indexOf("\u041c\u044b \u0432 \u0422\u0435\u043b\u0435\u0433\u0440\u0430\u043c"),
+    "Zoom schedule should list Zoom before Telegram"
+  );
   assert.match(worker, /tech_11_00`, item\.weekday, 11, 0, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 11:00");
   assert.match(worker, /tech_21_20`, item\.weekday, 21, 20, \(\) => sendAnnouncementCopyToGroup/u, "weekday tech announcements should run at 21:20");
   assert.match(worker, /\\u041f\\u043e\\u0434\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0430\\u044e/u, "service reminder OK button should say 'Confirm'");
