@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildZoomChatPayload,
+  buildZoomContentKey,
   buildZoomSeenKey,
   buildZoomWebClientUrl,
   hasRecentSentText,
@@ -102,6 +103,10 @@ test("zoom web client dedupe keys allow repeated short commands", () => {
   assert.notEqual(
     buildZoomSeenKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "111" }),
     buildZoomSeenKey({ id: "9:\u0431", sender: "\u041c\u0430\u0448\u0430", text: " 111 " })
+  );
+  assert.equal(
+    buildZoomContentKey({ id: "1:\u0430", sender: "\u041c\u0430\u0448\u0430", text: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" }),
+    buildZoomContentKey({ id: "9:\u0431", sender: "\u041c\u0430\u0448\u0430", text: " \u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b " })
   );
 });
 

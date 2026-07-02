@@ -138,6 +138,13 @@ export function buildZoomSeenKey(message) {
   ].join("\n");
 }
 
+export function buildZoomContentKey(message) {
+  return [
+    normalizeZoomChatFingerprint(message?.sender),
+    normalizeZoomChatFingerprint(message?.text)
+  ].join("\n");
+}
+
 function rememberRecent(map, key, ttlMs) {
   if (!key.trim()) return;
   const now = Date.now();
@@ -786,8 +793,11 @@ export function createZoomWebClientAdapter(config, logger) {
         }
         if (hasRecentSentText(sentTexts, message.text)) continue;
         const seenKey = buildZoomSeenKey(message);
+        const contentKey = buildZoomContentKey(message);
+        if (hasRecent(seenMessages, contentKey)) continue;
         if (hasRecent(seenMessages, seenKey)) continue;
         rememberRecent(seenMessages, seenKey, 120000);
+        rememberRecent(seenMessages, contentKey, 15000);
         try {
           await onMessage?.(buildZoomChatPayload(message));
         } catch (error) {
