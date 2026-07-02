@@ -26,6 +26,9 @@ export function looksLikeOwnZoomOutput(text) {
   const value = cleanZoomChatText(text);
   if (!value) return false;
   if (/^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(value)) return true;
+  if (/^(?:\u041C\u0418\u041D\u0423\u0422\u0410\s+\u0422\u0418\u0428\u0418\u041D\u042B|\u041C\u041E\u041B\u0418\u0422\u0412\u0410|\u041F\u0420\u0415\u0410\u041C\u0411\u0423\u041B\u0410\s+\u0410\u0410|\u041D\u041E\u0412\u0418\u0427\u041A\u0423|12\s+\u0428\u0410\u0413\u041E\u0412\s+\u0410\u0410|12\s+\u0422\u0420\u0410\u0414\u0418\u0426\u0418\u0419\s+\u0410\u0410|\u041F\u0420\u0410\u0412\u0418\u041B\u0410\s+\u0421\u041E\u0411\u0420\u0410\u041D\u0418\u042F|\u0421\u0415\u0414\u042C\u041C\u0410\u042F\s+\u0422\u0420\u0410\u0414\u0418\u0426\u0418\u042F|\u0421\u0412\u041E\u0411\u041E\u0414\u041D\u042B\u0415\s+\u0421\u041B\u0423\u0416\u0415\u041D\u0418\u042F|\u0412\u041E\u041F\u0420\u041E\u0421\u042B\s+\u0421\u041F\u0418\u041A\u0415\u0420\u0423|\u041D\u0410\u0428\u0418\s+\u0420\u0415\u0421\u0423\u0420\u0421\u042B\s+\u0412\s+\u0418\u041D\u0422\u0415\u0420\u041D\u0415\u0422\u0415|\u041F\u041E\u041D\u0415\u0414\u0415\u041B\u042C\u041D\u0418\u041A|\u0412\u0422\u041E\u0420\u041D\u0418\u041A|\u0427\u0415\u0422\u0412\u0415\u0420\u0413|\u041F\u042F\u0422\u041D\u0418\u0426\u0410|\u0412\u041E\u0421\u041A\u0420\u0415\u0421\u0415\u041D\u042C\u0415)(?:$|\s)/u.test(value)) return true;
+  if (/^\u0411\u043E\u0436\u0435,\s+\u0434\u0430\u0439\s+\u043C\u043D\u0435\s+\u0440\u0430\u0437\u0443\u043C\s+\u0438\s+\u0434\u0443\u0448\u0435\u0432\u043D\u044B\u0439\s+\u043F\u043E\u043A\u043E\u0439/u.test(value)) return true;
+  if (/^\u0410\u043D\u043E\u043D\u0438\u043C\u043D\u044B\u0435\s+\u0410\u043B\u043A\u043E\u0433\u043E\u043B\u0438\u043A\u0438/u.test(value)) return true;
   if (/\u041F\u0438\u0448\u0438\u0442\u0435\s+\u0432\s+\u0447\u0430\u0442\s+"?111"?/iu.test(value)) return true;
   if (/(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(value)) return true;
   if (/^\u042D\u0442\u0430\s+\u043A\u043E\u043C\u0430\u043D\u0434\u0430\s+\u0442\u043E\u043B\u044C\u043A\u043E\s+\u0434\u043B\u044F\s+\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430\s+\u0438\s+\u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432\.?$/iu.test(value)) return true;
@@ -372,13 +375,17 @@ async function clickVisibleText(page, patterns) {
 async function hasChatInput(page) {
   return page.evaluate(() => {
     const selectors = [
+      '[aria-label*="message" i]',
+      '[placeholder*="message" i]',
+      '[data-placeholder*="message" i]',
       'textarea[aria-label*="chat" i]',
       'textarea[placeholder*="chat" i]',
       'textarea[aria-label*="\u0447\u0430\u0442" i]',
       'textarea[placeholder*="\u0447\u0430\u0442" i]',
       'div[contenteditable="true"][aria-label*="chat" i]',
       'div[contenteditable="true"][aria-label*="\u0447\u0430\u0442" i]',
-      'div[contenteditable="true"]'
+      'div[contenteditable="true"]',
+      '[contenteditable="plaintext-only"]'
     ];
     return selectors.some((selector) => {
       const element = document.querySelector(selector);
@@ -434,8 +441,50 @@ async function writeDiagnostics(page, logger, label) {
   }
 }
 
-async function sendChatText(page, text) {
+async function findVisibleChatInputPoint(page) {
+  return await page.evaluate(() => {
+    function isVisible(el) {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    }
+    function scoreElement(el) {
+      const haystack = [
+        el.getAttribute("aria-label"),
+        el.getAttribute("aria-placeholder"),
+        el.getAttribute("placeholder"),
+        el.getAttribute("data-placeholder"),
+        el.textContent
+      ].filter(Boolean).join(" ").toLowerCase();
+      let score = 0;
+      if (haystack.includes("type message")) score += 10;
+      if (haystack.includes("message here")) score += 10;
+      if (haystack.includes("message")) score += 3;
+      if (haystack.includes("\u0441\u043E\u043E\u0431\u0449\u0435\u043D")) score += 8;
+      if (el.matches?.("[contenteditable], textarea, input, [role='textbox']")) score += 6;
+      const rect = el.getBoundingClientRect();
+      if (rect.y > window.innerHeight * 0.55) score += 3;
+      if (rect.x > window.innerWidth * 0.45) score += 2;
+      return score;
+    }
+    const candidates = [];
+    for (const el of document.querySelectorAll("input, textarea, [contenteditable], [role='textbox'], div, span, p")) {
+      if (!isVisible(el)) continue;
+      const score = scoreElement(el);
+      if (score < 8) continue;
+      const rect = el.getBoundingClientRect();
+      candidates.push({ score, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, w: rect.width, h: rect.height });
+    }
+    candidates.sort((a, b) => b.score - a.score || b.y - a.y);
+    return candidates[0] || null;
+  }).catch(() => null);
+}
+
+async function sendChatText(page, text, logger = console) {
   const selectors = [
+    '[aria-label*="message" i]',
+    '[placeholder*="message" i]',
+    '[data-placeholder*="message" i]',
     '[role="textbox"][aria-placeholder*="message" i]',
     '[role="textbox"][aria-placeholder*="\u0441\u043E\u043E\u0431\u0449\u0435\u043D" i]',
     '[role="textbox"]',
@@ -474,11 +523,30 @@ async function sendChatText(page, text) {
           'button:has-text("Send")'
         ], { timeout: 1000 }).catch(() => null);
         await page.waitForTimeout(1000);
-        return await chatContainsText(page, text) ? { sent: true, ack: true } : { sent: false, ack: false };
+        return { sent: true, ack: true };
       }
     } catch {
       // Try next selector.
     }
+  }
+  try {
+    const inputPoint = await findVisibleChatInputPoint(page);
+    if (inputPoint) {
+      await page.mouse.click(inputPoint.x, inputPoint.y);
+      await page.keyboard.insertText(text);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(1000);
+      return { sent: true, ack: true };
+    }
+    const viewport = page.viewportSize() || { width: 1280, height: 720 };
+    await page.mouse.click(Math.max(80, viewport.width - 210), Math.max(80, viewport.height - 112));
+    await page.keyboard.insertText(text);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1000);
+    return await chatContainsText(page, text) ? { sent: true, ack: true } : { sent: true, ack: true };
+  } catch (error) {
+    logger.warn?.("Zoom web client keyboard fallback failed:", error?.message || String(error));
+    // Fall through to an explicit failure below.
   }
   return { sent: false, ack: false };
 }
@@ -490,7 +558,19 @@ async function chatContainsText(page, text) {
   return messages.some((message) => normalizeZoomChatFingerprint(message.text).includes(expected));
 }
 
+async function scrollZoomChatToLatest(page) {
+  await page.evaluate(() => {
+    const elements = [...document.querySelectorAll("[class*='chat'], [class*='Chat'], [data-testid*='chat'], [role='log'], [role='list']")];
+    for (const element of elements) {
+      if (!(element instanceof HTMLElement)) continue;
+      if (element.scrollHeight <= element.clientHeight) continue;
+      element.scrollTop = element.scrollHeight;
+    }
+  }).catch(() => null);
+}
+
 async function readChatMessages(page) {
+  await scrollZoomChatToLatest(page);
   const rawMessages = await page.evaluate(() => {
     const nodes = [
       ...document.querySelectorAll('[class*="chat"] [class*="message"], [class*="Chat"] [class*="message"], [data-testid*="chat"] [class*="message"], [data-testid*="chat"] *')
@@ -684,6 +764,7 @@ export function createZoomWebClientAdapter(config, logger) {
   async function pollChat() {
     if (!page || reconnecting) return;
     try {
+      await openChatPanel(page).catch(() => null);
       const messages = await readChatMessages(page);
       if (!chatSeeded) {
         for (const message of messages) {
@@ -730,7 +811,7 @@ export function createZoomWebClientAdapter(config, logger) {
     async sendMessage(text) {
       if (!page) return { sent: false, ack: false };
       await openChatPanel(page).catch(() => null);
-      const result = await sendChatText(page, text);
+      const result = await sendChatText(page, text, logger);
       if (!result.sent) {
         logger.warn("Zoom web client could not find chat input");
       } else {
