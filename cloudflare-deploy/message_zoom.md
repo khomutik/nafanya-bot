@@ -338,20 +338,6 @@ theme\_monday
 
 👉 Пишите "доп.тема: " в чате и ведущий добавит ваш вопрос к темам собрания
 
-
-
-📲 Телеграм:
-
-https://t.me/+mta\_CKQY2c05ODRi
-
-📞 Zoom:
-
-https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
-
-
-
-
-
 theme\_tuesday
 
 **ВТОРНИК**
@@ -378,20 +364,6 @@ theme\_tuesday
 
 👉 Пишите "доп.тема:" в чате и ведущий добавит ваш вопрос в темы собрания
 
-
-
-📲 Телеграм:
-
-https://t.me/+mta\_CKQY2c05ODRi
-
-📞 Zoom:
-
-https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
-
-
-
-
-
 theme\_thursday
 
 **ЧЕТВЕРГ**
@@ -414,20 +386,6 @@ theme\_thursday
 
 👉 Пишите "доп.тема: " в чате и ведущий добавит ваш вопрос в темы собрания
 
-
-
-📲 Телеграм:
-
-https://t.me/+mta\_CKQY2c05ODRi
-
-📞 Zoom:
-
-https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
-
-
-
-
-
 theme\_friday
 
 **ПЯТНИЦА**
@@ -446,20 +404,6 @@ theme\_friday
 
 👉 Пишите "доп.тема: " в чате и ведущий добавит ваш вопрос в темы собрания
 
-
-
-📲 Телеграм:
-
-https://t.me/+mta\_CKQY2c05ODRi
-
-📞 Zoom:
-
-https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
-
-
-
-
-
 theme\_sunday
 
 **ВОСКРЕСЕНЬЕ**
@@ -477,20 +421,6 @@ theme\_sunday
 ‼️ДОПОЛНИТЕЛЬНЫЕ ТЕМЫ
 
 👉 Пишите "доп.тема: " в чате и ведущий добавит ваш вопрос в темы собрания
-
-
-
-📲 Телеграм:
-
-https://t.me/+mta\_CKQY2c05ODRi
-
-📞 Zoom:
-
-https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
-
-
-
-
 
 meeting\_schedule
 
