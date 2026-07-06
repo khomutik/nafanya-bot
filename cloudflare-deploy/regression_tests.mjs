@@ -315,6 +315,22 @@ function testWorkerStaticRules() {
   }
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.steps12.length, 2, "Zoom 12 steps should be manually split into two parts");
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length, 2, "Zoom 12 traditions should be manually split into two parts");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules.length, 1, "Zoom meeting rules should stay in one message");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0].length, 946, "Zoom meeting rules should fit the one-message limit");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /^\u041F\u0420\u0410\u0412\u0418\u041B\u0410 \u0421\u041E\u0411\u0420\u0410\u041D\u0418\u042F\n\n\u2705 /u, "Zoom meeting rules should use the requested plain header");
+  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /\*\*/u, "Zoom meeting rules should not include Markdown bold markers");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /\u043E\u0441\u0442\u0430\u0442\u044C\u0441\u044F \u0441\u043B\u0443\u0448\u0430\u0442\u0435\u043B\u0435\u043C$/u, "Zoom meeting rules should use the requested ending");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition.length, 1, "Zoom seventh tradition should stay in one message");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0].length, 511, "Zoom seventh tradition should fit the one-message limit");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /^\u0421\u0415\u0414\u042C\u041C\u0410\u042F \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u042F\n\n\u2705 /u, "Zoom seventh tradition should use the requested plain header");
+  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\*\*/u, "Zoom seventh tradition should not include Markdown bold markers");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\u0421\u0431\u0435\u0440 \(\u0421\u0411\u041F\)[\s\S]*\u043F\u0438\u0448\u0438\u0442\u0435 "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F"/u, "Zoom seventh tradition should use the requested Sber and comment text");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\u0411\u043B\u0430\u0433\u043E\u0434\u0430\u0440\u0438\u043C \u0437\u0430 \u0443\u0447\u0430\u0441\u0442\u0438\u0435 \u0438 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0443! \uD83D\uDE4F$/u, "Zoom seventh tradition should use the requested ending");
+  for (const [key, messages] of Object.entries(ZOOM_MEETING_MESSAGE_TEXTS)) {
+    for (const message of messages) {
+      assert.doesNotMatch(message, /\*\*/u, `Zoom meeting text ${key} should not include Markdown bold markers`);
+    }
+  }
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u041D\u0410\u0428\u0418 \u0420\u0415\u0421\u0423\u0420\u0421\u042B \u0412 \u0418\u041D\u0422\u0415\u0420\u041D\u0415\u0422\u0415[\s\S]*https:\/\/pochtinormalnye\.ru\/[\s\S]*\u0421\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0432 Zoom:[\s\S]*https:\/\/us06web\.zoom\.us\/j\/5487249245/u, "Zoom links message should include the site and Zoom meeting");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u0413\u0440\u0443\u043F\u043F\u0430 \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+mta_CKQY2c05ODRi[\s\S]*\u0418\u043D\u0444\u043E \u041A\u0430\u043D\u0430\u043B \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u, "Zoom links message should include Telegram group and info channel");
   assert.equal((ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0].match(/https:\/\/pochtinormalnye\.ru\//gu) || []).length, 1, "Zoom links message should include the site once");
