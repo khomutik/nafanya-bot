@@ -7,6 +7,7 @@ import {
   buildZoomSeenKey,
   buildZoomWebClientUrl,
   dedupeZoomChatMessages,
+  getZoomMeetingPresence,
   hasRecentSentText,
   looksLikeOwnZoomOutput,
   normalizeZoomChatFingerprint,
@@ -14,6 +15,36 @@ import {
   rememberSentText,
   shouldIgnoreZoomMessage
 } from "../src/adapters/zoom-web-client.mjs";
+
+function createPresencePage({ body, title = "", url = "https://example.test/", hasInput = false }) {
+  return {
+    async evaluate(fn) {
+      const previousDocument = globalThis.document;
+      const previousWindow = globalThis.window;
+      const input = hasInput
+        ? {
+            getBoundingClientRect: () => ({ width: 240, height: 32 }),
+            ownerDocument: null
+          }
+        : null;
+      globalThis.document = {
+        title,
+        body: { innerText: body },
+        querySelector: () => input
+      };
+      globalThis.window = {
+        location: { href: url },
+        getComputedStyle: () => ({ display: "block", visibility: "visible" })
+      };
+      try {
+        return fn();
+      } finally {
+        globalThis.document = previousDocument;
+        globalThis.window = previousWindow;
+      }
+    }
+  };
+}
 
 test("zoom web client ignores messages from the bot itself", () => {
   assert.equal(
@@ -63,6 +94,29 @@ test("zoom web client builds worker payloads without secrets", () => {
 test("zoom web client uses direct browser join URL", () => {
   const url = buildZoomWebClientUrl("https://us06web.zoom.us/j/5487249245?pwd=abc");
   assert.equal(url, "https://us06web.zoom.us/wc/join/5487249245?pwd=abc");
+});
+
+test("zoom web client detects a live meeting page", async () => {
+  const presence = await getZoomMeetingPresence(createPresencePage({
+    body: "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438 \u0427\u0430\u0442 \u041F\u043E\u0434\u0435\u043B\u0438\u0442\u044C \u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u0435",
+    title: "\u0417\u0430\u043B \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u043B\u044C\u043D\u043E\u0439 \u043A\u043E\u043D\u0444\u0435\u0440\u0435\u043D\u0446\u0438\u0438",
+    hasInput: true
+  }));
+  assert.equal(presence.reachable, true);
+  assert.equal(presence.hasChatInput, true);
+  assert.equal(presence.hasMeetingUi, true);
+  assert.equal(presence.meetingEnded, false);
+});
+
+test("zoom web client detects an ended meeting page", async () => {
+  const presence = await getZoomMeetingPresence(createPresencePage({
+    body: "This meeting has been ended by host",
+    title: "Zoom",
+    hasInput: false
+  }));
+  assert.equal(presence.reachable, true);
+  assert.equal(presence.hasChatInput, false);
+  assert.equal(presence.meetingEnded, true);
 });
 
 test("zoom web client extracts sender and body from Zoom chat text", () => {

@@ -13,6 +13,7 @@ const USE_AUDIO_VIDEO_PATTERNS = [
   /\u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c/iu
 ];
 const DIAGNOSTICS_DIR = "/tmp/nafanya-zoom-bridge";
+const MISSING_MEETING_RECONNECT_TICKS = 3;
 
 export function shouldIgnoreZoomMessage(message, botName) {
   const sender = normalizeZoomChatFingerprint(message?.sender);
@@ -639,6 +640,53 @@ async function hasChatInput(page) {
   }).catch(() => false);
 }
 
+export async function getZoomMeetingPresence(page) {
+  return page.evaluate(() => {
+    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const body = clean(document.body?.innerText || "");
+    const title = clean(document.title || "");
+    const selectors = [
+      '[aria-label*="message" i]',
+      '[placeholder*="message" i]',
+      '[data-placeholder*="message" i]',
+      'textarea[aria-label*="chat" i]',
+      'textarea[placeholder*="chat" i]',
+      'textarea[aria-label*="\u0447\u0430\u0442" i]',
+      'textarea[placeholder*="\u0447\u0430\u0442" i]',
+      'div[contenteditable="true"][aria-label*="chat" i]',
+      'div[contenteditable="true"][aria-label*="\u0447\u0430\u0442" i]',
+      'div[contenteditable="true"]',
+      '[contenteditable="plaintext-only"]'
+    ];
+    const hasChatInput = selectors.some((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
+    const hasMeetingUi = hasChatInput
+      || /(?:leave|mute|unmute|participants|chat|share|stop video|\u0437\u0432\u0443\u043a|\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d|\u0432\u0438\u0434\u0435\u043e|\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a|\u0447\u0430\u0442|\u043f\u043e\u0434\u0435\u043b\u0438\u0442\u044c|\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u0435)/iu.test(body);
+    const meetingEnded = /(?:meeting has ended|meeting has been ended|ended by host|host has ended this meeting|you have left the meeting|this meeting has been ended|\u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044f\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430|\u0432\u0441\u0442\u0440\u0435\u0447\u0430\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430)/iu.test(body);
+    return {
+      reachable: true,
+      hasChatInput,
+      hasMeetingUi,
+      meetingEnded,
+      title,
+      url: window.location.href
+    };
+  }).catch((error) => ({
+    reachable: false,
+    hasChatInput: false,
+    hasMeetingUi: false,
+    meetingEnded: false,
+    title: "",
+    url: "",
+    error: error?.message || String(error)
+  }));
+}
+
 async function dismissAudioVideoPrompts(page, logger) {
   for (let index = 0; index < 6; index += 1) {
     const clicked = await forceClickFirst(page, [
@@ -939,6 +987,7 @@ export function createZoomWebClientAdapter(config, logger) {
   const sentTexts = new Map();
   let reconnecting = false;
   let chatSeeded = false;
+  let missingMeetingTicks = 0;
 
   async function closeBrowser() {
     await page?.close().catch(() => null);
@@ -1060,6 +1109,7 @@ export function createZoomWebClientAdapter(config, logger) {
     }
     await openChatPanel(page);
     chatSeeded = false;
+    missingMeetingTicks = 0;
     await writeDiagnostics(page, logger, "after-chat");
     logger.info("Zoom web client adapter joined or is waiting for admission");
   }
@@ -1081,6 +1131,16 @@ export function createZoomWebClientAdapter(config, logger) {
     if (!page || reconnecting) return;
     try {
       await openChatPanel(page).catch(() => null);
+      const presence = await getZoomMeetingPresence(page);
+      if (!presence.reachable || presence.meetingEnded || (!presence.hasChatInput && !presence.hasMeetingUi)) {
+        missingMeetingTicks += 1;
+        logger.warn(`Zoom web client lost meeting view (${missingMeetingTicks}/${MISSING_MEETING_RECONNECT_TICKS}): title=${JSON.stringify(presence.title)} url=${JSON.stringify(presence.url)} ended=${presence.meetingEnded}`);
+        if (missingMeetingTicks >= MISSING_MEETING_RECONNECT_TICKS) {
+          await reconnect();
+        }
+        return;
+      }
+      missingMeetingTicks = 0;
       const messages = await readChatMessages(page);
       if (!chatSeeded) {
         for (const message of messages) {
