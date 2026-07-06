@@ -335,12 +335,16 @@ function testWorkerStaticRules() {
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u0413\u0440\u0443\u043F\u043F\u0430 \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+mta_CKQY2c05ODRi[\s\S]*\u0418\u043D\u0444\u043E \u041A\u0430\u043D\u0430\u043B \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u, "Zoom links message should include Telegram group and info channel");
   assert.equal((ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0].match(/https:\/\/pochtinormalnye\.ru\//gu) || []).length, 1, "Zoom links message should include the site once");
   assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /max\.ru|MAX|\u041C\u0410\u0425/u, "Zoom links message should not include the old MAX fallback");
-  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0428\u0410\u0413\u041E\u0412 \u0410\u0410/u, "Zoom 12 steps part 1 should keep its manual header");
-  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[1], /^\u0427\u0430\u0441\u0442\u044c 2\/2: 8/u, "Zoom 12 steps part 2 should keep its manual header");
-  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u0419 \u0410\u0410/u, "Zoom 12 traditions part 1 should keep its manual header");
-  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[1], /^\u0427\u0430\u0441\u0442\u044c 2\/2: 8/u, "Zoom 12 traditions part 2 should keep its manual header");
-  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.steps12.join("\n"), /\u0427\u0430\u0441\u0442\u044c 1\/2\s*\n\u0427\u0430\u0441\u0442\u044c 1\/2:/u, "Zoom 12 steps should not get a duplicate part header");
-  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.traditions12.join("\n"), /\u0427\u0430\u0441\u0442\u044c 1\/2\s*\n\u0427\u0430\u0441\u0442\u044c 1\/2:/u, "Zoom 12 traditions should not get a duplicate part header");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[0], /^12 \u0428\u0410\u0413\u041E\u0412 \u0410\u0410/u, "Zoom 12 steps part 1 should omit the part label");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[1], /^8\uFE0F\u20E3/u, "Zoom 12 steps part 2 should omit the part label");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[0], /^12 \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u0419 \u0410\u0410/u, "Zoom 12 traditions part 1 should omit the part label");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[1], /^8\uFE0F\u20E3/u, "Zoom 12 traditions part 2 should omit the part label");
+  assert.doesNotMatch(`${ZOOM_MEETING_MESSAGE_TEXTS.steps12.join("\n")}\n${ZOOM_MEETING_MESSAGE_TEXTS.traditions12.join("\n")}`, /\u0427\u0430\u0441\u0442\u044C [12]\/2:/u, "Zoom split messages should not include part labels");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.tea_rules[0].length, 836, "Zoom tea rules should use the requested one-message text");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.tea_rules[0], /^\u2615\uFE0F \u0414\u043E\u0431\u0440\u043E \u043F\u043E\u0436\u0430\u043B\u043E\u0432\u0430\u0442\u044C \u0432 \u0432\u0438\u0440\u0442\u0443\u0430\u043B\u044C\u043D\u0443\u044E \u0447\u0430\u0439\u043D\u0443\u044E!\n\n\u2705/u, "Zoom tea rules should use the requested heading and compact rules");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.tea_rules[0], /\*\u0421\u043B\u0443\u0436\u0430\u0449\u0438\u0435/u, "Zoom tea rules should keep the requested service note marker");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.theme_monday[0].length, 279, "Zoom Monday theme should use the requested one-message text");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.theme_monday[0], /^\u041F\u041E\u041D\u0415\u0414\u0415\u041B\u042C\u041D\u0418\u041A\n\n\u0422\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F\n_______________\n\n/u, "Zoom Monday theme should use the requested plain underline");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0], /\u0427\u0415\u0422\u0412\u0415\u0420\u0413[\s\S]*\u0416\u0438\u0442\u044c \u0442\u0440\u0435\u0437\u0432\u044b\u043c\u0438/u, "Zoom schedule should put newcomer/living sober on Thursday");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_schedule[0], /\u041f\u042f\u0422\u041d\u0418\u0426\u0410[\s\S]*12 \u0448\u0430\u0433\u043e\u0432 \u0438 12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439[\s\S]*\u0421\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0430\u044f/u, "Zoom schedule should put 12x12 and speaker meeting on Friday");
   assert.ok(
