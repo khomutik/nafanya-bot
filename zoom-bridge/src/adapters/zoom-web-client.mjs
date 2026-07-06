@@ -285,6 +285,21 @@ async function fillFirst(page, selectors, value, { timeout = 1500 } = {}) {
   return false;
 }
 
+async function forceClickFirst(page, selectors, { timeout = 1500 } = {}) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if (await locator.isVisible({ timeout })) {
+        await locator.click({ force: true, timeout });
+        return true;
+      }
+    } catch {
+      // Try next selector.
+    }
+  }
+  return false;
+}
+
 async function fillMeetingCredentials(page, config) {
   await page.locator('#input-for-name').first().waitFor({ state: "visible", timeout: 5000 }).catch(() => null);
   const nameFilled = await fillFirst(page, [
@@ -310,6 +325,17 @@ async function fillMeetingCredentials(page, config) {
   return Boolean(nameFilled || visibleName);
 }
 
+async function hasZoomBotBlockedPage(page) {
+  const signInToJoinVisible = await page.locator('button:has-text("Sign in to join"), [role="button"]:has-text("Sign in to join"), a:has-text("Sign in to join")')
+    .first()
+    .isVisible({ timeout: 2000 })
+    .catch(() => false);
+  if (signInToJoinVisible) return true;
+  return page.locator("body").innerText({ timeout: 2000 })
+    .then((text) => /automated bots aren't allowed|sign in to join/iu.test(text))
+    .catch(() => false);
+}
+
 async function clickButtonByText(page, patterns) {
   for (const pattern of patterns) {
     try {
@@ -320,6 +346,120 @@ async function clickButtonByText(page, patterns) {
       }
     } catch {
       // Try next pattern.
+    }
+  }
+  return false;
+}
+
+async function dismissZoomCookieBanner(page) {
+  return await clickFirst(page, [
+    'button:has-text("Decline Cookies")',
+    'button:has-text("Accept Cookies")',
+    'button[aria-label*="close" i]',
+    '[role="button"][aria-label*="close" i]',
+    '.onetrust-close-btn-handler',
+    '#onetrust-accept-btn-handler',
+    '#onetrust-reject-all-handler'
+  ], { timeout: 3000 }).catch(() => false);
+}
+
+async function fillZoomSignIn(page, config, logger) {
+  if (!config.zoomSignInEmail || !config.zoomSignInPassword) return false;
+  await dismissZoomCookieBanner(page).catch(() => false);
+  await page.waitForTimeout(1000);
+  const emailFilled = await fillFirst(page, [
+    'input[type="email"]',
+    'input[name="email"]',
+    'input[name="account"]',
+    'input[autocomplete="username"]',
+    'input[id*="email" i]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="Email" i]'
+  ], config.zoomSignInEmail, { timeout: 12000 }).catch(() => false);
+  if (!emailFilled) {
+    logger.warn("Zoom sign-in email field was not ready");
+    return false;
+  }
+  await clickFirst(page, [
+    'button:has-text("Next")',
+    '[role="button"]:has-text("Next")',
+    'button[type="submit"]'
+  ], { timeout: 5000 }).catch(() => false);
+  await page.waitForTimeout(3000);
+  const passwordFilled = await fillFirst(page, [
+    'input[type="password"]',
+    'input[name="password"]',
+    'input[autocomplete="current-password"]',
+    'input[id*="password" i]',
+    'input[placeholder*="password" i]',
+    'input[placeholder*="Password" i]'
+  ], config.zoomSignInPassword, { timeout: 12000 }).catch(() => false);
+  if (!passwordFilled) {
+    logger.warn("Zoom sign-in password field was not ready");
+    return false;
+  }
+  await page.keyboard.press("Enter").catch(() => null);
+  await page.waitForTimeout(1500);
+  const clicked = await forceClickFirst(page, [
+    'button:has-text("Sign in")',
+    'button:has-text("Sign In")',
+    'button[type="submit"]'
+  ], { timeout: 5000 }).catch(() => false)
+    || await clickFirst(page, [
+    'button[type="submit"]',
+    'button:has-text("Sign In")',
+    'button:has-text("Sign in")',
+    '[role="button"]:has-text("Sign In")',
+    '[role="button"]:has-text("Sign in")'
+  ], { timeout: 5000 }).catch(() => false);
+  logger.info(`Zoom sign-in submit clicked=${clicked}`);
+  await clickVisibleTextCenter(page, [/^sign in$/iu]).catch(() => false);
+  await page.waitForTimeout(500);
+  await page.keyboard.press("Enter").catch(() => null);
+  return true;
+}
+
+async function signInToZoomIfRequired(page, config, logger) {
+  if (!config.zoomSignInEmail || !config.zoomSignInPassword) return false;
+  if (!await hasZoomBotBlockedPage(page)) return false;
+  logger.info("Zoom asks for sign-in before joining");
+  const clicked = await clickFirst(page, [
+    'button:has-text("Sign in to join")',
+    '[role="button"]:has-text("Sign in to join")',
+    'a:has-text("Sign in to join")',
+    'button:has-text("Sign In")',
+    'button:has-text("Sign in")',
+    'a:has-text("Sign In")',
+    'a:has-text("Sign in")'
+  ], { timeout: 5000 }).catch(() => false)
+    || await clickVisibleTextCenter(page, [/sign in to join/iu, /^sign in$/iu]).catch(() => false);
+  if (!clicked) {
+    logger.warn("Zoom sign-in button was not found");
+    return false;
+  }
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => null);
+  await page.waitForTimeout(3000);
+  await writeDiagnostics(page, logger, "after-signin-click");
+  if (!await fillZoomSignIn(page, config, logger)) return false;
+  await page.waitForLoadState("domcontentloaded", { timeout: 60000 }).catch(() => null);
+  await page.waitForTimeout(8000);
+  await writeDiagnostics(page, logger, "after-signin-submit");
+  return true;
+}
+
+async function forceClickText(page, patterns) {
+  const scopes = [page, ...page.frames()];
+  for (const scope of scopes) {
+    for (const pattern of patterns) {
+      try {
+        const item = scope.getByText(pattern).first();
+        if (await item.isVisible({ timeout: 1500 })) {
+          await item.click({ force: true, timeout: 1500 });
+          return true;
+        }
+      } catch {
+        // Try next pattern.
+      }
     }
   }
   return false;
@@ -395,12 +535,13 @@ async function clickVisibleText(page, patterns) {
   const flags = patterns.map((pattern) => pattern.flags);
   return page.evaluate(({ patternSources, flags }) => {
     const expressions = patternSources.map((source, index) => new RegExp(source, flags[index]));
-    const elements = [...document.querySelectorAll("button, a, [role='button'], span, div")];
-    for (const element of elements) {
+    const elements = [...document.querySelectorAll("button, a, [role='button'], span, div")]
+      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+      .sort((left, right) => (left.rect.width * left.rect.height) - (right.rect.width * right.rect.height));
+    for (const { element, rect } of elements) {
       const text = String(element.textContent || "").replace(/\s+/g, " ").trim();
       if (!text || !expressions.some((expression) => expression.test(text))) continue;
-      const rect = element.getBoundingClientRect();
-      if (!rect.width || !rect.height) continue;
       const style = window.getComputedStyle(element);
       if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
       const target = element.closest("button, a, [role='button'], [tabindex]") || element;
@@ -409,6 +550,68 @@ async function clickVisibleText(page, patterns) {
     }
     return false;
   }, { patternSources, flags });
+}
+
+async function clickVisibleTextCenter(page, patterns) {
+  const patternSources = patterns.map((pattern) => pattern.source);
+  const flags = patterns.map((pattern) => pattern.flags);
+  const point = await page.evaluate(({ patternSources, flags }) => {
+    const expressions = patternSources.map((source, index) => new RegExp(source, flags[index]));
+    const candidates = [...document.querySelectorAll("button, a, [role='button'], span, div")]
+      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+      .filter(({ element, rect }) => {
+        if (!rect.width || !rect.height) return false;
+        const style = window.getComputedStyle(element);
+        if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+        const text = String(element.textContent || "").replace(/\s+/g, " ").trim();
+        return text && expressions.some((expression) => expression.test(text));
+      })
+      .sort((left, right) => (left.rect.width * left.rect.height) - (right.rect.width * right.rect.height));
+    const candidate = candidates[0];
+    if (!candidate) return null;
+    return {
+      x: candidate.rect.left + candidate.rect.width / 2,
+      y: candidate.rect.top + candidate.rect.height / 2
+    };
+  }, { patternSources, flags }).catch(() => null);
+  if (!point) return false;
+  await page.mouse.click(point.x, point.y);
+  return true;
+}
+
+async function dispatchClickOnVisibleText(page, patterns) {
+  const patternSources = patterns.map((pattern) => pattern.source);
+  const flags = patterns.map((pattern) => pattern.flags);
+  for (const frame of page.frames()) {
+    const clicked = await frame.evaluate(({ patternSources, flags }) => {
+      const expressions = patternSources.map((source, index) => new RegExp(source, flags[index]));
+      const candidates = [...document.querySelectorAll("button, a, [role='button'], span, div")]
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ element, rect }) => {
+          if (!rect.width || !rect.height) return false;
+          const style = window.getComputedStyle(element);
+          if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+          const text = String(element.textContent || "").replace(/\s+/g, " ").trim();
+          return text && expressions.some((expression) => expression.test(text));
+        })
+        .sort((left, right) => (left.rect.width * left.rect.height) - (right.rect.width * right.rect.height));
+      const candidate = candidates[0];
+      if (!candidate) return false;
+      const target = candidate.element.closest("button, a, [role='button'], [tabindex]") || candidate.element;
+      for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: candidate.rect.left + candidate.rect.width / 2,
+          clientY: candidate.rect.top + candidate.rect.height / 2
+        }));
+      }
+      return true;
+    }, { patternSources, flags }).catch(() => false);
+    if (clicked) return true;
+  }
+  return false;
 }
 
 async function hasChatInput(page) {
@@ -436,9 +639,17 @@ async function hasChatInput(page) {
   }).catch(() => false);
 }
 
-async function dismissAudioVideoPrompts(page) {
-  for (let index = 0; index < 4; index += 1) {
-    const clicked = await clickFirst(page, [
+async function dismissAudioVideoPrompts(page, logger) {
+  for (let index = 0; index < 6; index += 1) {
+    const clicked = await forceClickFirst(page, [
+      '.pepc-permission-dialog__footer-button',
+      '.pepc-permission-dialog__footer-button:has-text("Continue without microphone and camera")',
+      '.pepc-permission-dialog__footer-button:has-text("Continue without audio and video")'
+    ], { timeout: 1500 }).catch(() => false)
+      || await forceClickText(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await clickFirst(page, [
+      '.pepc-permission-dialog__footer-button:has-text("Continue without microphone and camera")',
+      '.pepc-permission-dialog__footer-button:has-text("Continue without audio and video")',
       'a:has-text("Continue without microphone and camera")',
       'button:has-text("Continue without microphone and camera")',
       '[role="button"]:has-text("Continue without microphone and camera")',
@@ -449,19 +660,30 @@ async function dismissAudioVideoPrompts(page) {
       'button:has-text("\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437")',
       '[role="button"]:has-text("\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0431\u0435\u0437")'
     ], { timeout: 1000 })
+      || await clickVisibleTextCenter(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await dispatchClickOnVisibleText(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false)
       || await clickTextByPattern(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false)
       || await clickVisibleText(page, WITHOUT_AUDIO_VIDEO_PATTERNS).catch(() => false);
-    if (!clicked) return;
-    await page.waitForTimeout(1000);
+    if (!clicked) {
+      await page.waitForTimeout(1000);
+      continue;
+    }
+    await page.waitForTimeout(1800);
   }
 }
 
-async function acceptAudioVideoPrompts(page) {
+async function acceptAudioVideoPrompts(page, logger) {
   for (let index = 0; index < 4; index += 1) {
     const clicked = await clickButtonByText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await forceClickText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await clickVisibleTextCenter(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
+      || await dispatchClickOnVisibleText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
       || await clickTextByPattern(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false)
       || await clickVisibleText(page, USE_AUDIO_VIDEO_PATTERNS).catch(() => false);
-    if (!clicked) return;
+    if (!clicked) {
+      await page.waitForTimeout(1000);
+      continue;
+    }
     await page.waitForTimeout(1000);
   }
 }
@@ -741,15 +963,26 @@ export function createZoomWebClientAdapter(config, logger) {
     if (config.zoomAvatarVideoPath) {
       browserArgs.push(`--use-file-for-fake-video-capture=${config.zoomAvatarVideoPath}`);
     }
-    context = await chromium.launchPersistentContext(config.zoomBrowserProfileDir, {
-      headless: config.zoomHeadless,
-      slowMo: config.zoomBrowserSlowMoMs || 0,
-      viewport: { width: 1280, height: 720 },
-      ignoreDefaultArgs: ["--enable-automation"],
-      args: browserArgs
-    });
-    browser = context.browser();
-    page = context.pages()[0] || await context.newPage();
+    if (config.zoomSignInEmail && config.zoomSignInPassword) {
+      context = await chromium.launchPersistentContext(config.zoomBrowserProfileDir, {
+        headless: config.zoomHeadless,
+        slowMo: config.zoomBrowserSlowMoMs || 0,
+        viewport: { width: 1280, height: 720 },
+        ignoreDefaultArgs: ["--enable-automation"],
+        args: browserArgs
+      });
+      browser = context.browser();
+      page = context.pages()[0] || await context.newPage();
+    } else {
+      browser = await chromium.launch({
+        headless: config.zoomHeadless,
+        slowMo: config.zoomBrowserSlowMoMs || 0,
+        ignoreDefaultArgs: ["--enable-automation"],
+        args: browserArgs
+      });
+      context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+      page = await context.newPage();
+    }
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
@@ -765,12 +998,31 @@ export function createZoomWebClientAdapter(config, logger) {
     await fillMeetingCredentials(page, config);
     await page.waitForTimeout(500);
     await writeDiagnostics(page, logger, "after-name");
+    await page.waitForTimeout(1500);
     if (config.zoomAvatarVideoPath) {
-      await acceptAudioVideoPrompts(page);
+      await acceptAudioVideoPrompts(page, logger);
     } else {
-      await dismissAudioVideoPrompts(page);
+      await dismissAudioVideoPrompts(page, logger);
     }
     await writeDiagnostics(page, logger, "after-av-choice");
+    if (await signInToZoomIfRequired(page, config, logger)) {
+      await page.goto(buildZoomWebClientUrl(config.zoomMeetingUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(2000);
+      await clickFirst(page, [
+        'a[href*="/wc/join"]',
+        'a[href*="join"]',
+        'button:has-text("Join from Your Browser")',
+        'button:has-text("\u0412\u043e\u0439\u0442\u0438 \u0438\u0437 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430")'
+      ], { timeout: 2500 }).catch(() => null);
+      await fillMeetingCredentials(page, config);
+      await page.waitForTimeout(1500);
+      if (config.zoomAvatarVideoPath) {
+        await acceptAudioVideoPrompts(page, logger);
+      } else {
+        await dismissAudioVideoPrompts(page, logger);
+      }
+      await writeDiagnostics(page, logger, "after-signin-return");
+    }
     await page.waitForTimeout(2000);
     const finalNameFilled = await fillMeetingCredentials(page, config);
     if (!finalNameFilled) {
@@ -780,7 +1032,32 @@ export function createZoomWebClientAdapter(config, logger) {
     await writeDiagnostics(page, logger, "after-name-final");
     await clickButtonByText(page, JOIN_BUTTON_PATTERNS);
     await page.waitForTimeout(5000);
+    if (config.zoomAvatarVideoPath) {
+      await acceptAudioVideoPrompts(page, logger);
+    } else {
+      await dismissAudioVideoPrompts(page, logger);
+    }
     await writeDiagnostics(page, logger, "after-join");
+    if (await signInToZoomIfRequired(page, config, logger)) {
+      await page.goto(buildZoomWebClientUrl(config.zoomMeetingUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(2000);
+      await clickFirst(page, [
+        'a[href*="/wc/join"]',
+        'a[href*="join"]',
+        'button:has-text("Join from Your Browser")',
+        'button:has-text("\u0412\u043e\u0439\u0442\u0438 \u0438\u0437 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430")'
+      ], { timeout: 2500 }).catch(() => null);
+      await fillMeetingCredentials(page, config);
+      await page.waitForTimeout(1500);
+      if (config.zoomAvatarVideoPath) {
+        await acceptAudioVideoPrompts(page, logger);
+      } else {
+        await dismissAudioVideoPrompts(page, logger);
+      }
+      await clickButtonByText(page, JOIN_BUTTON_PATTERNS);
+      await page.waitForTimeout(8000);
+      await writeDiagnostics(page, logger, "after-signin-join");
+    }
     await openChatPanel(page);
     chatSeeded = false;
     await writeDiagnostics(page, logger, "after-chat");

@@ -45,6 +45,8 @@ export function loadConfig(env = process.env) {
     zoomAdapter,
     zoomWorkerMode: workerMode,
     zoomMeetingPasscode: String(env.ZOOM_MEETING_PASSCODE || "111").trim(),
+    zoomSignInEmail: String(env.ZOOM_SIGN_IN_EMAIL || "").trim(),
+    zoomSignInPassword: String(env.ZOOM_SIGN_IN_PASSWORD || "").trim(),
     zoomHeadless: String(env.ZOOM_HEADLESS || "true").trim().toLowerCase() !== "false",
     zoomBrowserProfileDir: String(env.ZOOM_BROWSER_PROFILE_DIR || "/home/pwuser/.nafanya-zoom-profile").trim() || "/home/pwuser/.nafanya-zoom-profile",
     zoomAvatarVideoPath,
