@@ -262,19 +262,13 @@ free\_services:
 
 telemost\_link:
 
-**НАШИ РЕСУРСЫ В ИНТЕРНЕТЕ**
+НАШИ РЕСУРСЫ В ИНТЕРНЕТЕ
 
 
 
-Чат в Телеграм:
+Наш сайт:
 
-https://t.me/+mta\_CKQY2c05ODRi
-
-
-
-ИНФОканал в Телеграм:
-
-https://t.me/+n40PjinXX\_pjNTcy
+https://pochtinormalnye.ru/
 
 
 
@@ -284,9 +278,15 @@ https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
 
 
 
-МАХ (запасной канал):
+Группа в ТГ:
 
-https://max.ru/join/GV-P-08zFtVs6pX-xR5Z8x80MMNPzhjJ1w6JVEYGn9M
+https://t.me/+mta\_CKQY2c05ODRi
+
+
+
+Инфо Канал в ТГ:
+
+https://t.me/+n40PjinXX\_pjNTcy
 
 
 

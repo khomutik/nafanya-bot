@@ -315,6 +315,10 @@ function testWorkerStaticRules() {
   }
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.steps12.length, 2, "Zoom 12 steps should be manually split into two parts");
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length, 2, "Zoom 12 traditions should be manually split into two parts");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u041D\u0410\u0428\u0418 \u0420\u0415\u0421\u0423\u0420\u0421\u042B \u0412 \u0418\u041D\u0422\u0415\u0420\u041D\u0415\u0422\u0415[\s\S]*https:\/\/pochtinormalnye\.ru\/[\s\S]*\u0421\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0432 Zoom:[\s\S]*https:\/\/us06web\.zoom\.us\/j\/5487249245/u, "Zoom links message should include the site and Zoom meeting");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u0413\u0440\u0443\u043F\u043F\u0430 \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+mta_CKQY2c05ODRi[\s\S]*\u0418\u043D\u0444\u043E \u041A\u0430\u043D\u0430\u043B \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u, "Zoom links message should include Telegram group and info channel");
+  assert.equal((ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0].match(/https:\/\/pochtinormalnye\.ru\//gu) || []).length, 1, "Zoom links message should include the site once");
+  assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /max\.ru|MAX|\u041C\u0410\u0425/u, "Zoom links message should not include the old MAX fallback");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0428\u0410\u0413\u041E\u0412 \u0410\u0410/u, "Zoom 12 steps part 1 should keep its manual header");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[1], /^\u0427\u0430\u0441\u0442\u044c 2\/2: 8/u, "Zoom 12 steps part 2 should keep its manual header");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.traditions12[0], /^\u0427\u0430\u0441\u0442\u044c 1\/2: 12 \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u0419 \u0410\u0410/u, "Zoom 12 traditions part 1 should keep its manual header");
