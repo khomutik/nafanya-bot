@@ -108,6 +108,17 @@ test("zoom web client detects a live meeting page", async () => {
   assert.equal(presence.meetingEnded, false);
 });
 
+test("zoom web client ignores hidden ended text when the chat is usable", async () => {
+  const presence = await getZoomMeetingPresence(createPresencePage({
+    body: "Meeting Chat Type message here This meeting has been ended by host",
+    title: "\u0417\u0430\u043B \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u043B\u044C\u043D\u043E\u0439 \u043A\u043E\u043D\u0444\u0435\u0440\u0435\u043D\u0446\u0438\u0438",
+    hasInput: true
+  }));
+  assert.equal(presence.reachable, true);
+  assert.equal(presence.hasChatInput, true);
+  assert.equal(presence.meetingEnded, false);
+});
+
 test("zoom web client detects an ended meeting page", async () => {
   const presence = await getZoomMeetingPresence(createPresencePage({
     body: "This meeting has been ended by host",

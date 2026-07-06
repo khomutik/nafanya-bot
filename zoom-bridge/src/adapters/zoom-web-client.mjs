@@ -667,7 +667,8 @@ export async function getZoomMeetingPresence(page) {
     });
     const hasMeetingUi = hasChatInput
       || /(?:leave|mute|unmute|participants|chat|share|stop video|\u0437\u0432\u0443\u043a|\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d|\u0432\u0438\u0434\u0435\u043e|\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a|\u0447\u0430\u0442|\u043f\u043e\u0434\u0435\u043b\u0438\u0442\u044c|\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u0435)/iu.test(body);
-    const meetingEnded = /(?:meeting has ended|meeting has been ended|ended by host|host has ended this meeting|you have left the meeting|this meeting has been ended|\u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044f\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430|\u0432\u0441\u0442\u0440\u0435\u0447\u0430\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430)/iu.test(body);
+    const hasEndedText = /(?:meeting has ended|meeting has been ended|ended by host|host has ended this meeting|you have left the meeting|this meeting has been ended|\u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044f\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430|\u0432\u0441\u0442\u0440\u0435\u0447\u0430\s+\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430)/iu.test(body);
+    const meetingEnded = hasEndedText && !hasChatInput && !hasMeetingUi;
     return {
       reachable: true,
       hasChatInput,
@@ -1145,10 +1146,6 @@ export function createZoomWebClientAdapter(config, logger) {
       if (!chatSeeded) {
         for (const message of messages) {
           rememberRecent(seenMessages, buildZoomSeenKey(message), 300000);
-          const commandKey = buildZoomCommandDedupeKey(message);
-          if (commandKey) {
-            rememberRecent(seenMessages, `command:${commandKey}`, 300000);
-          }
           if (shouldIgnoreZoomMessage(message, config.zoomBotName) || looksLikeOwnZoomOutput(message.text) || looksLikeOwnZoomOutput(message.sender)) {
             rememberSentText(sentTexts, message.text, 300000);
           }
