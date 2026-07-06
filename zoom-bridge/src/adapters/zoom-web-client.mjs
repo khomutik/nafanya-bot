@@ -14,6 +14,34 @@ const USE_AUDIO_VIDEO_PATTERNS = [
 ];
 const DIAGNOSTICS_DIR = "/tmp/nafanya-zoom-bridge";
 const MISSING_MEETING_RECONNECT_TICKS = 3;
+const FIXED_MEETING_COMMANDS = [
+  "\u043C\u0438\u043D\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043D\u044B",
+  "\u043C\u043E\u043B\u0438\u0442\u0432\u0430",
+  "\u043F\u0440\u0435\u0430\u043C\u0431\u0443\u043B\u0430",
+  "\u043D\u043E\u0432\u0438\u0447\u043A\u0443",
+  "12 \u0448\u0430\u0433\u043E\u0432",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432",
+  "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439",
+  "\u0434\u0432\u0435\u043D\u0430\u0434\u0446\u0430\u0442\u044C \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F",
+  "\u0442\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F",
+  "\u0442\u0435\u043C\u044B",
+  "\u0442\u0435\u043C\u0430",
+  "\u0435\u0436\u0438\u043A",
+  "\u0451\u0436\u0438\u043A",
+  "\u0431\u0438\u043B\u043B",
+  "7-\u044F \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F",
+  "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F",
+  "\u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F",
+  "\u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F",
+  "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439",
+  "\u0432\u043E\u043F\u0440\u043E\u0441\u044B \u0441\u043F\u0438\u043A\u0435\u0440\u0443",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0439",
+  "\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 zoom",
+  "\u0441\u0441\u044B\u043B\u043A\u0430 \u043D\u0430 \u0437\u0443\u043C",
+  "\u0441\u0441\u044B\u043B\u043A\u0438"
+].sort((a, b) => b.length - a.length);
 
 export function shouldIgnoreZoomMessage(message, botName) {
   const sender = normalizeZoomChatFingerprint(message?.sender);
@@ -153,6 +181,22 @@ export function buildZoomCommandDedupeKey(message) {
   const adminCommandPattern = /^(?:открыть|открой)\s+(?:билл|билла|бк|рабочка)$|^(?:высказался|пропускает|отменить|закрыть\s+очередь)$/iu;
   if (!fixedCommandPattern.test(text) && !adminCommandPattern.test(text)) return "";
   return normalizeZoomChatCompact(text);
+}
+
+export function splitZoomGroupedMeetingCommands(text) {
+  const normalized = normalizeZoomChatFingerprint(text).replace(/\s+/gu, " ").trim();
+  if (!normalized) return [];
+  const result = [];
+  let remaining = normalized;
+  while (remaining) {
+    const command = FIXED_MEETING_COMMANDS.find((item) => (
+      remaining === item || remaining.startsWith(`${item} `)
+    ));
+    if (!command) return [text];
+    result.push(command);
+    remaining = remaining.slice(command.length).replace(/^[\s,;|/]+/gu, "").trim();
+  }
+  return result.length > 1 ? result : [text];
 }
 
 export function dedupeZoomChatMessages(messages) {
@@ -962,7 +1006,15 @@ async function readChatMessages(page) {
       sender: parsed.sender || message.sender,
       text: parsed.text
     };
-  }).filter((item) => item.text));
+  }).filter((item) => item.text).flatMap((item) => {
+    const commands = splitZoomGroupedMeetingCommands(item.text);
+    if (commands.length <= 1 && commands[0] === item.text) return [item];
+    return commands.map((text, index) => ({
+      ...item,
+      id: `${item.id}:split:${index}`,
+      text
+    }));
+  }));
 }
 
 async function killStaleProfileBrowsers(profileDir, logger) {

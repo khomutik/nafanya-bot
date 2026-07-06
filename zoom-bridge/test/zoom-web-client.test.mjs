@@ -13,7 +13,8 @@ import {
   normalizeZoomChatFingerprint,
   parseZoomChatMessageText,
   rememberSentText,
-  shouldIgnoreZoomMessage
+  shouldIgnoreZoomMessage,
+  splitZoomGroupedMeetingCommands
 } from "../src/adapters/zoom-web-client.mjs";
 
 function createPresencePage({ body, title = "", url = "https://example.test/", hasInput = false }) {
@@ -212,6 +213,26 @@ test("zoom web client does not collapse distinct fixed commands or queue entries
     { id: "1", sender: "\u0410\u043d\u043d\u0430", text: "111" },
     { id: "2", sender: "\u0412\u0435\u0440\u0430", text: "111" }
   ]).length, 2);
+});
+
+test("zoom web client splits grouped meeting commands from one Zoom bubble group", () => {
+  assert.deepEqual(
+    splitZoomGroupedMeetingCommands("\u0442\u0435\u043C\u044B \u0442\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F 7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F \u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439"),
+    [
+      "\u0442\u0435\u043C\u044B",
+      "\u0442\u0435\u043C\u044B \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F",
+      "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F",
+      "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F",
+      "\u043F\u0440\u0430\u0432\u0438\u043B\u0430 \u0447\u0430\u0439\u043D\u043E\u0439"
+    ]
+  );
+});
+
+test("zoom web client leaves queue commands out of meeting-command splitting", () => {
+  assert.deepEqual(
+    splitZoomGroupedMeetingCommands("\u0442\u0435\u043C\u044B \u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0431\u0438\u043B\u043B 111 \u043E\u0447\u0435\u0440\u0435\u0434\u044C"),
+    ["\u0442\u0435\u043C\u044B \u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0431\u0438\u043B\u043B 111 \u043E\u0447\u0435\u0440\u0435\u0434\u044C"]
+  );
 });
 
 test("zoom web client suppresses recently sent bot fragments", () => {
