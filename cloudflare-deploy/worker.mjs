@@ -3415,16 +3415,13 @@ async function handleZoomBridgeMessage(env, payload) {
   }
   const gameNumber = parseGameCommand(text);
   if (gameNumber !== null) {
-    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
-      await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F."]);
-      return { ok: true, handled: true };
-    }
     const speakerQuestions = await getSpeakerQuestions();
     const question = speakerQuestions.get(gameNumber);
     if (question) {
       const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`;
       await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
       await enqueueZoomMessages(env, splitZoomText(questionText));
+      return { ok: true, handled: true };
     } else {
       await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
       return { ok: true, handled: true };
@@ -3570,16 +3567,13 @@ async function handleZoomOnlyMessage(env, payload) {
   }
   const gameNumber = parseGameCommand(text);
   if (gameNumber !== null) {
-    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
-      await enqueueZoomOnlyMessages(env, ["\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u0432\u043E \u0432\u0440\u0435\u043C\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F."]);
-      return { ok: true, handled: true };
-    }
     const question = (await getSpeakerQuestions()).get(gameNumber);
     if (!question) {
       await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
       return { ok: true, handled: true };
     }
     await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`));
+    return { ok: true, handled: true };
   }
   let queueState = queueInfo.state || createEmptyQueueState();
   if ((!queueState.isOpen || !queueState.mode) && getQueueSpeechCodeNote(text)) {
