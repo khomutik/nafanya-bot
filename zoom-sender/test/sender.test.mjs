@@ -370,6 +370,8 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
     fs.readFile(new URL("../RUNBOOK.md", import.meta.url), "utf8")
   ]);
   assert.match(dockerfile, /node src\/main\.mjs/u);
+  assert.match(dockerfile, /ZOOM_AUTH_SETUP/u);
+  assert.match(dockerfile, /node src\/auth-setup\.mjs/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
   assert.match(dockerfile, /xvfb xauth x11-utils/u);
   assert.match(dockerfile, /Xvfb :99/u);
@@ -378,9 +380,22 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
   assert.match(compose, /\.\/diagnostics:\/app\/diagnostics/u);
   assert.match(envExample, /ZOOM_ONLY_SECRET=/u);
+  assert.match(envExample, /ZOOM_AUTH_SETUP=false/u);
+  assert.match(envExample, /ZOOM_AUTH_EMAIL=\s*(?:\r?\n)/u);
+  assert.match(envExample, /ZOOM_AUTH_PASSWORD=\s*(?:\r?\n)/u);
   assert.doesNotMatch(envExample, /replace-with-worker-secret|super-secret|sk-[a-z0-9]/iu);
   assert.match(runbook, /не запускать старый `zoom-bridge`/iu);
   assert.match(runbook, /не вызывает `\/zoom-only\/webhook`/iu);
+});
+
+test("auth setup uses server env credentials without hardcoded secrets or artifacts", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../src/auth-setup.mjs", import.meta.url), "utf8");
+  assert.match(source, /ZOOM_AUTH_EMAIL/u);
+  assert.match(source, /ZOOM_AUTH_PASSWORD/u);
+  assert.match(source, /launchPersistentContext/u);
+  assert.match(source, /manual_verification_required/u);
+  assert.doesNotMatch(source, /screenshot|storageState|cookies\(\)|console\.log\([^)]*email|console\.log\([^)]*password/iu);
 });
 
 test("health reports warning/unhealthy unless Zoom page and chat are ready", () => {

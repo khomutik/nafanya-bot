@@ -67,6 +67,26 @@ curl http://127.0.0.1:3097/health
 docker compose -f compose.example.yml down
 ```
 
+## 6.1. Один раз авторизовать Zoom-профиль
+
+Если Zoom отправляет Нафаню на Sign In, нужен отдельный профиль браузера:
+
+```bash
+ZOOM_AUTH_SETUP=true
+```
+
+Также в серверный `.env` добавить `ZOOM_AUTH_EMAIL` и `ZOOM_AUTH_PASSWORD`. Реальные значения не писать в чат, README, issue, логи или скриншоты.
+
+Запускать setup лучше отдельным одноразовым запуском контейнера, а после успешного входа вернуть:
+
+```bash
+ZOOM_AUTH_SETUP=false
+```
+
+Профиль сохраняется в volume `zoom-sender-profile:/app/profile`. Его нельзя коммитить, копировать в GitHub или отправлять куда-либо целиком: внутри могут быть cookies/session.
+
+Если Zoom попросит 2FA, captcha или email confirmation - остановиться и пройти подтверждение вручную. Не пытаться обходить это кодом.
+
 ## 7. Отключить автозапуск
 
 В compose поменять:
