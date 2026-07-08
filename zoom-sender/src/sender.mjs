@@ -6,35 +6,33 @@ function isAtomicQueueCodeMessage(message = {}) {
   return /^(?:111|222|333|444)$/u.test(normalizeChatAtom(message.text));
 }
 
+function parseZoomQueueCodeMessage(message = {}) {
+  const text = normalizeChatAtom(message.text);
+  const match = text.match(/^(.+?)\s+to\s+Everyone(?:\s+\d{1,2}:\d{2}(?:\s?[AP]M)?)?\s+(111|222|333|444)$/iu);
+  if (!match) return null;
+  const authorName = normalizeChatAtom(match[1]);
+  if (!isValidChatAuthor(authorName)) return null;
+  return { authorName, text: match[2] };
+}
+
 function isValidChatAuthor(value) {
   const author = normalizeChatAtom(value);
   if (!author) return false;
+  if (/^(?:you|вы|\u0432\u044b|\u043d\()$/iu.test(author)) return false;
   if (/^(?:111|222|333|444|to|everyone|\d{1,2}:\d{2}(?:\s?[ap]m)?)$/iu.test(author)) return false;
+  if (/очередь|собрани|пишите в чат|working meeting|queue open/iu.test(author)) return false;
   return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);
 }
 
-function getContextAuthor(messages = []) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] || {};
-    const author = normalizeChatAtom(message.displayName);
-    const text = normalizeChatAtom(message.text);
-    const looksLikeZoomHeader = author && text.includes(author) && (/\bto\s+everyone\b/iu.test(text) || /\b\d{1,2}:\d{2}\b/iu.test(text));
-    if (isValidChatAuthor(author) && looksLikeZoomHeader) return author;
-  }
-  return "";
-}
-
 export function selectZoomChatCodeIngestCandidates(messages = []) {
-  const contextAuthor = getContextAuthor(messages);
   const candidates = [];
   for (const message of messages) {
-    if (!isAtomicQueueCodeMessage(message)) continue;
-    const directAuthor = normalizeChatAtom(message.displayName);
-    const authorName = isValidChatAuthor(directAuthor) ? directAuthor : contextAuthor;
-    if (!authorName) continue;
+    const parsed = parseZoomQueueCodeMessage(message);
+    if (!parsed && !isAtomicQueueCodeMessage(message)) continue;
+    if (!parsed) continue;
     candidates.push({
-      authorName,
-      text: normalizeChatAtom(message.text),
+      authorName: parsed.authorName,
+      text: parsed.text,
       timestamp: normalizeChatAtom(message.timestamp),
       sourceFingerprint: normalizeChatAtom(message.fingerprint),
       observedAt: normalizeChatAtom(message.observedAt)

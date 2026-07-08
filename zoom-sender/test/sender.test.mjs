@@ -288,18 +288,20 @@ test("chat diagnostics fingerprint is stable and separates duplicates from diffe
 test("chat ingest candidates include only atomic queue codes and ignore aggregates", () => {
   const messages = [
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
-    { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
+    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111", timestamp: "03:44 PM", fingerprint: "full-111" },
     { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" },
+    { displayName: "Рабочее собрание", text: "Рабочее собрание Пишите в чат \"111\" для высказывания ОЧЕРЕДЬ ОТКРЫТА • 1. Маня Х. — 111", timestamp: "", fingerprint: "own-queue" },
     { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
-    { displayName: "333", text: "333", timestamp: "", fingerprint: "three" },
-    { displayName: "444", text: "444", timestamp: "", fingerprint: "four" },
+    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 222", timestamp: "03:44 PM", fingerprint: "full-222" },
+    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:45 PM 333", timestamp: "03:45 PM", fingerprint: "full-333" },
+    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:46 PM 444", timestamp: "03:46 PM", fingerprint: "full-444" },
     { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" }
   ];
   const candidates = selectZoomChatCodeIngestCandidates(messages);
   assert.equal(candidates.length, 4);
   assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
   assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["atom-111", "two", "three", "four"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["full-111", "full-222", "full-333", "full-444"]);
 });
 
 test("chat ingest forwards only safe candidates and never sends Zoom replies", async () => {
@@ -322,8 +324,10 @@ test("chat ingest forwards only safe candidates and never sends Zoom replies", a
         return {
           messages: [
             { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
-            { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
+            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111", timestamp: "03:44 PM", fingerprint: "full-111" },
             { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
+            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:45 PM 222", timestamp: "03:45 PM", fingerprint: "full-222" },
+            { displayName: "Рабочее собрание", text: "Рабочее собрание Пишите в чат \"111\" для высказывания ОЧЕРЕДЬ ОТКРЫТА • 1. Маня Х. — 111", timestamp: "", fingerprint: "own-queue" },
             { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" }
           ]
         };
