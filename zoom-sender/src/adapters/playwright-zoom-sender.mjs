@@ -6,6 +6,8 @@ const JOIN_MEETING_PATTERNS = [/join/i, /join meeting/i, /\u0432\u043e\u0439\u04
 const DIAGNOSTIC_TEXT_LIMIT = 12000;
 const DIAGNOSTIC_BODY_TEXT_LIMIT = 2000;
 const DIAGNOSTIC_HTML_LIMIT = 5000;
+const CHAT_DIAGNOSTIC_TEXT_LIMIT = 1200;
+const CHAT_DIAGNOSTIC_DOM_LIMIT = 2500;
 const DEFAULT_BROWSER_ARGS = [
   "--no-sandbox",
   "--disable-dev-shm-usage",
@@ -192,6 +194,24 @@ function safeEventText(value) {
   return sanitizeDiagnosticText(String(value || "")).slice(0, 1000);
 }
 
+function normalizeDiagnosticChatText(value) {
+  return sanitizeDiagnosticText(String(value || "").replace(/\s+/gu, " ").trim());
+}
+
+function buildChatMessageFingerprint(message = {}) {
+  const basis = [
+    normalizeDiagnosticChatText(message.displayName || ""),
+    normalizeDiagnosticChatText(message.text || ""),
+    normalizeDiagnosticChatText(message.timestamp || "")
+  ].join("|");
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `chat-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function isZoomRelatedUrl(value) {
   try {
     const url = new URL(String(value || ""));
@@ -262,6 +282,56 @@ async function collectPageDiagnostics(page) {
     scriptDomains: [],
     evaluateError: error?.message || String(error)
   }));
+}
+
+async function collectVisibleChatMessages(page) {
+  return page.evaluate(({ textLimit, domLimit }) => {
+    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 10 && rect.height > 8;
+    };
+    const selectors = [
+      '[class*="chat-message" i]',
+      '[class*="chat_item" i]',
+      '[class*="chat-item" i]',
+      '[class*="message-item" i]',
+      '[data-testid*="chat" i]',
+      '[aria-label*="chat" i] [role="listitem"]',
+      '[role="log"] [role="listitem"]',
+      '[role="list"] [role="listitem"]'
+    ];
+    const nodes = [];
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (!visible(element)) continue;
+        const text = clean(element.innerText || element.textContent);
+        if (!text || text.length > textLimit) continue;
+        nodes.push(element);
+      }
+    }
+    const uniqueNodes = [...new Set(nodes)].slice(-40);
+    return uniqueNodes.map((element) => {
+      const text = clean(element.innerText || element.textContent).slice(0, textLimit);
+      const lines = text.split(/\n+/u).map(clean).filter(Boolean);
+      const timestampPattern = /(?:\d{1,2}:\d{2}(?::\d{2})?|am|pm|сегодня|today)/iu;
+      const timestamp = lines.find((line) => timestampPattern.test(line)) || "";
+      const displayName = clean(
+        element.getAttribute("data-sender") ||
+        element.getAttribute("data-display-name") ||
+        element.querySelector('[class*="sender" i], [class*="name" i], [aria-label*="sender" i]')?.textContent ||
+        (timestamp && lines[0] === timestamp ? lines[1] : lines[0]) ||
+        ""
+      );
+      return {
+        displayName,
+        text,
+        timestamp,
+        rawDom: String(element.outerHTML || "").slice(0, domLimit)
+      };
+    });
+  }, { textLimit: CHAT_DIAGNOSTIC_TEXT_LIMIT, domLimit: CHAT_DIAGNOSTIC_DOM_LIMIT }).catch(() => []);
 }
 
 async function makeDiagnosticsDir(diagnosticsDir) {
@@ -348,6 +418,8 @@ export class PlaywrightZoomSender {
       chatOpen: false
     };
     this.lastDiagnosticsDir = null;
+    this.diagnosticsRun = null;
+    this.chatDiagnosticFingerprints = new Set();
     this.diagnosticsEvents = {
       console: [],
       pageErrors: [],
@@ -401,6 +473,7 @@ export class PlaywrightZoomSender {
     };
     const userDataDir = this.config.userDataDir || "/app/profile";
     const diagnosticsRun = await makeDiagnosticsDir(this.config.diagnosticsDir);
+    this.diagnosticsRun = diagnosticsRun;
     this.browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
     this.page = await this.browser.newPage();
     this.attachPageDiagnostics(this.page);
@@ -438,6 +511,10 @@ export class PlaywrightZoomSender {
       this.lastDiagnosticsDir = diagnosticsRun.dir;
       this.logger.info?.(`Zoom Sender diagnostics saved to ${diagnosticsRun.dir}`);
     }
+    if (this.config.chatReadonlyDiagnostics) {
+      await this.observeChatDiagnostics().catch((error) => this.logger.warn?.(`Zoom Sender chat diagnostics failed: ${error?.message || String(error)}`));
+      this.logger.info?.("Zoom Sender read-only chat diagnostics enabled.");
+    }
     this.logger.info?.("Zoom Sender browser adapter started.");
     return this.presence;
   }
@@ -464,9 +541,43 @@ export class PlaywrightZoomSender {
     return result;
   }
 
+  async observeChatDiagnostics() {
+    if (!this.config.chatReadonlyDiagnostics || !this.page || !this.diagnosticsRun) {
+      return { enabled: Boolean(this.config.chatReadonlyDiagnostics), newMessages: 0 };
+    }
+    if (!await hasChatInput(this.page)) {
+      await openChatPanel(this.page).catch(() => false);
+    }
+    const messages = await collectVisibleChatMessages(this.page);
+    const now = new Date().toISOString();
+    const fresh = [];
+    for (const message of messages) {
+      const safeMessage = {
+        observedAt: now,
+        displayName: normalizeDiagnosticChatText(message.displayName).slice(0, 160),
+        text: normalizeDiagnosticChatText(message.text).slice(0, CHAT_DIAGNOSTIC_TEXT_LIMIT),
+        timestamp: normalizeDiagnosticChatText(message.timestamp).slice(0, 80),
+        rawDom: sanitizeDiagnosticText(message.rawDom).slice(0, CHAT_DIAGNOSTIC_DOM_LIMIT)
+      };
+      if (!safeMessage.text) continue;
+      const fingerprint = buildChatMessageFingerprint(safeMessage);
+      if (this.chatDiagnosticFingerprints.has(fingerprint)) continue;
+      this.chatDiagnosticFingerprints.add(fingerprint);
+      fresh.push({ ...safeMessage, fingerprint });
+    }
+    if (fresh.length) {
+      const file = this.diagnosticsRun.path.join(this.diagnosticsRun.dir, "chat-readonly-diagnostics.jsonl");
+      const lines = fresh.map((message) => JSON.stringify(message)).join("\n") + "\n";
+      const fs = await import("node:fs/promises");
+      await fs.appendFile(file, lines, "utf8");
+      this.logger.info?.(`Zoom Sender read-only chat diagnostics captured ${fresh.length} new message(s).`);
+    }
+    return { enabled: true, newMessages: fresh.length, totalSeen: this.chatDiagnosticFingerprints.size };
+  }
+
   async stop() {
     await this.browser?.close().catch(() => null);
   }
 }
 
-export { DEFAULT_BROWSER_ARGS, buildZoomWebClientUrl, collectVisibleControls, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot };
+export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, collectVisibleChatMessages, collectVisibleControls, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot };

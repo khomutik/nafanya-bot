@@ -18,6 +18,7 @@ export class ZoomSenderService {
   async runOnce() {
     try {
       this.health.updateZoom(await this.zoomAdapter.getPresence());
+      await this.zoomAdapter.observeChatDiagnostics?.();
       const pulled = await this.workerClient.pull();
       this.health.markWorkerPoll();
       const messages = Array.isArray(pulled.messages) ? pulled.messages : [];

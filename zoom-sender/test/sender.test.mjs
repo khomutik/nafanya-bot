@@ -6,7 +6,7 @@ import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
 import { ZoomSenderService } from "../src/sender.mjs";
 import { WorkerOutboxClient } from "../src/worker-client.mjs";
-import { DEFAULT_BROWSER_ARGS, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
+import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -48,6 +48,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_MEETING_URL: "https://zoom.example/meeting",
     ZOOM_DISPLAY_NAME: "Display Name",
     ZOOM_SENDER_DRY_RUN: "true",
+    ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "true",
     ZOOM_SENDER_MIN_POLL_MS: "2000",
     ZOOM_SENDER_MAX_POLL_MS: "25000",
     ZOOM_SENDER_ERROR_POLL_MS: "7000",
@@ -60,6 +61,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.zoomBridgeSecret, "safe-secret");
   assert.equal(config.participantName, "Display Name");
   assert.equal(config.dryRun, true);
+  assert.equal(config.chatReadonlyDiagnostics, true);
   assert.equal(config.minIntervalMs, 2000);
   assert.equal(config.maxIntervalMs, 25000);
   assert.equal(config.errorIntervalMs, 7000);
@@ -76,6 +78,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.minIntervalMs, 1500);
   assert.equal(fallback.maxIntervalMs, 1500);
   assert.equal(fallback.errorIntervalMs, 10000);
+  assert.equal(fallback.chatReadonlyDiagnostics, false);
 });
 
 test("diagnostics sanitize Zoom URLs before saving", () => {
@@ -192,11 +195,11 @@ test("sender-only code does not import queue engine or call Worker webhook", asy
   ]);
   const source = senderSources.join("\n");
   assert.doesNotMatch(source, /queue-engine|parseQueueEntry|["'](?:111|222|333|444)["']/u);
-  assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|readChatMessages/u);
+  assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|parseZoomCommand/u);
   assert.match(source, /\/zoom-only\/outbox/u);
 });
 
-test("Zoom browser adapter handles the Zoom web landing gate without reading chat", async () => {
+test("Zoom browser adapter handles the Zoom web landing gate and read-only diagnostics stays isolated", async () => {
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8");
   assert.match(source, /join from browser/iu);
@@ -206,7 +209,52 @@ test("Zoom browser adapter handles the Zoom web landing gate without reading cha
   assert.match(source, /button, a, \[role='button'\]/u);
   assert.match(source, /page\.on\("console"/u);
   assert.match(source, /page\.on\("requestfailed"/u);
-  assert.doesNotMatch(source, /readChatMessages|\/zoom-only\/webhook|parseQueueEntry/u);
+  assert.match(source, /chat-readonly-diagnostics\.jsonl/u);
+  assert.doesNotMatch(source, /\/zoom-only\/webhook|parseQueueEntry|parseZoomCommand/u);
+});
+
+test("read-only chat diagnostics observes without sending or calling webhook", async () => {
+  let observed = 0;
+  let sent = 0;
+  const workerUrls = [];
+  const service = new ZoomSenderService({
+    workerClient: {
+      async pull() {
+        workerUrls.push("/zoom-only/outbox");
+        return { messages: [] };
+      }
+    },
+    zoomAdapter: {
+      async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+      async observeChatDiagnostics() {
+        observed += 1;
+        return { enabled: true, newMessages: 1 };
+      },
+      async sendMessage() {
+        sent += 1;
+        return { sent: true, ack: true };
+      }
+    },
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  const result = await service.runOnce();
+  assert.equal(observed, 1);
+  assert.equal(sent, 0);
+  assert.equal(result.messages, 0);
+  assert.deepEqual(workerUrls, ["/zoom-only/outbox"]);
+  assert.ok(workerUrls.every((url) => url !== "/zoom-only/webhook"));
+});
+
+test("chat diagnostics fingerprint is stable and separates duplicates from different authors", () => {
+  const first = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00" });
+  const duplicate = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00" });
+  const otherAuthor = buildChatMessageFingerprint({ displayName: "Маня", text: "111", timestamp: "10:00" });
+  assert.equal(first, duplicate);
+  assert.notEqual(first, otherAuthor);
+  assert.match(first, /^chat-[0-9a-f]{8}$/u);
 });
 
 test("real-mode browser launch uses safe Zoom Web Client flags", () => {
