@@ -383,6 +383,7 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(envExample, /ZOOM_AUTH_SETUP=false/u);
   assert.match(envExample, /ZOOM_AUTH_EMAIL=\s*(?:\r?\n)/u);
   assert.match(envExample, /ZOOM_AUTH_PASSWORD=\s*(?:\r?\n)/u);
+  assert.match(envExample, /ZOOM_AUTH_WAIT_FOR_MANUAL=false/u);
   assert.doesNotMatch(envExample, /replace-with-worker-secret|super-secret|sk-[a-z0-9]/iu);
   assert.match(runbook, /не запускать старый `zoom-bridge`/iu);
   assert.match(runbook, /не вызывает `\/zoom-only\/webhook`/iu);
@@ -393,6 +394,8 @@ test("auth setup uses server env credentials without hardcoded secrets or artifa
   const source = await fs.readFile(new URL("../src/auth-setup.mjs", import.meta.url), "utf8");
   assert.match(source, /ZOOM_AUTH_EMAIL/u);
   assert.match(source, /ZOOM_AUTH_PASSWORD/u);
+  assert.match(source, /ZOOM_AUTH_WAIT_FOR_MANUAL/u);
+  assert.match(source, /waiting for manual verification/u);
   assert.match(source, /launchPersistentContext/u);
   assert.match(source, /manual_verification_required/u);
   assert.doesNotMatch(source, /screenshot|storageState|cookies\(\)|console\.log\([^)]*email|console\.log\([^)]*password/iu);

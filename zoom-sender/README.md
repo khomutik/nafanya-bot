@@ -93,6 +93,7 @@ Real-режим открывает браузер, заходит в Zoom и р�
 ZOOM_AUTH_SETUP=true
 ZOOM_AUTH_EMAIL=
 ZOOM_AUTH_PASSWORD=
+ZOOM_AUTH_WAIT_FOR_MANUAL=true
 ```
 
 Реальные email и пароль вводятся только в серверный `.env` или руками в браузере. Их нельзя писать в README, коммитить, отправлять в чат, логи или скриншоты. После успешного входа профиль хранится в Docker volume `/app/profile`; этот профиль тоже не попадает в GitHub.

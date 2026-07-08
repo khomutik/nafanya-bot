@@ -8,6 +8,18 @@ function readSecret(name) {
   return String(process.env[name] || "").trim();
 }
 
+function readBool(name, fallback = false) {
+  const value = process.env[name];
+  if (value === undefined || value === null || value === "") return fallback;
+  return /^(1|true|yes|on)$/iu.test(String(value).trim());
+}
+
+function readPositiveInt(name, fallback, { min = 1000, max = 900000 } = {}) {
+  const value = Number(process.env[name]);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
 async function clickVisibleButton(page, patterns) {
   for (const pattern of patterns) {
     const button = page.getByRole("button", { name: pattern }).first();
@@ -49,6 +61,8 @@ async function isSignedIn(page) {
 async function run() {
   const email = readSecret("ZOOM_AUTH_EMAIL");
   const password = readSecret("ZOOM_AUTH_PASSWORD");
+  const waitForManual = readBool("ZOOM_AUTH_WAIT_FOR_MANUAL", false);
+  const authWaitMs = readPositiveInt("ZOOM_AUTH_WAIT_MS", AUTH_WAIT_MS);
   if (!email || !password) {
     throw new Error("Missing Zoom auth credentials: set ZOOM_AUTH_EMAIL and ZOOM_AUTH_PASSWORD in the server .env.");
   }
@@ -74,7 +88,7 @@ async function run() {
     await clickVisibleButton(page, [/next/i, /continue/i, /\u0434\u0430\u043b\u0435\u0435/iu]);
     await page.waitForTimeout(1500);
     const blockerBeforePassword = await detectAuthBlocker(page);
-    if (blockerBeforePassword) throw new Error(blockerBeforePassword);
+    if (blockerBeforePassword && !waitForManual) throw new Error(blockerBeforePassword);
     const passwordFilled = await fillFirstVisible(page, [
       'input[type="password"]',
       'input[name="password"]',
@@ -84,10 +98,17 @@ async function run() {
       throw new Error("Zoom password field was not available. Manual verification may be required.");
     }
     await clickVisibleButton(page, [/sign in/i, /log in/i, /\u0432\u043e\u0439\u0442\u0438/iu]);
-    const deadline = Date.now() + AUTH_WAIT_MS;
+    const deadline = Date.now() + authWaitMs;
+    let manualNoticeLogged = false;
     while (Date.now() < deadline) {
       const blocker = await detectAuthBlocker(page);
-      if (blocker) throw new Error(blocker);
+      if (blocker) {
+        if (!waitForManual) throw new Error(blocker);
+        if (!manualNoticeLogged) {
+          console.log("Zoom auth setup is waiting for manual verification.");
+          manualNoticeLogged = true;
+        }
+      }
       if (await isSignedIn(page)) {
         console.log("Zoom auth profile setup completed.");
         return;

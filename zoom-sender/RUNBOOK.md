@@ -73,6 +73,7 @@ docker compose -f compose.example.yml down
 
 ```bash
 ZOOM_AUTH_SETUP=true
+ZOOM_AUTH_WAIT_FOR_MANUAL=true
 ```
 
 Также в серверный `.env` добавить `ZOOM_AUTH_EMAIL` и `ZOOM_AUTH_PASSWORD`. Реальные значения не писать в чат, README, issue, логи или скриншоты.
