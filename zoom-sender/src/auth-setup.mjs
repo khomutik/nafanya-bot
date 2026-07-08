@@ -42,6 +42,16 @@ async function fillFirstVisible(page, selectors, value) {
   return false;
 }
 
+async function hasFirstVisible(page, selectors) {
+  for (const selector of selectors) {
+    const input = page.locator(selector).first();
+    if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function detectAuthBlocker(page) {
   const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
   if (/captcha|verification code|two-factor|2fa|verify your identity|check your email|код подтверждения|подтвержд/iu.test(text)) {
@@ -56,6 +66,26 @@ async function isSignedIn(page) {
   const body = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
   if (/\/signin|\/login/iu.test(url)) return false;
   return /profile|account|meetings|settings|sign out|выйти/iu.test(`${title}\n${body}`);
+}
+
+async function waitUntilSignedIn(page, deadline, { waitForManual }) {
+  let manualNoticeLogged = false;
+  while (Date.now() < deadline) {
+    const blocker = await detectAuthBlocker(page);
+    if (blocker) {
+      if (!waitForManual) throw new Error(blocker);
+      if (!manualNoticeLogged) {
+        console.log("Zoom auth setup is waiting for manual verification.");
+        manualNoticeLogged = true;
+      }
+    }
+    if (await isSignedIn(page)) {
+      console.log("Zoom auth profile setup completed.");
+      return true;
+    }
+    await page.waitForTimeout(2000);
+  }
+  return false;
 }
 
 async function run() {
@@ -89,32 +119,29 @@ async function run() {
     await page.waitForTimeout(1500);
     const blockerBeforePassword = await detectAuthBlocker(page);
     if (blockerBeforePassword && !waitForManual) throw new Error(blockerBeforePassword);
-    const passwordFilled = await fillFirstVisible(page, [
+    const passwordSelectors = [
       'input[type="password"]',
       'input[name="password"]',
       'input[aria-label*="password" i]'
-    ], password);
+    ];
+    if (!(await hasFirstVisible(page, passwordSelectors)) && waitForManual) {
+      console.log("Zoom auth setup is waiting for manual verification.");
+      const passwordDeadline = Date.now() + authWaitMs;
+      while (Date.now() < passwordDeadline && !(await hasFirstVisible(page, passwordSelectors))) {
+        if (await isSignedIn(page)) {
+          console.log("Zoom auth profile setup completed.");
+          return;
+        }
+        await page.waitForTimeout(2000);
+      }
+    }
+    const passwordFilled = await fillFirstVisible(page, passwordSelectors, password);
     if (!passwordFilled) {
       throw new Error("Zoom password field was not available. Manual verification may be required.");
     }
     await clickVisibleButton(page, [/sign in/i, /log in/i, /\u0432\u043e\u0439\u0442\u0438/iu]);
     const deadline = Date.now() + authWaitMs;
-    let manualNoticeLogged = false;
-    while (Date.now() < deadline) {
-      const blocker = await detectAuthBlocker(page);
-      if (blocker) {
-        if (!waitForManual) throw new Error(blocker);
-        if (!manualNoticeLogged) {
-          console.log("Zoom auth setup is waiting for manual verification.");
-          manualNoticeLogged = true;
-        }
-      }
-      if (await isSignedIn(page)) {
-        console.log("Zoom auth profile setup completed.");
-        return;
-      }
-      await page.waitForTimeout(2000);
-    }
+    if (await waitUntilSignedIn(page, deadline, { waitForManual })) return;
     throw new Error("Zoom auth did not complete before timeout.");
   } finally {
     await browser.close().catch(() => null);

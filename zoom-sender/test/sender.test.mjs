@@ -396,6 +396,7 @@ test("auth setup uses server env credentials without hardcoded secrets or artifa
   assert.match(source, /ZOOM_AUTH_PASSWORD/u);
   assert.match(source, /ZOOM_AUTH_WAIT_FOR_MANUAL/u);
   assert.match(source, /waiting for manual verification/u);
+  assert.match(source, /hasFirstVisible/u);
   assert.match(source, /launchPersistentContext/u);
   assert.match(source, /manual_verification_required/u);
   assert.doesNotMatch(source, /screenshot|storageState|cookies\(\)|console\.log\([^)]*email|console\.log\([^)]*password/iu);
