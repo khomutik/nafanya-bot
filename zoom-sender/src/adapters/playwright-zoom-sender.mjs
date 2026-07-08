@@ -125,12 +125,14 @@ async function fillMeetingName(page, name) {
     "#input-for-name",
     'input[name="name"]',
     'input[placeholder*="name" i]',
-    'input[aria-label*="name" i]'
+    'input[aria-label*="name" i]',
+    'input[type="text"]:visible'
   ];
   for (const selector of selectors) {
     const input = page.locator(selector).first();
     if (await input.isVisible({ timeout: 1200 }).catch(() => false)) {
       await input.fill(name).catch(() => null);
+      await page.waitForTimeout(300).catch(() => null);
       return true;
     }
   }
