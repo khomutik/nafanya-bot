@@ -233,6 +233,8 @@ test("Zoom browser adapter handles the Zoom web landing gate and read-only diagn
   assert.match(source, /getByText\(pattern\)/u);
   assert.match(source, /button, a, \[role='button'\]/u);
   assert.match(source, /input\[type="text"\]:visible/u);
+  assert.match(source, /after-fill-name/u);
+  assert.match(source, /nameFilled/u);
   assert.match(source, /page\.on\("console"/u);
   assert.match(source, /page\.on\("requestfailed"/u);
   assert.match(source, /chat-readonly-diagnostics\.jsonl/u);

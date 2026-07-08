@@ -131,12 +131,26 @@ async function fillMeetingName(page, name) {
   for (const selector of selectors) {
     const input = page.locator(selector).first();
     if (await input.isVisible({ timeout: 1200 }).catch(() => false)) {
-      await input.fill(name).catch(() => null);
+      await input.fill(name);
       await page.waitForTimeout(300).catch(() => null);
-      return true;
+      const value = await input.inputValue().catch(() => "");
+      if (String(value || "").trim()) return true;
     }
   }
-  return false;
+  return page.evaluate((participantName) => {
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 20 && rect.height > 10;
+    };
+    const input = [...document.querySelectorAll('input[type="text"]')].find(isVisible);
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, participantName);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(input.value || "").trim().length > 0;
+  }, name).catch(() => false);
 }
 
 async function sendChatText(page, text) {
@@ -496,11 +510,18 @@ export class PlaywrightZoomSender {
     await saveDiagnosticsSnapshot(this.page, this.presence, diagnosticsRun, "02-after-join-from-browser", {}, this.logger).catch((error) => this.logger.warn?.(`Zoom Sender diagnostics failed: ${error?.message || String(error)}`));
     await clickTextByPattern(this.page, CONTINUE_WITHOUT_MEDIA_PATTERNS).catch(() => false);
     await saveDiagnosticsSnapshot(this.page, this.presence, diagnosticsRun, "03-after-continue-without-media", {}, this.logger).catch((error) => this.logger.warn?.(`Zoom Sender diagnostics failed: ${error?.message || String(error)}`));
-    await fillMeetingName(this.page, this.config.participantName).catch(() => false);
-    await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
+    const nameFilled = await fillMeetingName(this.page, this.config.participantName).catch(() => false);
+    await saveDiagnosticsSnapshot(this.page, this.presence, diagnosticsRun, "04-after-fill-name", { nameFilled }, this.logger).catch((error) => this.logger.warn?.(`Zoom Sender diagnostics failed: ${error?.message || String(error)}`));
+    if (nameFilled) {
+      await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
+    } else {
+      this.logger.warn?.("Zoom Sender could not confirm participant name field before Join.");
+    }
     await clickTextByPattern(this.page, CONTINUE_WITHOUT_MEDIA_PATTERNS).catch(() => false);
-    await fillMeetingName(this.page, this.config.participantName).catch(() => false);
-    await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
+    const nameRefilled = await fillMeetingName(this.page, this.config.participantName).catch(() => nameFilled);
+    if (nameRefilled) {
+      await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
+    }
     await this.page.waitForTimeout(3000);
     await openChatPanel(this.page).catch(() => false);
     this.presence = await this.getPresence();
