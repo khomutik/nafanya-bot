@@ -65,6 +65,14 @@ async function pullOutbox(env) {
   return (await json(response)).messages || [];
 }
 
+async function ackOutbox(env, ids) {
+  const response = await worker.fetch(bridgeRequest("/zoom-only/outbox", {
+    body: JSON.stringify({ ackIds: ids, limit: 50 })
+  }), env);
+  assert.equal(response.status, 200);
+  return await json(response);
+}
+
 async function postPanelAction(env, body, token = true) {
   const headers = { "content-type": "application/json" };
   if (token) headers["x-nafanya-zoom-panel-token"] = "panel-token";
@@ -86,6 +94,7 @@ async function testAccess() {
   assert.match(html, /Пульт Нафани для Zoom/u);
   assert.match(html, /data-key="prayer"/u);
   assert.match(html, /data-key="meeting_schedule"/u);
+  assert.match(html, /data-type="test_message"/u);
 
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
   assert.equal(deniedAction.status, 401);
@@ -93,6 +102,42 @@ async function testAccess() {
   const allowedAction = await postPanelAction(env, { type: "message", key: "prayer" });
   assert.equal(allowedAction.status, 200);
   assert.equal((await json(allowedAction)).ok, true);
+}
+
+async function testSafeTestMessageAction() {
+  const env = makeEnv();
+  const expected = "Тест Нафани. Сообщение можно игнорировать.";
+
+  let denied = await postPanelAction(env, { action: "test_message" }, false);
+  assert.equal(denied.status, 401);
+
+  let response = await postPanelAction(env, {
+    action: "test_message",
+    text: "МОЛИТВА\n\nэтот текст должен быть проигнорирован",
+    messages: ["темы", "расписание"]
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.key, "test_message");
+  assert.equal(data.queued.length, 1);
+  assert.equal(data.queued[0].text, expected);
+
+  let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].text, expected);
+  assert.doesNotMatch(outbox[0].text, /МОЛИТВА|темы|расписание/u);
+
+  await ackOutbox(env, [outbox[0].id]);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postPanelAction(env, { type: "test_message", text: "чужой текст" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].text, expected);
 }
 
 async function testMessageButtonsAndOutbox() {
@@ -164,6 +209,7 @@ async function testStatusAndQueueActions() {
 }
 
 await testAccess();
+await testSafeTestMessageAction();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 

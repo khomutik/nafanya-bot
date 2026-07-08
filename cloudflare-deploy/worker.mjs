@@ -3110,6 +3110,9 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     return zoomPanelUnauthorizedResponse();
   }
   const payload = await request.json().catch(() => ({}));
+  if (payload.action === "test_message" || payload.type === "test_message") {
+    return Response.json(await handleZoomV2PanelTestMessageAction(env));
+  }
   if (payload.type === "message" || payload.key) {
     return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
   }
@@ -3132,6 +3135,20 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   });
 }
 __name(handleZoomOnlyAppActionRequest, "handleZoomOnlyAppActionRequest");
+async function handleZoomV2PanelTestMessageAction(env) {
+  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
+  await enqueueZoomOnlyMessages(env, [ZOOM_V2_SAFE_TEST_MESSAGE]);
+  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "test_message", label: "\u0422\u0435\u0441\u0442", ok: true }).catch(() => null);
+  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  const queued = (Array.isArray(outbox.messages) ? outbox.messages : []).filter((message) => String(message.text || "") === ZOOM_V2_SAFE_TEST_MESSAGE);
+  return {
+    ok: true,
+    message: "\u0422\u0435\u0441\u0442\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 Zoom outbox",
+    key: "test_message",
+    queued
+  };
+}
+__name(handleZoomV2PanelTestMessageAction, "handleZoomV2PanelTestMessageAction");
 function getZoomV2PanelMessageAction(key) {
   return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || null;
 }
@@ -3415,6 +3432,7 @@ var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
   { key: "meeting_schedule", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435" },
   { key: "telemost_link", label: "\u0421\u0441\u044b\u043b\u043a\u0438" }
 ];
+var ZOOM_V2_SAFE_TEST_MESSAGE = "\u0422\u0435\u0441\u0442 \u041d\u0430\u0444\u0430\u043d\u0438. \u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043c\u043e\u0436\u043d\u043e \u0438\u0433\u043d\u043e\u0440\u0438\u0440\u043e\u0432\u0430\u0442\u044c.";
 var ZOOM_V2_PANEL_QUEUE_ACTIONS = [
   { key: "open_bill", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u0438\u043b\u043b" },
   { key: "open_bk", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u041a" },
@@ -3613,6 +3631,7 @@ function buildZoomAppHtml({ actionPath = "/zoom/app/action", zoomOnly = false } 
 __name(buildZoomAppHtml, "buildZoomAppHtml");
 function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath = "/zoom-only/status" } = {}) {
   const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
   const queueButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   return `<!doctype html>
 <html lang="ru">
@@ -3636,6 +3655,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     .queue { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .action { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; background: #ffffff; color: #171b33; font-size: 15px; font-weight: 750; text-align: left; padding: 10px 12px; cursor: pointer; }
     .action.secondary { background: #edf3ff; border-color: #aebbd4; }
+    .action.test { background: #fff4df; border-color: #d9ad67; }
     .action:disabled { opacity: .55; cursor: wait; }
     .log { min-height: 76px; max-height: 180px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 12px; font-size: 13px; }
     @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
@@ -3654,6 +3674,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     <section>
       <h2>Сообщения</h2>
       <div class="grid">${messageButtons}</div>
+      <div class="grid">${testButton}</div>
     </section>
     <section>
       <h2>Очередь</h2>
@@ -3698,7 +3719,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     async function runAction(type, key) {
       buttons.forEach((button) => button.disabled = true);
       try {
-        const body = type === "queue" ? { type, queueAction: key } : { type, key };
+        const body = type === "queue" ? { type, queueAction: key } : type === "test_message" ? { action: "test_message" } : { type, key };
         const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) throw new Error(data.error || "action failed");
