@@ -1235,12 +1235,12 @@ var AnnouncementStateDurableObject = class {
         await this.saveState(announcementState);
         return Response.json(queueResult.response);
       }
-      if (action === "zoom_only_chat_ingest_111") {
+      if (action === "zoom_only_chat_ingest_code") {
         const text = String(payload.text || "").trim();
         const authorName = String(payload.authorName || "").trim();
         const sourceFingerprint = String(payload.sourceFingerprint || "").trim();
         const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
-        if (text !== "111") {
+        if (!/^(?:111|222|333|444)$/u.test(text)) {
           return Response.json({ ok: true, handled: false, ignored: "unsupported_text" });
         }
         if (!sourceFingerprint) {
@@ -1252,14 +1252,16 @@ var AnnouncementStateDurableObject = class {
         if (!queue.isOpen || !queue.mode) {
           return Response.json({ ok: true, handled: false, ignored: "queue_closed", queue });
         }
+        if (!["rs", "bk"].includes(queue.mode)) {
+          return Response.json({ ok: true, handled: false, ignored: "unsupported_mode", queue });
+        }
         if (announcementState.zoomOnlyChatIngestFingerprints.includes(sourceFingerprint)) {
           return Response.json({ ok: true, handled: true, duplicate: true, ignored: "fingerprint_duplicate", queue });
         }
         announcementState.zoomOnlyChatIngestFingerprints.push(sourceFingerprint);
         announcementState.zoomOnlyChatIngestFingerprints = announcementState.zoomOnlyChatIngestFingerprints.slice(-300);
-        const block = queue.mode === "bill" ? "first" : queue.mode;
-        const entry = makeManualQueueEntryCore(authorName, block, "111", "111", { source: "Zoom chat" });
-        const queueResult = runQueueStateActionCore(queue, "add", { entry }, buildZoomOnlyQueueTextCore);
+        const entry = makeManualQueueEntryCore(authorName, queue.mode, "111", text, { source: "Zoom chat" });
+        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: true }, buildZoomOnlyQueueTextCore);
         announcementState.zoomOnlyQueueState = queueResult.state;
         const queued = [];
         if (queueResult.response?.publishQueue && !queueResult.response?.duplicate && queueResult.response?.queueText) {
@@ -3107,7 +3109,7 @@ async function handleZoomOnlyBridgeRequest(request, env) {
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
 async function handleZoomOnlyChatIngest(env, payload) {
   const text = String(payload?.text || "").trim();
-  if (text !== "111") {
+  if (!/^(?:111|222|333|444)$/u.test(text)) {
     return { ok: true, handled: false, ignored: "unsupported_text" };
   }
   const authorName = stripTelegramHandles(String(payload?.authorName || payload?.displayName || "").trim());
@@ -3118,7 +3120,7 @@ async function handleZoomOnlyChatIngest(env, payload) {
   if (!sourceFingerprint) {
     return { ok: false, handled: false, error: "sourceFingerprint is required" };
   }
-  return callAnnouncementState(env, "zoom_only_chat_ingest_111", {
+  return callAnnouncementState(env, "zoom_only_chat_ingest_code", {
     authorName,
     text,
     timestamp: String(payload?.timestamp || "").trim(),

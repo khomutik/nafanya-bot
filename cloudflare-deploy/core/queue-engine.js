@@ -254,8 +254,8 @@ export function buildZoomOnlyQueueText(state) {
   return base.join("\n");
 }
 
-export function addQueueEntryToState(state, entry) {
-  if (isDuplicatePendingQueueEntry(state, entry)) {
+export function addQueueEntryToState(state, entry, { allowDuplicateEntries = false } = {}) {
+  if (!allowDuplicateEntries && isDuplicatePendingQueueEntry(state, entry)) {
     ensureSingleActiveEntry(state);
     return;
   }
@@ -404,12 +404,12 @@ export function runQueueStateAction(queueState, action, payload = {}, buildText 
       payload.entry.block = getBillSpeechBlock(nextCode);
       payload.entry.kind = null;
     } else {
-      if (isDuplicatePendingQueueEntry(state, payload.entry)) {
+      if (!payload.allowDuplicateEntries && isDuplicatePendingQueueEntry(state, payload.entry)) {
         return queueResult(state, { ok: true, duplicate: true, publishQueue: true }, buildText);
       }
       pushQueueHistory(state);
     }
-    addQueueEntryToState(state, payload.entry);
+    addQueueEntryToState(state, payload.entry, { allowDuplicateEntries: Boolean(payload.allowDuplicateEntries) });
     state.queueMessageId = null;
     return queueResult(state, { ok: true, publishQueue: true, previousMessageId }, buildText);
   }

@@ -227,7 +227,7 @@ async function testSafeAddTestParticipantAction() {
   assert.equal(status.queue.isOpen, false);
 }
 
-async function testSafeZoomChat111Ingest() {
+async function testSafeZoomChatCodeIngest() {
   const env = makeEnv();
   const authorName = "Маня Х.";
 
@@ -250,6 +250,17 @@ async function testSafeZoomChat111Ingest() {
   assert.equal(data.ok, true);
   assert.equal(data.handled, false);
   assert.equal(data.ignored, "queue_closed");
+  for (const code of ["222", "333", "444"]) {
+    response = await postChatIngest(env, {
+      authorName,
+      text: code,
+      sourceFingerprint: `fp-closed-${code}`
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "queue_closed");
+  }
   let outbox = await pullOutbox(env);
   assert.equal(outbox.length, 0);
 
@@ -262,9 +273,7 @@ async function testSafeZoomChat111Ingest() {
 
   const ignoredInputs = [
     ["привет", "fp-hi"],
-    ["222", "fp-222"],
-    ["333", "fp-333"],
-    ["444", "fp-444"],
+    ["", "fp-empty-text"],
     ["111 111 привет 222", "fp-aggregate-words"],
     ["Маня Х. to Everyone 03:44 PM 111 111 привет 222", "fp-aggregate-zoom"],
     ["111", "fp-empty-author", ""]
@@ -285,56 +294,111 @@ async function testSafeZoomChat111Ingest() {
   outbox = await pullOutbox(env);
   assert.equal(outbox.length, 0);
 
-  response = await postChatIngest(env, {
-    authorName,
-    text: "111",
-    timestamp: "03:44 PM",
-    sourceFingerprint: "fp-111-a",
-    observedAt: "2026-07-08T15:44:30.000Z"
-  });
-  data = await json(response);
-  assert.equal(response.status, 200);
-  assert.equal(data.ok, true);
-  assert.equal(data.handled, true);
-  assert.equal(data.duplicate, false);
-  assert.equal(data.queue.entries.length, 1);
-  assert.equal(data.queue.entries[0].author, authorName);
+  for (const [index, code] of ["111", "222", "333", "444"].entries()) {
+    response = await postChatIngest(env, {
+      authorName,
+      text: code,
+      timestamp: "03:44 PM",
+      sourceFingerprint: `fp-rs-${code}`,
+      observedAt: "2026-07-08T15:44:30.000Z"
+    });
+    data = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    assert.equal(data.queue.entries.length, index + 1);
+    assert.equal(data.queue.entries.at(-1).author, authorName);
+    assert.equal(data.queue.entries.at(-1).label, "111");
 
-  outbox = await pullOutbox(env);
-  assert.equal(outbox.length, 1);
-  assert.match(outbox[0].text, /Маня Х\./u);
-  await ackOutbox(env, outbox.map((message) => message.id));
-  outbox = await pullOutbox(env);
-  assert.equal(outbox.length, 0);
-
-  response = await postChatIngest(env, {
-    authorName,
-    text: "111",
-    sourceFingerprint: "fp-111-a"
-  });
-  data = await json(response);
-  assert.equal(data.ok, true);
-  assert.equal(data.duplicate, true);
-  outbox = await pullOutbox(env);
-  assert.equal(outbox.length, 0);
-
-  response = await postChatIngest(env, {
-    authorName,
-    text: "111",
-    sourceFingerprint: "fp-111-b"
-  });
-  data = await json(response);
-  assert.equal(data.ok, true);
-  assert.equal(data.duplicate, true);
+    outbox = await pullOutbox(env);
+    assert.ok(outbox.length >= 1);
+    assert.match(outbox.at(-1).text, /Маня Х\./u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+    outbox = await pullOutbox(env);
+    assert.equal(outbox.length, 0);
+  }
   status = await getZoomOnlyStatus(env);
-  assert.equal(status.queue.entries.length, 1);
-  assert.equal(status.queue.entries[0].author, authorName);
+  assert.equal(status.queue.entries.length, 4);
+  assert.deepEqual(status.queue.entries.map((entry) => entry.author), [authorName, authorName, authorName, authorName]);
+  assert.deepEqual(status.queue.entries.map((entry) => entry.label), ["111", "111", "111", "111"]);
+
+  response = await postChatIngest(env, {
+    authorName,
+    text: "222",
+    sourceFingerprint: "fp-rs-222"
+  });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.duplicate, true);
   outbox = await pullOutbox(env);
   assert.equal(outbox.length, 0);
+
+  response = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    sourceFingerprint: "fp-rs-111-new"
+  });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.duplicate, false);
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.entries.length, 5);
+  assert.equal(status.queue.entries.at(-1).author, authorName);
+  assert.equal(status.queue.entries.at(-1).label, "111");
+  outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
 
   response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
   data = await json(response);
   assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.isOpen, false);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "open_bk" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  for (const code of ["111", "222", "333", "444"]) {
+    response = await postChatIngest(env, {
+      authorName,
+      text: code,
+      sourceFingerprint: `fp-bk-${code}`
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+  }
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.mode, "bk");
+  assert.equal(status.queue.entries.length, 4);
+  assert.deepEqual(status.queue.entries.map((entry) => entry.label), ["111", "111", "111", "111"]);
+  outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  response = await postChatIngest(env, {
+    authorName,
+    text: "333",
+    sourceFingerprint: "fp-bk-333"
+  });
+  data = await json(response);
+  assert.equal(data.duplicate, true);
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.entries.length, 4);
+  response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
 }
 
 async function testMessageButtonsAndOutbox() {
@@ -408,7 +472,7 @@ async function testStatusAndQueueActions() {
 await testAccess();
 await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
-await testSafeZoomChat111Ingest();
+await testSafeZoomChatCodeIngest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 

@@ -202,7 +202,8 @@ function buildChatMessageFingerprint(message = {}) {
   const basis = [
     normalizeDiagnosticChatText(message.displayName || ""),
     normalizeDiagnosticChatText(message.text || ""),
-    normalizeDiagnosticChatText(message.timestamp || "")
+    normalizeDiagnosticChatText(message.timestamp || ""),
+    normalizeDiagnosticChatText(message.domPath || "")
   ].join("|");
   let hash = 2166136261;
   for (let index = 0; index < basis.length; index += 1) {
@@ -312,7 +313,7 @@ async function collectVisibleChatMessages(page) {
       }
     }
     const uniqueNodes = [...new Set(nodes)].slice(-40);
-    return uniqueNodes.map((element) => {
+    return uniqueNodes.map((element, index) => {
       const text = clean(element.innerText || element.textContent).slice(0, textLimit);
       const lines = text.split(/\n+/u).map(clean).filter(Boolean);
       const timestampPattern = /(?:\d{1,2}:\d{2}(?::\d{2})?|am|pm|сегодня|today)/iu;
@@ -328,6 +329,7 @@ async function collectVisibleChatMessages(page) {
         displayName,
         text,
         timestamp,
+        domPath: `${element.tagName.toLowerCase()}:${index}`,
         rawDom: String(element.outerHTML || "").slice(0, domLimit)
       };
     });
@@ -557,6 +559,7 @@ export class PlaywrightZoomSender {
         displayName: normalizeDiagnosticChatText(message.displayName).slice(0, 160),
         text: normalizeDiagnosticChatText(message.text).slice(0, CHAT_DIAGNOSTIC_TEXT_LIMIT),
         timestamp: normalizeDiagnosticChatText(message.timestamp).slice(0, 80),
+        domPath: normalizeDiagnosticChatText(message.domPath).slice(0, 120),
         rawDom: sanitizeDiagnosticText(message.rawDom).slice(0, CHAT_DIAGNOSTIC_DOM_LIMIT)
       };
       if (!safeMessage.text) continue;

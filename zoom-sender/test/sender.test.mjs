@@ -4,7 +4,7 @@ import { Backoff } from "../src/backoff.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
-import { ZoomSenderService, selectZoomChat111IngestCandidates } from "../src/sender.mjs";
+import { ZoomSenderService, selectZoomChatCodeIngestCandidates } from "../src/sender.mjs";
 import { WorkerOutboxClient } from "../src/worker-client.mjs";
 import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
@@ -218,8 +218,8 @@ test("sender-only code does not import queue engine or call Worker webhook", asy
     import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8"))
   ]);
   const source = senderSources.join("\n");
-  assert.doesNotMatch(source, /queue-engine|parseQueueEntry|parseZoomCommand|["'](?:222|333|444)["']/u);
-  assert.match(source, /selectZoomChat111IngestCandidates/u);
+  assert.doesNotMatch(source, /queue-engine|parseQueueEntry|parseZoomCommand/u);
+  assert.match(source, /selectZoomChatCodeIngestCandidates/u);
   assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|parseZoomCommand/u);
   assert.match(source, /\/zoom-only\/outbox/u);
 });
@@ -274,15 +274,17 @@ test("read-only chat diagnostics observes without sending or calling webhook", a
 });
 
 test("chat diagnostics fingerprint is stable and separates duplicates from different authors", () => {
-  const first = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00" });
-  const duplicate = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00" });
-  const otherAuthor = buildChatMessageFingerprint({ displayName: "Маня", text: "111", timestamp: "10:00" });
+  const first = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00", domPath: "div:1" });
+  const duplicate = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00", domPath: "div:1" });
+  const sameTextOtherNode = buildChatMessageFingerprint({ displayName: "Маша", text: "111", timestamp: "10:00", domPath: "div:2" });
+  const otherAuthor = buildChatMessageFingerprint({ displayName: "Маня", text: "111", timestamp: "10:00", domPath: "div:1" });
   assert.equal(first, duplicate);
+  assert.notEqual(first, sameTextOtherNode);
   assert.notEqual(first, otherAuthor);
   assert.match(first, /^chat-[0-9a-f]{8}$/u);
 });
 
-test("chat ingest candidates include only atomic 111 and ignore aggregates", () => {
+test("chat ingest candidates include only atomic queue codes and ignore aggregates", () => {
   const messages = [
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
     { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
@@ -292,11 +294,11 @@ test("chat ingest candidates include only atomic 111 and ignore aggregates", () 
     { displayName: "444", text: "444", timestamp: "", fingerprint: "four" },
     { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" }
   ];
-  const candidates = selectZoomChat111IngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].authorName, "Маня Х.");
-  assert.equal(candidates[0].text, "111");
-  assert.equal(candidates[0].sourceFingerprint, "atom-111");
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 4);
+  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
+  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["atom-111", "two", "three", "four"]);
 });
 
 test("chat ingest forwards only safe candidates and never sends Zoom replies", async () => {
@@ -320,7 +322,8 @@ test("chat ingest forwards only safe candidates and never sends Zoom replies", a
           messages: [
             { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
             { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
-            { displayName: "222", text: "222", timestamp: "", fingerprint: "two" }
+            { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
+            { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" }
           ]
         };
       },
@@ -335,9 +338,11 @@ test("chat ingest forwards only safe candidates and never sends Zoom replies", a
   });
 
   await service.runOnce();
-  assert.equal(ingested.length, 1);
+  assert.equal(ingested.length, 2);
   assert.equal(ingested[0].authorName, "Маня Х.");
   assert.equal(ingested[0].text, "111");
+  assert.equal(ingested[1].authorName, "Маня Х.");
+  assert.equal(ingested[1].text, "222");
   assert.equal(sent, 0);
 });
 
