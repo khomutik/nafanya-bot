@@ -1257,6 +1257,12 @@ var AnnouncementStateDurableObject = class {
             isOpen: Boolean(queue.isOpen),
             mode: queue.mode || "bk",
             entriesCount: Array.isArray(queue.entries) ? queue.entries.length : 0,
+            entries: (Array.isArray(queue.entries) ? queue.entries : []).map((entry) => ({
+              author: String(entry.author || ""),
+              label: String(entry.label || ""),
+              status: String(entry.status || "pending"),
+              isActive: Boolean(entry.isActive)
+            })),
             historyCount: Array.isArray(queue.history) ? queue.history.length : 0
           },
           outboxSize: announcementState.zoomOnlyOutbox.length,
@@ -3113,6 +3119,9 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   if (payload.action === "test_message" || payload.type === "test_message") {
     return Response.json(await handleZoomV2PanelTestMessageAction(env));
   }
+  if (payload.action === "add_test_participant" || payload.type === "add_test_participant") {
+    return Response.json(await handleZoomV2PanelAddTestParticipantAction(env));
+  }
   if (payload.type === "message" || payload.key) {
     return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
   }
@@ -3149,6 +3158,36 @@ async function handleZoomV2PanelTestMessageAction(env) {
   };
 }
 __name(handleZoomV2PanelTestMessageAction, "handleZoomV2PanelTestMessageAction");
+async function handleZoomV2PanelAddTestParticipantAction(env) {
+  const queueInfo = await callZoomOnlyQueueState(env, "get");
+  const state = queueInfo.state || createEmptyQueueState();
+  if (!state.isOpen) {
+    await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_test_participant", label: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a", ok: false }).catch(() => null);
+    return {
+      ok: false,
+      error: "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Zoom-only \u043e\u0447\u0435\u0440\u0435\u0434\u044c.",
+      key: "add_test_participant",
+      queue: state
+    };
+  }
+  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
+  const label = state.mode === "bill" ? "111" : "111";
+  const block = state.mode === "bill" ? "first" : state.mode;
+  const entry = makeManualQueueEntryCore(ZOOM_V2_TEST_PARTICIPANT_NAME, block, label, "add_test_participant", { source: "Zoom-only test" });
+  const result = await callZoomOnlyQueueState(env, "add", { entry });
+  await applyZoomOnlyQueueResponse(env, result);
+  const updatedQueue = await callZoomOnlyQueueState(env, "get").catch(() => ({ state: result?.state || null }));
+  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_test_participant", label: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a", ok: true }).catch(() => null);
+  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  return {
+    ok: true,
+    message: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d \u0432 Zoom-only \u043e\u0447\u0435\u0440\u0435\u0434\u044c",
+    key: "add_test_participant",
+    queue: updatedQueue?.state || null,
+    queued: Array.isArray(outbox.messages) ? outbox.messages : []
+  };
+}
+__name(handleZoomV2PanelAddTestParticipantAction, "handleZoomV2PanelAddTestParticipantAction");
 function getZoomV2PanelMessageAction(key) {
   return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || null;
 }
@@ -3433,6 +3472,7 @@ var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
   { key: "telemost_link", label: "\u0421\u0441\u044b\u043b\u043a\u0438" }
 ];
 var ZOOM_V2_SAFE_TEST_MESSAGE = "\u0422\u0435\u0441\u0442 \u041d\u0430\u0444\u0430\u043d\u0438. \u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043c\u043e\u0436\u043d\u043e \u0438\u0433\u043d\u043e\u0440\u0438\u0440\u043e\u0432\u0430\u0442\u044c.";
+var ZOOM_V2_TEST_PARTICIPANT_NAME = "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a";
 var ZOOM_V2_PANEL_QUEUE_ACTIONS = [
   { key: "open_bill", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u0438\u043b\u043b" },
   { key: "open_bk", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u041a" },
@@ -3632,6 +3672,7 @@ __name(buildZoomAppHtml, "buildZoomAppHtml");
 function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath = "/zoom-only/status" } = {}) {
   const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
+  const testParticipantButton = `<button class="action test" type="button" data-type="add_test_participant" data-key="add_test_participant">+ \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a</button>`;
   const queueButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   return `<!doctype html>
 <html lang="ru">
@@ -3679,6 +3720,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     <section>
       <h2>Очередь</h2>
       <div class="grid queue">${queueButtons}</div>
+      <div class="grid">${testParticipantButton}</div>
     </section>
     <pre class="log" id="log">Пульт загружен.</pre>
   </main>
@@ -3719,7 +3761,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     async function runAction(type, key) {
       buttons.forEach((button) => button.disabled = true);
       try {
-        const body = type === "queue" ? { type, queueAction: key } : type === "test_message" ? { action: "test_message" } : { type, key };
+        const body = type === "queue" ? { type, queueAction: key } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : { type, key };
         const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) throw new Error(data.error || "action failed");

@@ -73,6 +73,12 @@ async function ackOutbox(env, ids) {
   return await json(response);
 }
 
+async function getZoomOnlyStatus(env) {
+  const response = await worker.fetch(panelRequest("/zoom-only/status"), env);
+  assert.equal(response.status, 200);
+  return await json(response);
+}
+
 async function postPanelAction(env, body, token = true) {
   const headers = { "content-type": "application/json" };
   if (token) headers["x-nafanya-zoom-panel-token"] = "panel-token";
@@ -95,6 +101,7 @@ async function testAccess() {
   assert.match(html, /data-key="prayer"/u);
   assert.match(html, /data-key="meeting_schedule"/u);
   assert.match(html, /data-type="test_message"/u);
+  assert.match(html, /data-type="add_test_participant"/u);
 
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
   assert.equal(deniedAction.status, 401);
@@ -138,6 +145,76 @@ async function testSafeTestMessageAction() {
   outbox = await pullOutbox(env);
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].text, expected);
+}
+
+async function testSafeAddTestParticipantAction() {
+  const env = makeEnv();
+  const expectedName = "Тестовый участник";
+
+  let denied = await postPanelAction(env, { action: "add_test_participant" }, false);
+  assert.equal(denied.status, 401);
+
+  let response = await postPanelAction(env, {
+    action: "add_test_participant",
+    name: "Не тот человек",
+    text: "111 Не тот человек",
+    displayName: "Не тот человек"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, false);
+  assert.match(data.error, /откройте Zoom-only очередь/u);
+  let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  let status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.isOpen, false);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "open_rs" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.isOpen, true);
+  assert.equal(status.queue.mode, "rs");
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postPanelAction(env, {
+    action: "add_test_participant",
+    name: "Не тот человек",
+    text: "111 Не тот человек",
+    displayName: "Не тот человек"
+  });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.key, "add_test_participant");
+  assert.equal(data.queue.mode, "rs");
+  assert.equal(data.queue.entries.length, 1);
+  assert.equal(data.queue.entries[0].author, expectedName);
+  assert.doesNotMatch(JSON.stringify(data.queue.entries), /Не тот человек/u);
+
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.isOpen, true);
+  assert.equal(status.queue.mode, "rs");
+  assert.equal(status.queue.entries.length, 1);
+  assert.equal(status.queue.entries[0].author, expectedName);
+  assert.doesNotMatch(JSON.stringify(status.queue.entries), /Не тот человек/u);
+
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.match(outbox[0].text, /Тестовый участник/u);
+  assert.doesNotMatch(outbox[0].text, /Не тот человек/u);
+  await ackOutbox(env, [outbox[0].id]);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.isOpen, false);
 }
 
 async function testMessageButtonsAndOutbox() {
@@ -210,6 +287,7 @@ async function testStatusAndQueueActions() {
 
 await testAccess();
 await testSafeTestMessageAction();
+await testSafeAddTestParticipantAction();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 
