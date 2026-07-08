@@ -1,0 +1,266 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { Backoff } from "../src/backoff.mjs";
+import { loadConfig } from "../src/config.mjs";
+import { startHealthServer } from "../src/health-server.mjs";
+import { HealthState } from "../src/health-state.mjs";
+import { ZoomSenderService } from "../src/sender.mjs";
+import { WorkerOutboxClient } from "../src/worker-client.mjs";
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+
+function makeConfig() {
+  return {
+    workerBaseUrl: "https://worker.example",
+    zoomBridgeSecret: "secret",
+    outboxLimit: 20,
+    minIntervalMs: 1500,
+    maxIntervalMs: 30000,
+    errorIntervalMs: 10000
+  };
+}
+
+test("outbox client pulls zoom-only messages and sends ackIds", async () => {
+  const calls = [];
+  const client = new WorkerOutboxClient(makeConfig(), async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body), secret: init.headers["x-nafanya-zoom-secret"] });
+    return jsonResponse({ ok: true, messages: [{ id: 1, text: "hello" }] });
+  });
+
+  const pulled = await client.pull();
+  assert.equal(pulled.messages[0].text, "hello");
+  await client.ack([1, "bad", 2]);
+  assert.equal(calls[0].url, "https://worker.example/zoom-only/outbox");
+  assert.equal(calls[0].secret, "secret");
+  assert.deepEqual(calls[1].body.ackIds, [1, 2]);
+});
+
+test("config reads dry-run and polling intervals from env with safe fallbacks", () => {
+  const config = loadConfig({
+    WORKER_BASE_URL: "https://worker.example/",
+    ZOOM_ONLY_SECRET: "safe-secret",
+    ZOOM_MEETING_URL: "https://zoom.example/meeting",
+    ZOOM_DISPLAY_NAME: "Display Name",
+    ZOOM_SENDER_DRY_RUN: "true",
+    ZOOM_SENDER_MIN_POLL_MS: "2000",
+    ZOOM_SENDER_MAX_POLL_MS: "25000",
+    ZOOM_SENDER_ERROR_POLL_MS: "7000",
+    ZOOM_SENDER_HEALTH_PORT: "4001",
+    HEADLESS: "false"
+  });
+  assert.equal(config.workerBaseUrl, "https://worker.example");
+  assert.equal(config.zoomBridgeSecret, "safe-secret");
+  assert.equal(config.participantName, "Display Name");
+  assert.equal(config.dryRun, true);
+  assert.equal(config.minIntervalMs, 2000);
+  assert.equal(config.maxIntervalMs, 25000);
+  assert.equal(config.errorIntervalMs, 7000);
+  assert.equal(config.healthPort, 4001);
+  assert.equal(config.headless, false);
+
+  const fallback = loadConfig({
+    ZOOM_SENDER_MIN_POLL_MS: "bad",
+    ZOOM_SENDER_MAX_POLL_MS: "-10",
+    ZOOM_SENDER_ERROR_POLL_MS: "also-bad"
+  });
+  assert.equal(fallback.minIntervalMs, 1500);
+  assert.equal(fallback.maxIntervalMs, 1500);
+  assert.equal(fallback.errorIntervalMs, 10000);
+});
+
+test("sender acks only messages successfully sent to Zoom", async () => {
+  const acked = [];
+  const workerClient = {
+    async pull() {
+      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "two" }] };
+    },
+    async ack(ids) {
+      acked.push(...ids);
+      return { ok: true };
+    }
+  };
+  const zoomAdapter = {
+    async start() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+    async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+    async sendMessage(text) {
+      if (text === "two") throw new Error("send failed");
+      return { sent: true, ack: true };
+    }
+  };
+  const service = new ZoomSenderService({
+    workerClient,
+    zoomAdapter,
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  const result = await service.runOnce();
+  assert.deepEqual(acked, []);
+  assert.equal(result.ackIds.length, 0);
+  assert.match(result.error.message, /send failed/u);
+});
+
+test("sender does not ack failed individual sends that return no ack", async () => {
+  const acked = [];
+  const workerClient = {
+    async pull() {
+      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "two" }] };
+    },
+    async ack(ids) {
+      acked.push(...ids);
+      return { ok: true };
+    }
+  };
+  const zoomAdapter = {
+    async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+    async sendMessage(text) {
+      return text === "one" ? { sent: true, ack: true } : { sent: false, ack: false };
+    }
+  };
+  const service = new ZoomSenderService({
+    workerClient,
+    zoomAdapter,
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  const result = await service.runOnce();
+  assert.deepEqual(acked, [1]);
+  assert.deepEqual(result.ackIds, [1]);
+});
+
+test("empty outbox increases backoff and does not hammer Worker every 1.5 seconds", async () => {
+  const backoff = new Backoff(makeConfig());
+  const service = new ZoomSenderService({
+    workerClient: { async pull() { return { messages: [] }; } },
+    zoomAdapter: { async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; } },
+    backoff,
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  assert.equal((await service.runOnce()).delayMs, 3000);
+  assert.equal((await service.runOnce()).delayMs, 6000);
+  assert.equal((await service.runOnce()).delayMs, 12000);
+  assert.equal((await service.runOnce()).delayMs, 24000);
+  assert.equal((await service.runOnce()).delayMs, 30000);
+});
+
+test("messages reset backoff to minimum, errors back off without becoming frantic", async () => {
+  const backoff = new Backoff(makeConfig());
+  backoff.onMessages(0);
+  backoff.onMessages(0);
+  assert.equal(backoff.currentDelayMs, 6000);
+  assert.equal(backoff.onMessages(1), 1500);
+  assert.equal(backoff.onError(), 10000);
+  assert.equal(backoff.onError(), 20000);
+});
+
+test("sender-only code does not import queue engine or call Worker webhook", async () => {
+  const senderSources = await Promise.all([
+    import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/sender.mjs", import.meta.url), "utf8")),
+    import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/worker-client.mjs", import.meta.url), "utf8")),
+    import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8"))
+  ]);
+  const source = senderSources.join("\n");
+  assert.doesNotMatch(source, /queue-engine|parseQueueEntry|["'](?:111|222|333|444)["']/u);
+  assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|readChatMessages/u);
+  assert.match(source, /\/zoom-only\/outbox/u);
+});
+
+test("docker packaging is sender-only and contains no obvious secrets", async () => {
+  const fs = await import("node:fs/promises");
+  const [dockerfile, compose, envExample, runbook] = await Promise.all([
+    fs.readFile(new URL("../Dockerfile", import.meta.url), "utf8"),
+    fs.readFile(new URL("../compose.example.yml", import.meta.url), "utf8"),
+    fs.readFile(new URL("../.env.example", import.meta.url), "utf8"),
+    fs.readFile(new URL("../RUNBOOK.md", import.meta.url), "utf8")
+  ]);
+  assert.match(dockerfile, /CMD \["node", "src\/main\.mjs"\]/u);
+  assert.match(dockerfile, /playwright install --with-deps chromium/u);
+  assert.match(compose, /service|zoom-sender/u);
+  assert.match(compose, /healthcheck:/u);
+  assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
+  assert.match(envExample, /ZOOM_ONLY_SECRET=/u);
+  assert.doesNotMatch(envExample, /replace-with-worker-secret|super-secret|sk-[a-z0-9]/iu);
+  assert.match(runbook, /не запускать старый `zoom-bridge`/iu);
+  assert.match(runbook, /не вызывает `\/zoom-only\/webhook`/iu);
+});
+
+test("health reports warning/unhealthy unless Zoom page and chat are ready", () => {
+  const health = new HealthState();
+  health.markWorkerPoll();
+  health.updateBackoff({ currentDelayMs: 1500 });
+  let snapshot = health.snapshot();
+  assert.equal(snapshot.ok, false);
+  assert.equal(snapshot.status, "unhealthy");
+
+  health.updateZoom({ zoomPageOpen: true, zoomJoined: false, chatOpen: false, waitingRoom: true });
+  snapshot = health.snapshot();
+  assert.equal(snapshot.ok, false);
+  assert.equal(snapshot.status, "warning");
+  assert.equal(snapshot.waitingRoom, true);
+
+  health.updateZoom({ zoomPageOpen: true, zoomJoined: true, chatOpen: false });
+  snapshot = health.snapshot();
+  assert.equal(snapshot.status, "warning");
+
+  health.updateZoom({ zoomPageOpen: true, zoomJoined: true, chatOpen: true });
+  health.markSend();
+  health.clearError();
+  snapshot = health.snapshot();
+  assert.equal(snapshot.ok, true);
+  assert.equal(snapshot.status, "healthy");
+  assert.ok(snapshot.lastSuccessfulSendAt);
+
+  health.markError(new Error("boom"));
+  snapshot = health.snapshot();
+  assert.match(snapshot.lastError.message, /boom/u);
+});
+
+test("health endpoint answers and dry-run does not pretend real Zoom is ready", async () => {
+  const health = new HealthState({ dryRun: true });
+  health.markWorkerPoll();
+  health.updateBackoff({ currentDelayMs: 30000 });
+  const server = startHealthServer(
+    { healthHost: "127.0.0.1", healthPort: 0 },
+    health,
+    { info() {} }
+  );
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/health`);
+  const body = await response.json();
+  await new Promise((resolve) => server.close(resolve));
+
+  assert.equal(response.status, 503);
+  assert.equal(body.dryRun, true);
+  assert.equal(body.workerAvailable, true);
+  assert.equal(body.zoomPageOpen, false);
+  assert.equal(body.status, "unhealthy");
+});
+
+test("health lastError redacts secret-looking values", () => {
+  const previousSecret = process.env.ZOOM_ONLY_SECRET;
+  process.env.ZOOM_ONLY_SECRET = "super-secret-token";
+  try {
+    const health = new HealthState();
+    health.markError(new Error("Worker rejected secret=super-secret-token and x-nafanya-zoom-secret super-secret-token"));
+    const snapshot = health.snapshot();
+    assert.doesNotMatch(snapshot.lastError.message, /super-secret-token/u);
+    assert.match(snapshot.lastError.message, /\[redacted\]/u);
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env.ZOOM_ONLY_SECRET;
+    } else {
+      process.env.ZOOM_ONLY_SECRET = previousSecret;
+    }
+  }
+});

@@ -11,6 +11,22 @@ import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
+import {
+  buildQueueText as buildQueueTextCore,
+  buildZoomOnlyQueueText as buildZoomOnlyQueueTextCore,
+  cleanQueueDisplayName,
+  compact,
+  createEmptyQueueState,
+  getBillQuestionNumber as getBillQuestionNumberCore,
+  getQueue111Note as getQueue111NoteCore,
+  getQueueSpeechCodeNote,
+  makeManualQueueEntry as makeManualQueueEntryCore,
+  normalizeQueueText,
+  parseGameCommand as parseGameCommandCore,
+  parseQueueEntry as parseQueueEntryCore,
+  runQueueStateAction as runQueueStateActionCore,
+  stripTelegramHandles
+} from "./core/queue-engine.js";
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 var YANDEX_COMPLETION_ENDPOINT = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion";
@@ -574,10 +590,6 @@ function isIdCommand(text) {
   return normalized === "id" || normalized === "/id" || normalized === "\u0431\u043E\u0442";
 }
 __name(isIdCommand, "isIdCommand");
-function parseGameCommand(text) {
-  return getBillQuestionNumber(text);
-}
-__name(parseGameCommand, "parseGameCommand");
 function isMeetingPanelCommand(text, { allowBare = true } = {}) {
   const normalized = text.trim().toLowerCase();
   const prefixed = normalized === "\u043F\u0443\u043B\u044C\u0442 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F" || normalized === "\u043F\u0443\u043B\u044C\u0442 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u0435";
@@ -629,48 +641,6 @@ function parseBillInput(text) {
   return Number(match[1]);
 }
 __name(parseBillInput, "parseBillInput");
-function normalizeText2(text) {
-  return String(text || "").toLowerCase().replace(/\u0451/g, "\u0435").trim();
-}
-__name(normalizeText2, "normalizeText");
-function compact(value) {
-  return String(value || "").replace(/\uFEFF/g, "").replace(/\s+/g, " ").trim();
-}
-__name(compact, "compact");
-function stripTelegramHandles(value) {
-  return compact(String(value || "").replace(/\s*\(@[A-Za-z0-9_]{2,64}\)/gu, "").replace(/@([A-Za-z0-9_]{2,64})/gu, "$1"));
-}
-__name(stripTelegramHandles, "stripTelegramHandles");
-function cleanQueueDisplayName(value) {
-  return stripTelegramHandles(value).replace(/\s*\((?:Telegram|Zoom)\)\s*$/giu, "").trim();
-}
-__name(cleanQueueDisplayName, "cleanQueueDisplayName");
-function formatQueueAuthorLabel(author) {
-  const cleanAuthor = cleanQueueDisplayName(author);
-  return cleanAuthor || "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
-}
-__name(formatQueueAuthorLabel, "formatQueueAuthorLabel");
-function normalizeQueueEntryKey(value) {
-  return normalizeText2(cleanQueueDisplayName(value)).replace(/\s+/g, " ");
-}
-__name(normalizeQueueEntryKey, "normalizeQueueEntryKey");
-function isDuplicatePendingQueueEntry(state, entry) {
-  const author = normalizeQueueEntryKey(entry.author);
-  const block = String(entry.block || "");
-  const label = normalizeQueueEntryKey(entry.label);
-  return state.entries.some((existing) => existing.status === "pending" && normalizeQueueEntryKey(existing.author) === author && String(existing.block || "") === block && normalizeQueueEntryKey(existing.label) === label);
-}
-__name(isDuplicatePendingQueueEntry, "isDuplicatePendingQueueEntry");
-function isDuplicatePendingBillSpeechEntry(state, entry) {
-  const author = normalizeQueueEntryKey(entry.author);
-  const note = normalizeQueueEntryKey(entry.speechNote || "");
-  return state.entries.some((existing) => {
-    if (existing.status !== "pending" || normalizeQueueEntryKey(existing.author) !== author) return false;
-    const match = String(existing.label || "").match(/^(111|222|333|444)(?:\s+(.*))?$/u);
-    return Boolean(match) && normalizeQueueEntryKey(match[2] || "") === note;
-  });
-}
-__name(isDuplicatePendingBillSpeechEntry, "isDuplicatePendingBillSpeechEntry");
 function getZoomPayloadDisplayName(payload) {
   const user = payload?.user || payload?.from || {};
   return cleanQueueDisplayName(user.displayName || user.display_name || user.senderName || user.sender_name || user.name || user.nickname || payload?.displayName || payload?.display_name || payload?.senderName || payload?.sender_name || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
@@ -727,96 +697,6 @@ function getCurrentTimestamp() {
   return Date.now() + Math.floor(Math.random() * 1e3);
 }
 __name(getCurrentTimestamp, "getCurrentTimestamp");
-function makeQueueEntry(message, block, label, rawText, extra = {}) {
-  const chatId = message?.chat?.id ?? "manual";
-  const messageId = message?.message_id ?? getCurrentTimestamp();
-  return {
-    id: `${chatId}_${messageId}_${Math.random().toString(36).slice(2, 8)}`,
-    author: formatQueueAuthorLabel(extra.author ?? getAuthorLabel(message)),
-    rawText,
-    label,
-    block,
-    createdAt: getCurrentTimestamp(),
-    isActive: false,
-    status: "pending",
-    kind: extra.kind ?? null,
-    speechNote: extra.speechNote ?? null
-  };
-}
-__name(makeQueueEntry, "makeQueueEntry");
-function makeManualQueueEntry(author, block, label, rawText, extra = {}) {
-  return makeQueueEntry(
-    { chat: { id: "manual" }, message_id: getCurrentTimestamp(), from: { first_name: author } },
-    block,
-    label,
-    rawText,
-    { ...extra, author }
-  );
-}
-__name(makeManualQueueEntry, "makeManualQueueEntry");
-function getQueue111Note(rawText) {
-  const text = String(rawText || "").trim();
-  const match = text.match(/(^|[\s!.,?:;#-]+)111(?=$|[\s!.,?:;#-]+)/);
-  if (!match) {
-    return null;
-  }
-  const numberIndex = match.index + match[1].length;
-  const before = text.slice(0, numberIndex).replace(/[\s!.,?:;#-]+$/u, "").trim();
-  const after = text.slice(numberIndex + 3).replace(/^[\s!.,?:;#-]+/u, "").trim();
-  return compact(`${before} ${after}`);
-}
-__name(getQueue111Note, "getQueue111Note");
-function getQueueSpeechCodeNote(rawText) {
-  const text = String(rawText || "").trim();
-  const match = text.match(/(^|[\s!.,?:;#-]+)(111|222|333|444)(?=$|[\s!.,?:;#-]+)/);
-  if (!match) {
-    return null;
-  }
-  const numberIndex = match.index + match[1].length;
-  const code = match[2];
-  const before = text.slice(0, numberIndex).replace(/[\s!.,?:;#-]+$/u, "").trim();
-  const after = text.slice(numberIndex + code.length).replace(/^[\s!.,?:;#-]+/u, "").trim();
-  return { code, note: compact(`${before} ${after}`) };
-}
-__name(getQueueSpeechCodeNote, "getQueueSpeechCodeNote");
-function formatQueue111Label(note, code = "111") {
-  const cleanNote = stripTelegramHandles(note);
-  return cleanNote ? `${code} ${cleanNote}` : code;
-}
-__name(formatQueue111Label, "formatQueue111Label");
-function getQueueBlockDividerTitle(block) {
-  const titleByBlock = {
-    first: "111 / \u0418\u0413\u0420\u0410",
-    "222": "222",
-    "333": "333",
-    "444": "444"
-  };
-  const title = titleByBlock[block] ?? "\u041E\u0427\u0415\u0420\u0415\u0414\u042C";
-  return `\u2501\u2501\u2501\u2501 ${title} \u2501\u2501\u2501\u2501`;
-}
-__name(getQueueBlockDividerTitle, "getQueueBlockDividerTitle");
-function getBillQuestionNumber(text) {
-  const normalized = normalizeText2(text);
-  const explicit = normalized.match(/(?:\u0438\u0433\u0440\u0430[\u0430-\u044f]*|\u0438\u0440\u0433\u0430[\u0430-\u044f]*|\u0432\u043e\u043f\u0440\u043e\u0441[\u0430-\u044f]*)\s*(\d{1,3})/i);
-  if (explicit) {
-    const number = Number(explicit[1]);
-    if (number >= 1 && number <= 500) {
-      return number;
-    }
-  }
-  return null;
-}
-__name(getBillQuestionNumber, "getBillQuestionNumber");
-function createEmptyQueueState() {
-  return {
-    isOpen: false,
-    mode: null,
-    entries: [],
-    history: [],
-    queueMessageId: null
-  };
-}
-__name(createEmptyQueueState, "createEmptyQueueState");
 function createEmptyAnnouncementState() {
   return {
     messageIds: {},
@@ -829,7 +709,8 @@ function createEmptyAnnouncementState() {
     zoomDebugEvents: [],
     zoomOnlyQueueState: createEmptyQueueState(),
     zoomOnlyOutbox: [],
-    zoomOnlyOutboxNextId: 1
+    zoomOnlyOutboxNextId: 1,
+    zoomOnlyPanelLastAction: null
   };
 }
 __name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
@@ -871,6 +752,9 @@ function normalizeAnnouncementState(announcementState) {
     normalized.zoomOnlyOutbox = [];
   }
   normalized.zoomOnlyOutbox = normalized.zoomOnlyOutbox.filter((item) => item && typeof item === "object");
+  if (!normalized.zoomOnlyPanelLastAction || typeof normalized.zoomOnlyPanelLastAction !== "object") {
+    normalized.zoomOnlyPanelLastAction = null;
+  }
   const maxExistingId = normalized.zoomOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
   const nextId = Number(normalized.zoomOutboxNextId);
   normalized.zoomOutboxNextId = Number.isInteger(nextId) && nextId > maxExistingId ? nextId : maxExistingId + 1;
@@ -880,228 +764,6 @@ function normalizeAnnouncementState(announcementState) {
   return normalized;
 }
 __name(normalizeAnnouncementState, "normalizeAnnouncementState");
-function cloneQueueState(state) {
-  return JSON.parse(JSON.stringify(state));
-}
-__name(cloneQueueState, "cloneQueueState");
-function pushQueueHistory(state) {
-  state.history.push(cloneQueueState({
-    isOpen: state.isOpen,
-    mode: state.mode,
-    entries: state.entries,
-    history: [],
-    queueMessageId: state.queueMessageId
-  }));
-  if (state.history.length > 50) {
-    state.history.shift();
-  }
-}
-__name(pushQueueHistory, "pushQueueHistory");
-function ensureSingleActiveEntry(state) {
-  const pendingEntries = state.entries.filter((entry) => entry.status === "pending");
-  if (pendingEntries.length === 0) {
-    state.entries.forEach((entry) => {
-      entry.isActive = false;
-    });
-    return;
-  }
-  const alreadyActive = pendingEntries.find((entry) => entry.isActive);
-  if (alreadyActive) {
-    state.entries.forEach((entry) => {
-      if (entry.id !== alreadyActive.id) {
-        entry.isActive = false;
-      }
-    });
-    return;
-  }
-  const firstPending = pendingEntries[0];
-  state.entries.forEach((entry) => {
-    entry.isActive = entry.id === firstPending.id;
-  });
-}
-__name(ensureSingleActiveEntry, "ensureSingleActiveEntry");
-function buildQueueText(state) {
-  const lines = [
-    `<b>${getQueueModeTitle(state.mode)}</b>`,
-    `<i>${getQueueInstruction(state.mode)}</i>`,
-    "",
-    state.isOpen ? `<b>${QUEUE_OPEN_LABEL}</b>` : `<b>${QUEUE_CLOSED_LABEL}</b>`,
-    ""
-  ];
-  if (state.entries.length === 0) {
-    lines.push("\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E.");
-    lines.push(...QUEUE_FOOTER_LINES);
-    return lines.join("\n");
-  }
-  let previousBlock = null;
-  for (const [index, entry] of state.entries.entries()) {
-    const block = state.mode === "bill" ? getEntryBlock(state, entry) : "single";
-    if (state.mode === "bill" && block !== previousBlock) {
-      if (previousBlock !== null) {
-        lines.push("");
-      }
-      lines.push(`<b>${getQueueBlockDividerTitle(block)}</b>`);
-      previousBlock = block;
-    }
-    let marker = "\u2022";
-    if (entry.status === "done") {
-      marker = "\u2705";
-    } else if (entry.isActive) {
-      marker = "\u25B6";
-    }
-    lines.push(`${marker} ${index + 1}. ${entry.author} \u2014 ${entry.label}`);
-  }
-  lines.push(...QUEUE_FOOTER_LINES);
-  return lines.join("\n");
-}
-__name(buildQueueText, "buildQueueText");
-function stripQueueHtml(text) {
-  return String(text || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
-}
-__name(stripQueueHtml, "stripQueueHtml");
-function buildZoomOnlyQueueText(state) {
-  const title = stripQueueHtml(getQueueModeTitle(state.mode));
-  const instruction = state.mode === "bill"
-    ? "\u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\" \u0434\u043b\u044f \u0432\u044b\u0441\u043a\u0430\u0437\u044b\u0432\u0430\u043d\u0438\u044f \u0438\u043b\u0438 \"\u0438\u0433\u0440\u0430 \u043d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430 \u043e\u0442 1 \u0434\u043e 500\" \u0434\u043b\u044f \u0443\u0447\u0430\u0441\u0442\u0438\u044f \u0432 \u0438\u0433\u0440\u0435 \"500 \u043f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432\""
-    : stripQueueHtml(getQueueInstruction(state.mode));
-  const base = [title, instruction, "", state.isOpen ? QUEUE_OPEN_LABEL : QUEUE_CLOSED_LABEL, ""];
-  if (!state.entries.length) {
-    base.push("\u041F\u043E\u043A\u0430 \u043F\u0443\u0441\u0442\u043E.");
-    return base.join("\n");
-  }
-  for (const [index, entry] of state.entries.entries()) {
-    let marker = "\u2022";
-    if (entry.status === "done") {
-      marker = "\u2705";
-    } else if (entry.isActive) {
-      marker = "\u25B6";
-    }
-    base.push(`${marker} ${index + 1}. ${entry.author} \u2014 ${entry.label}`);
-  }
-  return base.join("\n");
-}
-__name(buildZoomOnlyQueueText, "buildZoomOnlyQueueText");
-function getEntryBlock(state, entry) {
-  if (state.mode === "bill") {
-    return entry.block;
-  }
-  return "single";
-}
-__name(getEntryBlock, "getEntryBlock");
-function addQueueEntryToState(state, entry) {
-  if (isDuplicatePendingQueueEntry(state, entry)) {
-    ensureSingleActiveEntry(state);
-    return;
-  }
-  state.entries.push(entry);
-  if (state.mode === "bill") {
-    const priorityOrder = { first: 1, "222": 2, "333": 3, "444": 4 };
-    state.entries.sort((a, b) => {
-      const diff = (priorityOrder[a.block] ?? 99) - (priorityOrder[b.block] ?? 99);
-      if (diff !== 0) {
-        return diff;
-      }
-      return a.createdAt - b.createdAt;
-    });
-  } else {
-    state.entries.sort((a, b) => a.createdAt - b.createdAt);
-  }
-  ensureSingleActiveEntry(state);
-}
-__name(addQueueEntryToState, "addQueueEntryToState");
-function getNextPendingIndex(state, startIndex = 0) {
-  for (let i = startIndex; i < state.entries.length; i += 1) {
-    if (state.entries[i].status === "pending") {
-      return i;
-    }
-  }
-  return -1;
-}
-__name(getNextPendingIndex, "getNextPendingIndex");
-function getCurrentActiveIndex(state) {
-  return state.entries.findIndex((entry) => entry.isActive && entry.status === "pending");
-}
-__name(getCurrentActiveIndex, "getCurrentActiveIndex");
-function activateFirstPending(state) {
-  state.entries.forEach((entry) => {
-    entry.isActive = false;
-  });
-  const firstIndex = getNextPendingIndex(state, 0);
-  if (firstIndex !== -1) {
-    state.entries[firstIndex].isActive = true;
-  }
-}
-__name(activateFirstPending, "activateFirstPending");
-function getNextBillSpeechCode(state, author) {
-  const getSpeechCode = (entry) => {
-    const match = String(entry.label || "").match(/^(111|222|333|444)(?:\s|$)/);
-    return match ? match[1] : null;
-  };
-  const count = state.entries.filter(
-    (entry) => entry.author === author && ["111", "222", "333", "444"].includes(getSpeechCode(entry))
-  ).length;
-  if (count <= 0) return "111";
-  if (count === 1) return "222";
-  if (count === 2) return "333";
-  return "444";
-}
-__name(getNextBillSpeechCode, "getNextBillSpeechCode");
-function getBillSpeechBlock(label) {
-  if (label === "111") return "first";
-  return label;
-}
-__name(getBillSpeechBlock, "getBillSpeechBlock");
-function parseBillQueueEntry(message, state, { allowGameEntries = true, source = "Telegram" } = {}) {
-  const rawText = String(message.text || "").trim();
-  const normalized = normalizeText2(rawText);
-  const questionNumber = getBillQuestionNumber(rawText);
-  if (questionNumber !== null) {
-    if (!allowGameEntries) return null;
-    return makeQueueEntry(message, "first", `\u0438\u0433\u0440\u0430 ${questionNumber}`, rawText, { source });
-  }
-  const trigger = normalized.match(/^(222|333|444)(?:[\s!.,?:;#-]*)$/);
-  const speechNote = getQueue111Note(rawText);
-  if (!trigger && speechNote === null) {
-    return null;
-  }
-  return makeQueueEntry(message, "speech", "__speech__", rawText, { kind: "bill_speech", speechNote, source });
-}
-__name(parseBillQueueEntry, "parseBillQueueEntry");
-function parseBkQueueEntry(message, { source = "Telegram" } = {}) {
-  const rawText = String(message.text || "").trim();
-  const codeInfo = getQueueSpeechCodeNote(rawText);
-  if (!codeInfo) {
-    return null;
-  }
-  const label = formatQueue111Label(codeInfo.note);
-  return makeQueueEntry(message, "bk", label, rawText, { source });
-}
-__name(parseBkQueueEntry, "parseBkQueueEntry");
-function parseRsQueueEntry(message, { source = "Telegram" } = {}) {
-  const rawText = String(message.text || "").trim();
-  const codeInfo = getQueueSpeechCodeNote(rawText);
-  if (!codeInfo) {
-    return null;
-  }
-  return makeQueueEntry(message, "rs", formatQueue111Label(codeInfo.note), rawText, { source });
-}
-__name(parseRsQueueEntry, "parseRsQueueEntry");
-function parseQueueEntry(message, state, options = {}) {
-  if (!state?.isOpen || !state?.mode) {
-    return null;
-  }
-  if (state.mode === "bill") {
-    return parseBillQueueEntry(message, state, { allowGameEntries: options.allowBillGameEntries !== false, source: options.source || "Telegram" });
-  }
-  if (state.mode === "bk") {
-    return parseBkQueueEntry(message, { source: options.source || "Telegram" });
-  }
-  if (state.mode === "rs") {
-    return parseRsQueueEntry(message, { source: options.source || "Telegram" });
-  }
-  return null;
-}
-__name(parseQueueEntry, "parseQueueEntry");
 var QueueStateDurableObject = class {
   static {
     __name(this, "QueueStateDurableObject");
@@ -1119,206 +781,11 @@ var QueueStateDurableObject = class {
     const url = new URL(request.url);
     const action = url.pathname.replace("/", "");
     const payload = request.method === "POST" ? await request.json() : {};
-    let queueState = await this.loadState();
+    const queueState = await this.loadState();
     try {
-      if (action === "get") {
-        return Response.json({ ok: true, state: queueState });
-      }
-      if (action === "set_message_id") {
-        queueState.queueMessageId = payload.messageId ?? null;
-        await this.saveState(queueState);
-        return Response.json({ ok: true });
-      }
-      if (action === "clear") {
-        const previousMessageId = queueState.queueMessageId;
-        queueState = createEmptyQueueState();
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          cleared: true,
-          previousMessageId
-        });
-      }
-      if (action === "open") {
-        const previousMessageId = queueState.queueMessageId;
-        pushQueueHistory(queueState);
-        queueState.isOpen = true;
-        queueState.mode = payload.mode;
-        queueState.entries = [];
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "close") {
-        pushQueueHistory(queueState);
-        queueState.isOpen = false;
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "add") {
-        if (payload.entry?.kind === "bill_speech") {
-          if (isDuplicatePendingBillSpeechEntry(queueState, payload.entry)) {
-            return Response.json({
-              ok: true,
-              duplicate: true,
-              publishQueue: true,
-              queueText: buildQueueText(queueState)
-            });
-          }
-          pushQueueHistory(queueState);
-          const nextCode = getNextBillSpeechCode(queueState, payload.entry.author);
-          payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
-          payload.entry.block = getBillSpeechBlock(nextCode);
-          payload.entry.kind = null;
-        } else {
-          if (isDuplicatePendingQueueEntry(queueState, payload.entry)) {
-            return Response.json({
-              ok: true,
-              duplicate: true,
-              publishQueue: true,
-              queueText: buildQueueText(queueState)
-            });
-          }
-          pushQueueHistory(queueState);
-        }
-        addQueueEntryToState(queueState, payload.entry);
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "done") {
-        const activeIndex = getCurrentActiveIndex(queueState);
-        if (activeIndex === -1) {
-          throw new Error("Некого отмечать: активный участник сейчас не выбран.");
-        }
-        pushQueueHistory(queueState);
-        queueState.entries[activeIndex].status = "done";
-        queueState.entries[activeIndex].isActive = false;
-        activateFirstPending(queueState);
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "remove") {
-        const activeIndex = getCurrentActiveIndex(queueState);
-        if (activeIndex === -1) {
-          throw new Error("Некого удалять: активный участник сейчас не выбран.");
-        }
-        pushQueueHistory(queueState);
-        queueState.entries.splice(activeIndex, 1);
-        activateFirstPending(queueState);
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "remove_by_number") {
-        const visibleNumber = Number(payload.index);
-        if (!Number.isInteger(visibleNumber) || visibleNumber < 1 || visibleNumber > queueState.entries.length) {
-          throw new Error("\u041d\u0435\u0442 \u0442\u0430\u043a\u043e\u0433\u043e \u043d\u043e\u043c\u0435\u0440\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u0438.");
-        }
-        pushQueueHistory(queueState);
-        queueState.entries.splice(visibleNumber - 1, 1);
-        ensureSingleActiveEntry(queueState);
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "skip") {
-        const activeIndex = getCurrentActiveIndex(queueState);
-        if (activeIndex === -1) {
-          throw new Error("Некого пропускать: активный участник сейчас не выбран.");
-        }
-        const currentEntry = queueState.entries[activeIndex];
-        const block = getEntryBlock(queueState, currentEntry);
-        let targetIndex = -1;
-        for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
-          if (queueState.entries[i].status === "pending" && getEntryBlock(queueState, queueState.entries[i]) === block) {
-            targetIndex = i;
-            break;
-          }
-        }
-        if (targetIndex === -1) {
-          for (let i = activeIndex + 1; i < queueState.entries.length; i += 1) {
-            if (queueState.entries[i].status === "pending") {
-              targetIndex = i;
-              break;
-            }
-          }
-        }
-        if (targetIndex === -1) {
-          throw new Error("Ниже в очереди больше никого нет.");
-        }
-        pushQueueHistory(queueState);
-        const nextEntry = queueState.entries[targetIndex];
-        queueState.entries[activeIndex] = nextEntry;
-        queueState.entries[targetIndex] = currentEntry;
-        activateFirstPending(queueState);
-        const previousMessageId = queueState.queueMessageId;
-        queueState.queueMessageId = null;
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      if (action === "undo") {
-        if (!queueState.history.length) {
-          throw new Error("Откатывать пока нечего.");
-        }
-        const previousMessageId = queueState.queueMessageId;
-        const snapshot = queueState.history.pop();
-        queueState = {
-          ...snapshot,
-          history: queueState.history,
-          queueMessageId: null
-        };
-        await this.saveState(queueState);
-        return Response.json({
-          ok: true,
-          publishQueue: true,
-          queueText: buildQueueText(queueState),
-          previousMessageId
-        });
-      }
-      return Response.json({ ok: false, error: "Неизвестное действие очереди." }, { status: 400 });
+      const result = runQueueStateActionCore(queueState, action, payload, buildQueueTextCore);
+      await this.saveState(result.state);
+      return Response.json(result.response);
     } catch (error) {
       return Response.json({ ok: false, error: error.message }, { status: 400 });
     }
@@ -1604,133 +1071,6 @@ var LightTalkStateDurableObject = class {
     await this.state.storage.deleteAlarm();
   }
 };
-function runQueueStateAction(queueState, action, payload = {}, buildText = buildQueueText) {
-  let state = {
-    ...createEmptyQueueState(),
-    ...(queueState || {}),
-    entries: Array.isArray(queueState?.entries) ? queueState.entries : [],
-    history: Array.isArray(queueState?.history) ? queueState.history : []
-  };
-  if (action === "get") {
-    return { state, response: { ok: true, state } };
-  }
-  if (action === "clear") {
-    state = createEmptyQueueState();
-    return { state, response: { ok: true, cleared: true } };
-  }
-  if (action === "open") {
-    pushQueueHistory(state);
-    state.isOpen = true;
-    state.mode = payload.mode;
-    state.entries = [];
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "auto_open") {
-    pushQueueHistory(state);
-    state.isOpen = true;
-    state.mode = payload.mode;
-    state.queueMessageId = null;
-    return { state, response: { ok: true, state } };
-  }
-  if (action === "close") {
-    pushQueueHistory(state);
-    state.isOpen = false;
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "add") {
-    if (payload.entry?.kind === "bill_speech") {
-      if (isDuplicatePendingBillSpeechEntry(state, payload.entry)) {
-        return { state, response: { ok: true, duplicate: true } };
-      }
-      pushQueueHistory(state);
-      const nextCode = getNextBillSpeechCode(state, payload.entry.author);
-      payload.entry.label = formatQueue111Label(payload.entry.speechNote, nextCode);
-      payload.entry.block = getBillSpeechBlock(nextCode);
-      payload.entry.kind = null;
-    } else {
-      if (isDuplicatePendingQueueEntry(state, payload.entry)) {
-        return { state, response: { ok: true, duplicate: true } };
-      }
-      pushQueueHistory(state);
-    }
-    addQueueEntryToState(state, payload.entry);
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "done") {
-    const activeIndex = getCurrentActiveIndex(state);
-    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u043E\u0442\u043C\u0435\u0447\u0430\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
-    pushQueueHistory(state);
-    state.entries[activeIndex].status = "done";
-    state.entries[activeIndex].isActive = false;
-    activateFirstPending(state);
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "remove") {
-    const activeIndex = getCurrentActiveIndex(state);
-    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u0443\u0434\u0430\u043B\u044F\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
-    pushQueueHistory(state);
-    state.entries.splice(activeIndex, 1);
-    activateFirstPending(state);
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "remove_by_number") {
-    const visibleNumber = Number(payload.index);
-    if (!Number.isInteger(visibleNumber) || visibleNumber < 1 || visibleNumber > state.entries.length) {
-      throw new Error("\u041D\u0435\u0442 \u0442\u0430\u043A\u043E\u0433\u043E \u043D\u043E\u043C\u0435\u0440\u0430 \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438.");
-    }
-    pushQueueHistory(state);
-    state.entries.splice(visibleNumber - 1, 1);
-    ensureSingleActiveEntry(state);
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "skip") {
-    const activeIndex = getCurrentActiveIndex(state);
-    if (activeIndex === -1) throw new Error("\u041D\u0435\u043A\u043E\u0433\u043E \u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C: \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u0441\u0435\u0439\u0447\u0430\u0441 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D.");
-    const currentEntry = state.entries[activeIndex];
-    const block = getEntryBlock(state, currentEntry);
-    let targetIndex = -1;
-    for (let i = activeIndex + 1; i < state.entries.length; i += 1) {
-      if (state.entries[i].status === "pending" && getEntryBlock(state, state.entries[i]) === block) {
-        targetIndex = i;
-        break;
-      }
-    }
-    if (targetIndex === -1) {
-      for (let i = activeIndex + 1; i < state.entries.length; i += 1) {
-        if (state.entries[i].status === "pending") {
-          targetIndex = i;
-          break;
-        }
-      }
-    }
-    if (targetIndex === -1) throw new Error("\u041D\u0438\u0436\u0435 \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0431\u043E\u043B\u044C\u0448\u0435 \u043D\u0438\u043A\u043E\u0433\u043E \u043D\u0435\u0442.");
-    pushQueueHistory(state);
-    const nextEntry = state.entries[targetIndex];
-    state.entries[activeIndex] = nextEntry;
-    state.entries[targetIndex] = currentEntry;
-    activateFirstPending(state);
-    state.queueMessageId = null;
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  if (action === "undo") {
-    if (!state.history.length) throw new Error("\u041E\u0442\u043A\u0430\u0442\u044B\u0432\u0430\u0442\u044C \u043F\u043E\u043A\u0430 \u043D\u0435\u0447\u0435\u0433\u043E.");
-    const snapshot = state.history.pop();
-    state = {
-      ...snapshot,
-      history: state.history,
-      queueMessageId: null
-    };
-    return { state, response: { ok: true, publishQueue: true, queueText: buildText(state) } };
-  }
-  throw new Error("\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043E\u0447\u0435\u0440\u0435\u0434\u0438.");
-}
-__name(runQueueStateAction, "runQueueStateAction");
 var AnnouncementStateDurableObject = class {
   static {
     __name(this, "AnnouncementStateDurableObject");
@@ -1885,15 +1225,27 @@ var AnnouncementStateDurableObject = class {
         return Response.json({ ok: true, remaining: announcementState.zoomOnlyOutbox.length });
       }
       if (action === "zoom_only_queue") {
-        const queueResult = runQueueStateAction(announcementState.zoomOnlyQueueState, payload.queueAction || "get", payload.queuePayload || {}, buildZoomOnlyQueueText);
+        const queueResult = runQueueStateActionCore(announcementState.zoomOnlyQueueState, payload.queueAction || "get", payload.queuePayload || {}, buildZoomOnlyQueueTextCore);
         announcementState.zoomOnlyQueueState = queueResult.state;
         await this.saveState(announcementState);
         return Response.json(queueResult.response);
+      }
+      if (action === "record_zoom_only_panel_action") {
+        const key = String(payload.key || payload.command || "").trim();
+        announcementState.zoomOnlyPanelLastAction = {
+          key,
+          label: String(payload.label || key).trim(),
+          ok: payload.ok !== false,
+          createdAt: Date.now()
+        };
+        await this.saveState(announcementState);
+        return Response.json({ ok: true, lastAction: announcementState.zoomOnlyPanelLastAction });
       }
       if (action === "clear_zoom_only_state") {
         announcementState.zoomOnlyQueueState = createEmptyQueueState();
         announcementState.zoomOnlyOutbox = [];
         announcementState.zoomOnlyOutboxNextId = 1;
+        announcementState.zoomOnlyPanelLastAction = null;
         await this.saveState(announcementState);
         return Response.json({ ok: true });
       }
@@ -1908,7 +1260,12 @@ var AnnouncementStateDurableObject = class {
             historyCount: Array.isArray(queue.history) ? queue.history.length : 0
           },
           outboxSize: announcementState.zoomOnlyOutbox.length,
-          nextOutboxId: announcementState.zoomOnlyOutboxNextId
+          nextOutboxId: announcementState.zoomOnlyOutboxNextId,
+          sender: {
+            connected: false,
+            status: "waiting"
+          },
+          lastPanelAction: announcementState.zoomOnlyPanelLastAction
         });
       }
       if (action === "get_personal_subscription") {
@@ -3228,6 +2585,37 @@ function isZoomBridgeAuthorized(request, env) {
   return actual && actual === expected;
 }
 __name(isZoomBridgeAuthorized, "isZoomBridgeAuthorized");
+function getZoomPanelToken(env) {
+  return String(env?.ZOOM_PANEL_TOKEN || env?.ZOOM_V2_PANEL_TOKEN || env?.ZOOM_BRIDGE_SECRET || "").trim();
+}
+__name(getZoomPanelToken, "getZoomPanelToken");
+function parseCookieHeader(header) {
+  return Object.fromEntries(String(header || "").split(";").map((part) => {
+    const index = part.indexOf("=");
+    if (index === -1) return null;
+    return [part.slice(0, index).trim(), part.slice(index + 1).trim()];
+  }).filter(Boolean));
+}
+__name(parseCookieHeader, "parseCookieHeader");
+function getZoomPanelRequestToken(request) {
+  const url = new URL(request.url);
+  const cookies = parseCookieHeader(request.headers.get("cookie"));
+  return String(
+    request.headers.get("x-nafanya-zoom-panel-token") || request.headers.get("x-nafanya-zoom-secret") || url.searchParams.get("token") || cookies.nafanya_zoom_panel_token || ""
+  ).trim();
+}
+__name(getZoomPanelRequestToken, "getZoomPanelRequestToken");
+function isZoomPanelAuthorized(request, env) {
+  const expected = getZoomPanelToken(env);
+  if (!expected) return false;
+  const actual = getZoomPanelRequestToken(request);
+  return actual && actual === expected;
+}
+__name(isZoomPanelAuthorized, "isZoomPanelAuthorized");
+function zoomPanelUnauthorizedResponse() {
+  return Response.json({ ok: false, error: "\u041d\u0443\u0436\u0435\u043d \u0442\u043e\u043a\u0435\u043d \u043f\u0443\u043b\u044c\u0442\u0430 Zoom." }, { status: 401 });
+}
+__name(zoomPanelUnauthorizedResponse, "zoomPanelUnauthorizedResponse");
 function buildZoomMessage(payload) {
   const name = getZoomPayloadDisplayName(payload);
   return {
@@ -3263,7 +2651,7 @@ function isZoomAdminName(env, name) {
 }
 __name(isZoomAdminName, "isZoomAdminName");
 function normalizeZoomCommand(text) {
-  return normalizeText2(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
+  return normalizeQueueText(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
 }
 __name(normalizeZoomCommand, "normalizeZoomCommand");
 function parseZoomManualQueueCommand(text) {
@@ -3361,7 +2749,7 @@ async function handleZoomBridgeMessage(env, payload) {
       }
       if (manual.action === "add_code" && manual.author) {
         const label = queueInfo.state.mode === "bill" ? manual.code : "111";
-        const entry = makeManualQueueEntry(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
+        const entry = makeManualQueueEntryCore(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
         const result = await callQueueState(env, "add", { entry });
         await applyQueueResponse(env, result);
         return { ok: true, handled: true };
@@ -3377,7 +2765,7 @@ async function handleZoomBridgeMessage(env, payload) {
           await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
           return { ok: true, handled: true };
         }
-        const entry = makeManualQueueEntry(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
+        const entry = makeManualQueueEntryCore(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
         const result = await callQueueState(env, "add", { entry });
         await applyQueueResponse(env, result);
         const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`;
@@ -3410,10 +2798,10 @@ async function handleZoomBridgeMessage(env, payload) {
     }
   }
   if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
-    await enqueueZoomMessages(env, splitZoomText(buildQueueText(queueInfo.state || createEmptyQueueState())));
+    await enqueueZoomMessages(env, splitZoomText(buildQueueTextCore(queueInfo.state || createEmptyQueueState())));
     return { ok: true, handled: true };
   }
-  const gameNumber = parseGameCommand(text);
+  const gameNumber = parseGameCommandCore(text);
   if (gameNumber !== null) {
     const speakerQuestions = await getSpeakerQuestions();
     const question = speakerQuestions.get(gameNumber);
@@ -3427,7 +2815,7 @@ async function handleZoomBridgeMessage(env, payload) {
       return { ok: true, handled: true };
     }
   }
-  const entry = parseQueueEntry(message, queueInfo.state, { source: "Zoom" });
+  const entry = parseQueueEntryCore(message, queueInfo.state, { source: "Zoom" });
   if (entry) {
     const result = await callQueueState(env, "add", { entry });
     await applyQueueResponse(env, result);
@@ -3525,7 +2913,7 @@ async function handleZoomOnlyMessage(env, payload) {
       }
       if (manual.action === "add_code" && manual.author) {
         const label = queueInfo.state.mode === "bill" ? manual.code : "111";
-        const entry = makeManualQueueEntry(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
+        const entry = makeManualQueueEntryCore(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
         const result = await callZoomOnlyQueueState(env, "add", { entry });
         await applyZoomOnlyQueueResponse(env, result);
         return { ok: true, handled: true };
@@ -3540,7 +2928,7 @@ async function handleZoomOnlyMessage(env, payload) {
           await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
           return { ok: true, handled: true };
         }
-        const entry = makeManualQueueEntry(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
+        const entry = makeManualQueueEntryCore(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
         const result = await callZoomOnlyQueueState(env, "add", { entry });
         await applyZoomOnlyQueueResponse(env, result);
         await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`));
@@ -3562,10 +2950,10 @@ async function handleZoomOnlyMessage(env, payload) {
     }
   }
   if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
-    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueText(queueInfo.state || createEmptyQueueState())));
+    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueTextCore(queueInfo.state || createEmptyQueueState())));
     return { ok: true, handled: true };
   }
-  const gameNumber = parseGameCommand(text);
+  const gameNumber = parseGameCommandCore(text);
   if (gameNumber !== null) {
     const question = (await getSpeakerQuestions()).get(gameNumber);
     if (!question) {
@@ -3580,7 +2968,7 @@ async function handleZoomOnlyMessage(env, payload) {
     const opened = await callZoomOnlyQueueState(env, "auto_open", { mode: "bk" });
     queueState = opened.state || queueState;
   }
-  const entry = parseQueueEntry(message, queueState, { source: "Zoom" });
+  const entry = parseQueueEntryCore(message, queueState, { source: "Zoom" });
   if (entry) {
     const result = await callZoomOnlyQueueState(env, "add", { entry });
     await applyZoomOnlyQueueResponse(env, result);
@@ -3618,10 +3006,14 @@ async function handleZoomBridgeRequest(request, env) {
 }
 __name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
 async function handleZoomOnlyBridgeRequest(request, env) {
+  const url = new URL(request.url);
+  if (url.pathname === "/zoom-only/status" && isZoomPanelAuthorized(request, env)) {
+    const result = await callAnnouncementState(env, "zoom_only_status");
+    return Response.json(result);
+  }
   if (!isZoomBridgeAuthorized(request, env)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/zoom-only/webhook") {
     const payload = await request.json();
     return Response.json(await handleZoomOnlyMessage(env, payload));
@@ -3714,7 +3106,16 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
   }
+  if (!isZoomPanelAuthorized(request, env)) {
+    return zoomPanelUnauthorizedResponse();
+  }
   const payload = await request.json().catch(() => ({}));
+  if (payload.type === "message" || payload.key) {
+    return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
+  }
+  if (payload.type === "queue" || payload.queueAction) {
+    return Response.json(await handleZoomV2PanelQueueAction(env, String(payload.queueAction || "").trim()));
+  }
   const command = String(payload.command || "").trim();
   if (!command || !isZoomAppControlCommand(command)) {
     return Response.json({ ok: false, error: "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043B\u044F Zoom-only \u043F\u0443\u043B\u044C\u0442\u0430 \u043D\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u0430." }, { status: 400 });
@@ -3731,6 +3132,70 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   });
 }
 __name(handleZoomOnlyAppActionRequest, "handleZoomOnlyAppActionRequest");
+function getZoomV2PanelMessageAction(key) {
+  return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || null;
+}
+__name(getZoomV2PanelMessageAction, "getZoomV2PanelMessageAction");
+function getZoomV2PanelMessages(action) {
+  if (!action) return null;
+  if (action.key === "today_topic") {
+    return getTodayTopicSourceMessageId() ? getTodayTopicZoomMessages() : ["\u0421\u0435\u0433\u043e\u0434\u043d\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f \u043d\u0435\u0442."];
+  }
+  const zoomKey = action.zoomKey || action.key;
+  if (!ZOOM_MEETING_MESSAGE_TEXTS[zoomKey]) return null;
+  return getZoomMeetingMessages(zoomKey);
+}
+__name(getZoomV2PanelMessages, "getZoomV2PanelMessages");
+async function handleZoomV2PanelMessageAction(env, key) {
+  const action = getZoomV2PanelMessageAction(key);
+  const messages = getZoomV2PanelMessages(action);
+  if (!action || !messages?.length) {
+    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: key, ok: false }).catch(() => null);
+    return { ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043a\u043d\u043e\u043f\u043a\u0430 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." };
+  }
+  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
+  await enqueueZoomOnlyMessages(env, messages);
+  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: action.key, label: action.label, ok: true }).catch(() => null);
+  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  return {
+    ok: true,
+    message: `${action.label} \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438 Zoom`,
+    key: action.key,
+    queued: Array.isArray(outbox.messages) ? outbox.messages : []
+  };
+}
+__name(handleZoomV2PanelMessageAction, "handleZoomV2PanelMessageAction");
+async function handleZoomV2PanelQueueAction(env, key) {
+  const action = ZOOM_V2_PANEL_QUEUE_ACTIONS.find((item) => item.key === key) || null;
+  if (!action) {
+    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: key, ok: false }).catch(() => null);
+    return { ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." };
+  }
+  const queueModeByAction = {
+    open_bill: "bill",
+    open_bk: "bk",
+    open_rs: "rs"
+  };
+  let result;
+  if (queueModeByAction[key]) {
+    result = await callZoomOnlyQueueState(env, "open", { mode: queueModeByAction[key] });
+    await applyZoomOnlyQueueResponse(env, result);
+  } else if (key === "show_queue") {
+    result = await callZoomOnlyQueueState(env, "get");
+    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueTextCore(result.state || createEmptyQueueState())));
+  } else if (key === "close_queue") {
+    result = await callZoomOnlyQueueState(env, "close");
+    await applyZoomOnlyQueueResponse(env, result);
+  }
+  await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: action.label, ok: true }).catch(() => null);
+  return {
+    ok: true,
+    message: `${action.label}: \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 Zoom-only`,
+    key,
+    queue: result?.state || null
+  };
+}
+__name(handleZoomV2PanelQueueAction, "handleZoomV2PanelQueueAction");
 function zoomDebugTextPreview(text) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
@@ -3934,6 +3399,29 @@ var ZOOM_APP_ALLOWED_COMMANDS = new Set([
   "\u0442\u0435\u043c\u044b",
   "\u043e\u0447\u0435\u0440\u0435\u0434\u044c"
 ]);
+var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
+  { key: "minute_silence", label: "\u041c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" },
+  { key: "prayer", label: "\u041c\u043e\u043b\u0438\u0442\u0432\u0430" },
+  { key: "preambula", label: "\u041f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430" },
+  { key: "newcomer", label: "\u041d\u043e\u0432\u0438\u0447\u043a\u0443" },
+  { key: "steps12", label: "12 \u0448\u0430\u0433\u043e\u0432" },
+  { key: "traditions12", label: "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439" },
+  { key: "today_topic", label: "\u0422\u0435\u043c\u044b" },
+  { key: "seventh_tradition", label: "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f" },
+  { key: "free_services", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f" },
+  { key: "tea_rules", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439" },
+  { key: "speaker_questions", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443" },
+  { key: "chat_cleanliness", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", zoomKey: "meeting_rules" },
+  { key: "meeting_schedule", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435" },
+  { key: "telemost_link", label: "\u0421\u0441\u044b\u043b\u043a\u0438" }
+];
+var ZOOM_V2_PANEL_QUEUE_ACTIONS = [
+  { key: "open_bill", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u0438\u043b\u043b" },
+  { key: "open_bk", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u041a" },
+  { key: "open_rs", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0443" },
+  { key: "show_queue", label: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" },
+  { key: "close_queue", label: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" }
+];
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -4123,12 +3611,124 @@ function buildZoomAppHtml({ actionPath = "/zoom/app/action", zoomOnly = false } 
 </html>`;
 }
 __name(buildZoomAppHtml, "buildZoomAppHtml");
+function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath = "/zoom-only/status" } = {}) {
+  const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  const queueButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Пульт Нафани для Zoom</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f2ea; color: #171b33; }
+    main { max-width: 980px; margin: 0 auto; padding: 22px; display: grid; gap: 16px; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.1; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    section { background: #fffaf0; border: 1px solid #d8d0c1; border-radius: 8px; padding: 16px; }
+    .status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .metric { border: 1px solid #d8d0c1; border-radius: 8px; padding: 12px; background: #fff; min-height: 74px; }
+    .label { display: block; color: #5d6475; font-size: 13px; margin-bottom: 6px; }
+    .value { display: block; font-size: 20px; font-weight: 800; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .queue { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .action { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; background: #ffffff; color: #171b33; font-size: 15px; font-weight: 750; text-align: left; padding: 10px 12px; cursor: pointer; }
+    .action.secondary { background: #edf3ff; border-color: #aebbd4; }
+    .action:disabled { opacity: .55; cursor: wait; }
+    .log { min-height: 76px; max-height: 180px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 12px; font-size: 13px; }
+    @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Пульт Нафани для Zoom</h1>
+    <section>
+      <div class="status">
+        <div class="metric"><span class="label">Zoom Sender</span><span class="value" id="senderStatus">ожидает</span></div>
+        <div class="metric"><span class="label">Outbox</span><span class="value" id="outboxStatus">0 сообщений</span></div>
+        <div class="metric"><span class="label">Очередь</span><span class="value" id="queueStatus">загрузка</span></div>
+      </div>
+    </section>
+    <section>
+      <h2>Сообщения</h2>
+      <div class="grid">${messageButtons}</div>
+    </section>
+    <section>
+      <h2>Очередь</h2>
+      <div class="grid queue">${queueButtons}</div>
+    </section>
+    <pre class="log" id="log">Пульт загружен.</pre>
+  </main>
+  <script>
+    const token = new URLSearchParams(location.search).get("token") || "";
+    const actionPath = "${escapeAttr(actionPath)}";
+    const statusPath = "${escapeAttr(statusPath)}";
+    const logEl = document.getElementById("log");
+    const buttons = [...document.querySelectorAll(".action")];
+
+    function addLog(text) {
+      const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
+    }
+
+    function headers() {
+      return { "content-type": "application/json", "x-nafanya-zoom-panel-token": token };
+    }
+
+    function queueName(queue) {
+      if (!queue?.isOpen) return "закрыта";
+      if (queue.mode === "bill") return "Билл";
+      if (queue.mode === "bk") return "БК";
+      if (queue.mode === "rs") return "рабочка";
+      return "открыта";
+    }
+
+    async function refreshStatus() {
+      const response = await fetch(statusPath, { headers: { "x-nafanya-zoom-panel-token": token } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "status failed");
+      document.getElementById("senderStatus").textContent = data.sender?.connected ? "подключён" : "не подключён / ожидает";
+      document.getElementById("outboxStatus").textContent = String(data.outboxSize || 0) + " сообщений";
+      document.getElementById("queueStatus").textContent = queueName(data.queue);
+      return data;
+    }
+
+    async function runAction(type, key) {
+      buttons.forEach((button) => button.disabled = true);
+      try {
+        const body = type === "queue" ? { type, queueAction: key } : { type, key };
+        const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data.error || "action failed");
+        addLog(data.message || "Готово");
+        await refreshStatus();
+      } catch (error) {
+        addLog("Ошибка: " + (error?.message || String(error)));
+      } finally {
+        buttons.forEach((button) => button.disabled = false);
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => runAction(button.dataset.type, button.dataset.key));
+    });
+    refreshStatus().catch((error) => addLog("Статус недоступен: " + (error?.message || String(error))));
+  </script>
+</body>
+</html>`;
+}
+__name(buildZoomV2PanelHtml, "buildZoomV2PanelHtml");
 async function handleRootRequest(env) {
   return htmlResponse(buildZoomAppHtml());
 }
 __name(handleRootRequest, "handleRootRequest");
-async function handleZoomOnlyAppRequest(env) {
-  return htmlResponse(buildZoomAppHtml({ actionPath: "/zoom-only/app/action", zoomOnly: true }));
+async function handleZoomOnlyAppRequest(request, env) {
+  if (!isZoomPanelAuthorized(request, env)) {
+    return textResponse("\u041d\u0443\u0436\u0435\u043d \u0442\u043e\u043a\u0435\u043d \u043f\u0443\u043b\u044c\u0442\u0430 Zoom.", 401);
+  }
+  return htmlResponse(buildZoomV2PanelHtml());
 }
 __name(handleZoomOnlyAppRequest, "handleZoomOnlyAppRequest");
 async function handleStatusRequest(env) {
@@ -4269,10 +3869,10 @@ const messageHandlerDeps = {
   deleteMessageSafe,
   sendAdminSignal,
   sleep,
-  parseGameCommand,
-  getBillQuestionNumber,
-  parseQueueEntry,
-  makeManualQueueEntry,
+  parseGameCommand: parseGameCommandCore,
+  getBillQuestionNumber: getBillQuestionNumberCore,
+  parseQueueEntry: parseQueueEntryCore,
+  makeManualQueueEntry: makeManualQueueEntryCore,
   getSpeakerQuestions,
   getTodayTopicSourceMessageId,
   applyQueueResponse,
@@ -4310,7 +3910,7 @@ var worker_default = {
       return handleRootRequest(env);
     }
     if (request.method === "GET" && url.pathname === "/zoom-only/app") {
-      return handleZoomOnlyAppRequest(env);
+      return handleZoomOnlyAppRequest(request, env);
     }
     if (request.method === "GET" && url.pathname === "/status") {
       return handleStatusRequest(env);
@@ -4384,10 +3984,10 @@ export {
   handleZoomOAuthReturn,
   handleZoomWebhookEvent,
   LightTalkStateDurableObject,
-  getQueue111Note,
+  getQueue111NoteCore as getQueue111Note,
   isChatGroup,
-  parseGameCommand,
-  parseQueueEntry,
+  parseGameCommandCore as parseGameCommand,
+  parseQueueEntryCore as parseQueueEntry,
   QueueStateDurableObject,
   TimerStateDurableObject,
   verifyZoomWebhookSignature,

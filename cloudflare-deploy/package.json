@@ -1,6 +1,8 @@
 {
   "type": "module",
   "scripts": {
-    "test": "node regression_tests.mjs"
+    "test": "node regression_tests.mjs",
+    "test:queue": "node queue_engine_tests.mjs",
+    "test:zoom-panel": "node zoom_panel_tests.mjs"
   }
 }

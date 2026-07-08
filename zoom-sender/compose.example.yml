@@ -1,0 +1,22 @@
+# Example only. Copy this file before real use and keep secrets in .env.
+services:
+  zoom-sender:
+    build:
+      context: .
+    container_name: nafanya-zoom-sender-v2
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:3097:3097"
+    volumes:
+      - zoom-sender-profile:/app/profile
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3097/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  zoom-sender-profile:
