@@ -4,7 +4,7 @@ import { Backoff } from "../src/backoff.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
-import { ZoomSenderService } from "../src/sender.mjs";
+import { ZoomSenderService, selectZoomChat111IngestCandidates } from "../src/sender.mjs";
 import { WorkerOutboxClient } from "../src/worker-client.mjs";
 import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
@@ -41,6 +41,27 @@ test("outbox client pulls zoom-only messages and sends ackIds", async () => {
   assert.deepEqual(calls[1].body.ackIds, [1, 2]);
 });
 
+test("outbox client sends chat ingest to dedicated endpoint", async () => {
+  const calls = [];
+  const client = new WorkerOutboxClient(makeConfig(), async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body), secret: init.headers["x-nafanya-zoom-secret"] });
+    return jsonResponse({ ok: true, handled: true });
+  });
+
+  await client.ingestChatMessage({
+    authorName: "Маня Х.",
+    text: "111",
+    timestamp: "03:44 PM",
+    sourceFingerprint: "fp-1",
+    observedAt: "now"
+  });
+  assert.equal(calls[0].url, "https://worker.example/zoom-only/chat-ingest");
+  assert.equal(calls[0].secret, "secret");
+  assert.equal(calls[0].body.text, "111");
+  assert.equal(calls[0].body.authorName, "Маня Х.");
+});
+
+
 test("config reads dry-run and polling intervals from env with safe fallbacks", () => {
   const config = loadConfig({
     WORKER_BASE_URL: "https://worker.example/",
@@ -49,6 +70,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_DISPLAY_NAME: "Display Name",
     ZOOM_SENDER_DRY_RUN: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "true",
+    ZOOM_SENDER_CHAT_INGEST_ENABLED: "true",
     ZOOM_SENDER_MIN_POLL_MS: "2000",
     ZOOM_SENDER_MAX_POLL_MS: "25000",
     ZOOM_SENDER_ERROR_POLL_MS: "7000",
@@ -62,6 +84,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.participantName, "Display Name");
   assert.equal(config.dryRun, true);
   assert.equal(config.chatReadonlyDiagnostics, true);
+  assert.equal(config.chatIngestEnabled, true);
   assert.equal(config.minIntervalMs, 2000);
   assert.equal(config.maxIntervalMs, 25000);
   assert.equal(config.errorIntervalMs, 7000);
@@ -79,6 +102,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.maxIntervalMs, 1500);
   assert.equal(fallback.errorIntervalMs, 10000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
+  assert.equal(fallback.chatIngestEnabled, false);
 });
 
 test("diagnostics sanitize Zoom URLs before saving", () => {
@@ -194,7 +218,8 @@ test("sender-only code does not import queue engine or call Worker webhook", asy
     import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8"))
   ]);
   const source = senderSources.join("\n");
-  assert.doesNotMatch(source, /queue-engine|parseQueueEntry|["'](?:111|222|333|444)["']/u);
+  assert.doesNotMatch(source, /queue-engine|parseQueueEntry|parseZoomCommand|["'](?:222|333|444)["']/u);
+  assert.match(source, /selectZoomChat111IngestCandidates/u);
   assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|parseZoomCommand/u);
   assert.match(source, /\/zoom-only\/outbox/u);
 });
@@ -255,6 +280,65 @@ test("chat diagnostics fingerprint is stable and separates duplicates from diffe
   assert.equal(first, duplicate);
   assert.notEqual(first, otherAuthor);
   assert.match(first, /^chat-[0-9a-f]{8}$/u);
+});
+
+test("chat ingest candidates include only atomic 111 and ignore aggregates", () => {
+  const messages = [
+    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
+    { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
+    { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" },
+    { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
+    { displayName: "333", text: "333", timestamp: "", fingerprint: "three" },
+    { displayName: "444", text: "444", timestamp: "", fingerprint: "four" },
+    { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" }
+  ];
+  const candidates = selectZoomChat111IngestCandidates(messages);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].authorName, "Маня Х.");
+  assert.equal(candidates[0].text, "111");
+  assert.equal(candidates[0].sourceFingerprint, "atom-111");
+});
+
+test("chat ingest forwards only safe candidates and never sends Zoom replies", async () => {
+  const ingested = [];
+  let sent = 0;
+  const service = new ZoomSenderService({
+    workerClient: {
+      async ingestChatMessage(message) {
+        ingested.push(message);
+        return { ok: true, handled: true };
+      },
+      async pull() {
+        return { messages: [] };
+      }
+    },
+    zoomAdapter: {
+      config: { chatIngestEnabled: true },
+      async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+      async observeChatDiagnostics() {
+        return {
+          messages: [
+            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
+            { displayName: "111", text: "111", timestamp: "", fingerprint: "atom-111" },
+            { displayName: "222", text: "222", timestamp: "", fingerprint: "two" }
+          ]
+        };
+      },
+      async sendMessage() {
+        sent += 1;
+        return { sent: true, ack: true };
+      }
+    },
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  await service.runOnce();
+  assert.equal(ingested.length, 1);
+  assert.equal(ingested[0].authorName, "Маня Х.");
+  assert.equal(ingested[0].text, "111");
+  assert.equal(sent, 0);
 });
 
 test("real-mode browser launch uses safe Zoom Web Client flags", () => {

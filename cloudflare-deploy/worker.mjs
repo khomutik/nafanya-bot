@@ -710,6 +710,7 @@ function createEmptyAnnouncementState() {
     zoomOnlyQueueState: createEmptyQueueState(),
     zoomOnlyOutbox: [],
     zoomOnlyOutboxNextId: 1,
+    zoomOnlyChatIngestFingerprints: [],
     zoomOnlyPanelLastAction: null
   };
 }
@@ -752,6 +753,10 @@ function normalizeAnnouncementState(announcementState) {
     normalized.zoomOnlyOutbox = [];
   }
   normalized.zoomOnlyOutbox = normalized.zoomOnlyOutbox.filter((item) => item && typeof item === "object");
+  if (!Array.isArray(normalized.zoomOnlyChatIngestFingerprints)) {
+    normalized.zoomOnlyChatIngestFingerprints = [];
+  }
+  normalized.zoomOnlyChatIngestFingerprints = normalized.zoomOnlyChatIngestFingerprints.map((item) => String(item || "").trim()).filter(Boolean).slice(-300);
   if (!normalized.zoomOnlyPanelLastAction || typeof normalized.zoomOnlyPanelLastAction !== "object") {
     normalized.zoomOnlyPanelLastAction = null;
   }
@@ -1230,6 +1235,58 @@ var AnnouncementStateDurableObject = class {
         await this.saveState(announcementState);
         return Response.json(queueResult.response);
       }
+      if (action === "zoom_only_chat_ingest_111") {
+        const text = String(payload.text || "").trim();
+        const authorName = String(payload.authorName || "").trim();
+        const sourceFingerprint = String(payload.sourceFingerprint || "").trim();
+        const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
+        if (text !== "111") {
+          return Response.json({ ok: true, handled: false, ignored: "unsupported_text" });
+        }
+        if (!sourceFingerprint) {
+          return Response.json({ ok: false, handled: false, error: "sourceFingerprint is required" }, { status: 400 });
+        }
+        if (!authorName) {
+          return Response.json({ ok: true, handled: false, ignored: "empty_author" });
+        }
+        if (!queue.isOpen || !queue.mode) {
+          return Response.json({ ok: true, handled: false, ignored: "queue_closed", queue });
+        }
+        if (announcementState.zoomOnlyChatIngestFingerprints.includes(sourceFingerprint)) {
+          return Response.json({ ok: true, handled: true, duplicate: true, ignored: "fingerprint_duplicate", queue });
+        }
+        announcementState.zoomOnlyChatIngestFingerprints.push(sourceFingerprint);
+        announcementState.zoomOnlyChatIngestFingerprints = announcementState.zoomOnlyChatIngestFingerprints.slice(-300);
+        const block = queue.mode === "bill" ? "first" : queue.mode;
+        const entry = makeManualQueueEntryCore(authorName, block, "111", "111", { source: "Zoom chat" });
+        const queueResult = runQueueStateActionCore(queue, "add", { entry }, buildZoomOnlyQueueTextCore);
+        announcementState.zoomOnlyQueueState = queueResult.state;
+        const queued = [];
+        if (queueResult.response?.publishQueue && !queueResult.response?.duplicate && queueResult.response?.queueText) {
+          const createdAt = Date.now();
+          const messages = splitZoomText(queueResult.response.queueText);
+          for (const message of messages) {
+            queued.push({
+              id: announcementState.zoomOnlyOutboxNextId,
+              text: message,
+              createdAt
+            });
+            announcementState.zoomOnlyOutboxNextId += 1;
+          }
+          announcementState.zoomOnlyOutbox.push(...queued);
+          if (announcementState.zoomOnlyOutbox.length > 300) {
+            announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.slice(-300);
+          }
+        }
+        await this.saveState(announcementState);
+        return Response.json({
+          ok: true,
+          handled: true,
+          duplicate: Boolean(queueResult.response?.duplicate),
+          queue: announcementState.zoomOnlyQueueState,
+          queued
+        });
+      }
       if (action === "record_zoom_only_panel_action") {
         const key = String(payload.key || payload.command || "").trim();
         announcementState.zoomOnlyPanelLastAction = {
@@ -1245,6 +1302,7 @@ var AnnouncementStateDurableObject = class {
         announcementState.zoomOnlyQueueState = createEmptyQueueState();
         announcementState.zoomOnlyOutbox = [];
         announcementState.zoomOnlyOutboxNextId = 1;
+        announcementState.zoomOnlyChatIngestFingerprints = [];
         announcementState.zoomOnlyPanelLastAction = null;
         await this.saveState(announcementState);
         return Response.json({ ok: true });
@@ -3024,6 +3082,10 @@ async function handleZoomOnlyBridgeRequest(request, env) {
     const payload = await request.json();
     return Response.json(await handleZoomOnlyMessage(env, payload));
   }
+  if (request.method === "POST" && url.pathname === "/zoom-only/chat-ingest") {
+    const payload = await request.json().catch(() => ({}));
+    return Response.json(await handleZoomOnlyChatIngest(env, payload));
+  }
   if (request.method === "POST" && url.pathname === "/zoom-only/outbox") {
     const payload = await request.json().catch(() => ({}));
     if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
@@ -3043,6 +3105,28 @@ async function handleZoomOnlyBridgeRequest(request, env) {
   return textResponse("Not found", 404);
 }
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
+async function handleZoomOnlyChatIngest(env, payload) {
+  const text = String(payload?.text || "").trim();
+  if (text !== "111") {
+    return { ok: true, handled: false, ignored: "unsupported_text" };
+  }
+  const authorName = stripTelegramHandles(String(payload?.authorName || payload?.displayName || "").trim());
+  if (!authorName) {
+    return { ok: true, handled: false, ignored: "empty_author" };
+  }
+  const sourceFingerprint = String(payload?.sourceFingerprint || "").trim();
+  if (!sourceFingerprint) {
+    return { ok: false, handled: false, error: "sourceFingerprint is required" };
+  }
+  return callAnnouncementState(env, "zoom_only_chat_ingest_111", {
+    authorName,
+    text,
+    timestamp: String(payload?.timestamp || "").trim(),
+    sourceFingerprint,
+    observedAt: String(payload?.observedAt || "").trim()
+  });
+}
+__name(handleZoomOnlyChatIngest, "handleZoomOnlyChatIngest");
 function isZoomAppControlCommand(command) {
   const normalized = normalizeZoomCommand(command);
   if (ZOOM_APP_ALLOWED_COMMANDS.has(normalized)) return true;
@@ -3993,7 +4077,7 @@ var worker_default = {
     if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox" || url.pathname === "/zoom/debug")) {
       return handleZoomBridgeRequest(request, env);
     }
-    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/reset")) {
+    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/reset" || url.pathname === "/zoom-only/chat-ingest")) {
       return handleZoomOnlyBridgeRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/zoom/events") {

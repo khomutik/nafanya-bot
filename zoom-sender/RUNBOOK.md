@@ -116,3 +116,15 @@ ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=true
 ```bash
 ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=false
 ```
+
+Для ingest `111` нужен отдельный флаг:
+
+```bash
+ZOOM_SENDER_CHAT_INGEST_ENABLED=true
+```
+
+Включать его только на отдельном тесте. Он передает в Worker только атомарное `111` через `/zoom-only/chat-ingest`, не вызывает `/zoom-only/webhook`, не отвечает в Zoom сам и игнорирует `222/333/444`, обычный текст и агрегированные DOM-строки. После проверки вернуть:
+
+```bash
+ZOOM_SENDER_CHAT_INGEST_ENABLED=false
+```

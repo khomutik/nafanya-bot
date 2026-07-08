@@ -89,6 +89,16 @@ async function postPanelAction(env, body, token = true) {
   }), env);
 }
 
+async function postChatIngest(env, body, token = true) {
+  const headers = { "content-type": "application/json" };
+  if (token) headers["x-nafanya-zoom-secret"] = "bridge-token";
+  return worker.fetch(new Request("https://example.com/zoom-only/chat-ingest", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  }), env);
+}
+
 async function testAccess() {
   const env = makeEnv();
   const deniedPage = await worker.fetch(new Request("https://example.com/zoom-only/app"), env);
@@ -217,6 +227,116 @@ async function testSafeAddTestParticipantAction() {
   assert.equal(status.queue.isOpen, false);
 }
 
+async function testSafeZoomChat111Ingest() {
+  const env = makeEnv();
+  const authorName = "Маня Х.";
+
+  let denied = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    sourceFingerprint: "fp-denied"
+  }, false);
+  assert.equal(denied.status, 401);
+
+  let response = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    timestamp: "03:44 PM",
+    sourceFingerprint: "fp-closed",
+    observedAt: "2026-07-08T15:44:00.000Z"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.handled, false);
+  assert.equal(data.ignored, "queue_closed");
+  let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "open_rs" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  await ackOutbox(env, outbox.map((message) => message.id));
+
+  const ignoredInputs = [
+    ["привет", "fp-hi"],
+    ["222", "fp-222"],
+    ["333", "fp-333"],
+    ["444", "fp-444"],
+    ["111 111 привет 222", "fp-aggregate-words"],
+    ["Маня Х. to Everyone 03:44 PM 111 111 привет 222", "fp-aggregate-zoom"],
+    ["111", "fp-empty-author", ""]
+  ];
+  for (const [text, fingerprint, name = authorName] of ignoredInputs) {
+    response = await postChatIngest(env, {
+      authorName: name,
+      text,
+      sourceFingerprint: fingerprint
+    });
+    data = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, false);
+  }
+  let status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.entries.length, 0);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    timestamp: "03:44 PM",
+    sourceFingerprint: "fp-111-a",
+    observedAt: "2026-07-08T15:44:30.000Z"
+  });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.handled, true);
+  assert.equal(data.duplicate, false);
+  assert.equal(data.queue.entries.length, 1);
+  assert.equal(data.queue.entries[0].author, authorName);
+
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.match(outbox[0].text, /Маня Х\./u);
+  await ackOutbox(env, outbox.map((message) => message.id));
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    sourceFingerprint: "fp-111-a"
+  });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.duplicate, true);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postChatIngest(env, {
+    authorName,
+    text: "111",
+    sourceFingerprint: "fp-111-b"
+  });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.duplicate, true);
+  status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.entries.length, 1);
+  assert.equal(status.queue.entries[0].author, authorName);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+}
+
 async function testMessageButtonsAndOutbox() {
   const env = makeEnv();
 
@@ -288,6 +408,7 @@ async function testStatusAndQueueActions() {
 await testAccess();
 await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
+await testSafeZoomChat111Ingest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 

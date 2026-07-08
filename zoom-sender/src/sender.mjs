@@ -1,3 +1,46 @@
+function normalizeChatAtom(value) {
+  return String(value || "").replace(/\s+/gu, " ").trim();
+}
+
+function isAtomic111Message(message = {}) {
+  return normalizeChatAtom(message.text) === "111";
+}
+
+function isValidChatAuthor(value) {
+  const author = normalizeChatAtom(value);
+  if (!author) return false;
+  if (/^(?:111|222|333|444|to|everyone|\d{1,2}:\d{2}(?:\s?[ap]m)?)$/iu.test(author)) return false;
+  return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);
+}
+
+function getContextAuthor(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] || {};
+    const author = normalizeChatAtom(message.displayName);
+    if (isValidChatAuthor(author)) return author;
+  }
+  return "";
+}
+
+export function selectZoomChat111IngestCandidates(messages = []) {
+  const contextAuthor = getContextAuthor(messages);
+  const candidates = [];
+  for (const message of messages) {
+    if (!isAtomic111Message(message)) continue;
+    const directAuthor = normalizeChatAtom(message.displayName);
+    const authorName = isValidChatAuthor(directAuthor) ? directAuthor : contextAuthor;
+    if (!authorName) continue;
+    candidates.push({
+      authorName,
+      text: "111",
+      timestamp: normalizeChatAtom(message.timestamp),
+      sourceFingerprint: normalizeChatAtom(message.fingerprint),
+      observedAt: normalizeChatAtom(message.observedAt)
+    });
+  }
+  return candidates.filter((candidate) => candidate.sourceFingerprint);
+}
+
 export class ZoomSenderService {
   constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
     this.workerClient = workerClient;
@@ -18,7 +61,14 @@ export class ZoomSenderService {
   async runOnce() {
     try {
       this.health.updateZoom(await this.zoomAdapter.getPresence());
-      await this.zoomAdapter.observeChatDiagnostics?.();
+      const chatDiagnostics = await this.zoomAdapter.observeChatDiagnostics?.();
+      if (this.zoomAdapter.config?.chatIngestEnabled) {
+        const candidates = selectZoomChat111IngestCandidates(chatDiagnostics?.messages || []);
+        for (const candidate of candidates) {
+          await this.workerClient.ingestChatMessage(candidate);
+          this.logger.info?.("Zoom Sender forwarded one read-only chat 111 candidate to Worker ingest.");
+        }
+      }
       const pulled = await this.workerClient.pull();
       this.health.markWorkerPoll();
       const messages = Array.isArray(pulled.messages) ? pulled.messages : [];

@@ -511,7 +511,7 @@ export class PlaywrightZoomSender {
       this.lastDiagnosticsDir = diagnosticsRun.dir;
       this.logger.info?.(`Zoom Sender diagnostics saved to ${diagnosticsRun.dir}`);
     }
-    if (this.config.chatReadonlyDiagnostics) {
+    if (this.config.chatReadonlyDiagnostics || this.config.chatIngestEnabled) {
       await this.observeChatDiagnostics().catch((error) => this.logger.warn?.(`Zoom Sender chat diagnostics failed: ${error?.message || String(error)}`));
       this.logger.info?.("Zoom Sender read-only chat diagnostics enabled.");
     }
@@ -542,8 +542,8 @@ export class PlaywrightZoomSender {
   }
 
   async observeChatDiagnostics() {
-    if (!this.config.chatReadonlyDiagnostics || !this.page || !this.diagnosticsRun) {
-      return { enabled: Boolean(this.config.chatReadonlyDiagnostics), newMessages: 0 };
+    if (!(this.config.chatReadonlyDiagnostics || this.config.chatIngestEnabled) || !this.page || !this.diagnosticsRun) {
+      return { enabled: Boolean(this.config.chatReadonlyDiagnostics || this.config.chatIngestEnabled), newMessages: 0, messages: [] };
     }
     if (!await hasChatInput(this.page)) {
       await openChatPanel(this.page).catch(() => false);
@@ -572,7 +572,7 @@ export class PlaywrightZoomSender {
       await fs.appendFile(file, lines, "utf8");
       this.logger.info?.(`Zoom Sender read-only chat diagnostics captured ${fresh.length} new message(s).`);
     }
-    return { enabled: true, newMessages: fresh.length, totalSeen: this.chatDiagnosticFingerprints.size };
+    return { enabled: true, newMessages: fresh.length, totalSeen: this.chatDiagnosticFingerprints.size, messages: fresh };
   }
 
   async stop() {
