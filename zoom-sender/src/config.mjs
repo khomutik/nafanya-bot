@@ -9,6 +9,13 @@ function readPositiveInt(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEG
   return Math.min(max, Math.max(min, Math.floor(number)));
 }
 
+function readList(value) {
+  return String(value || "")
+    .split(/\s+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function loadConfig(env = process.env) {
   const minIntervalMs = readPositiveInt(env.ZOOM_SENDER_MIN_POLL_MS ?? env.ZOOM_SENDER_MIN_INTERVAL_MS, 1500, { min: 1000, max: 60000 });
   const maxIntervalMs = readPositiveInt(env.ZOOM_SENDER_MAX_POLL_MS ?? env.ZOOM_SENDER_MAX_INTERVAL_MS, 30000, { min: minIntervalMs, max: 120000 });
@@ -22,6 +29,8 @@ export function loadConfig(env = process.env) {
     mockMessage: String(env.ZOOM_SENDER_MOCK_MESSAGE || "Dry-run Zoom message").trim(),
     headless: readBool(env.HEADLESS ?? env.ZOOM_SENDER_HEADLESS, true),
     userDataDir: String(env.ZOOM_SENDER_USER_DATA_DIR || "/app/profile").trim(),
+    diagnosticsDir: String(env.ZOOM_SENDER_DIAGNOSTICS_DIR || "").trim(),
+    browserArgs: readList(env.ZOOM_SENDER_BROWSER_ARGS),
     minIntervalMs,
     maxIntervalMs,
     errorIntervalMs: readPositiveInt(env.ZOOM_SENDER_ERROR_POLL_MS ?? env.ZOOM_SENDER_ERROR_INTERVAL_MS, 10000, { min: 1000, max: maxIntervalMs }),

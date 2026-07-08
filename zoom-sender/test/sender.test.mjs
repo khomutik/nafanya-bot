@@ -6,6 +6,7 @@ import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
 import { ZoomSenderService } from "../src/sender.mjs";
 import { WorkerOutboxClient } from "../src/worker-client.mjs";
+import { DEFAULT_BROWSER_ARGS, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -51,6 +52,8 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_SENDER_MAX_POLL_MS: "25000",
     ZOOM_SENDER_ERROR_POLL_MS: "7000",
     ZOOM_SENDER_HEALTH_PORT: "4001",
+    ZOOM_SENDER_DIAGNOSTICS_DIR: "/tmp/zoom-diagnostics",
+    ZOOM_SENDER_BROWSER_ARGS: "--one --two",
     HEADLESS: "false"
   });
   assert.equal(config.workerBaseUrl, "https://worker.example");
@@ -61,6 +64,8 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.maxIntervalMs, 25000);
   assert.equal(config.errorIntervalMs, 7000);
   assert.equal(config.healthPort, 4001);
+  assert.equal(config.diagnosticsDir, "/tmp/zoom-diagnostics");
+  assert.deepEqual(config.browserArgs, ["--one", "--two"]);
   assert.equal(config.headless, false);
 
   const fallback = loadConfig({
@@ -71,6 +76,22 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.minIntervalMs, 1500);
   assert.equal(fallback.maxIntervalMs, 1500);
   assert.equal(fallback.errorIntervalMs, 10000);
+});
+
+test("diagnostics sanitize Zoom URLs before saving", () => {
+  assert.equal(
+    sanitizePageUrl("https://us06web.zoom.us/j/123456789?pwd=secret&zak=token#join"),
+    "https://us06web.zoom.us/j/123456789"
+  );
+  assert.equal(sanitizePageUrl("not-a-url?pwd=secret"), "not-a-url");
+  assert.equal(
+    sanitizeDiagnosticText("go https://zoom.us/j/123?pwd=secret&zak=token and x-nafanya-zoom-secret abc"),
+    "go https://zoom.us/j/123 and x-nafanya-zoom-secret [redacted]"
+  );
+  assert.equal(
+    buildZoomWebClientUrl("https://us06web.zoom.us/j/123456789?pwd=secret"),
+    "https://us06web.zoom.us/wc/join/123456789?pwd=secret"
+  );
 });
 
 test("sender acks only messages successfully sent to Zoom", async () => {
@@ -175,6 +196,27 @@ test("sender-only code does not import queue engine or call Worker webhook", asy
   assert.match(source, /\/zoom-only\/outbox/u);
 });
 
+test("Zoom browser adapter handles the Zoom web landing gate without reading chat", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8");
+  assert.match(source, /join from browser/iu);
+  assert.match(source, /decline cookies|accept cookies/iu);
+  assert.match(source, /continue without microphone and camera/iu);
+  assert.match(source, /getByText\(pattern\)/u);
+  assert.match(source, /button, a, \[role='button'\]/u);
+  assert.match(source, /page\.on\("console"/u);
+  assert.match(source, /page\.on\("requestfailed"/u);
+  assert.doesNotMatch(source, /readChatMessages|\/zoom-only\/webhook|parseQueueEntry/u);
+});
+
+test("real-mode browser launch uses safe Zoom Web Client flags", () => {
+  assert.ok(DEFAULT_BROWSER_ARGS.includes("--no-sandbox"));
+  assert.ok(DEFAULT_BROWSER_ARGS.includes("--disable-dev-shm-usage"));
+  assert.ok(DEFAULT_BROWSER_ARGS.includes("--use-fake-ui-for-media-stream"));
+  assert.ok(DEFAULT_BROWSER_ARGS.includes("--use-fake-device-for-media-stream"));
+  assert.ok(DEFAULT_BROWSER_ARGS.includes("--disable-blink-features=AutomationControlled"));
+});
+
 test("docker packaging is sender-only and contains no obvious secrets", async () => {
   const fs = await import("node:fs/promises");
   const [dockerfile, compose, envExample, runbook] = await Promise.all([
@@ -183,11 +225,14 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
     fs.readFile(new URL("../.env.example", import.meta.url), "utf8"),
     fs.readFile(new URL("../RUNBOOK.md", import.meta.url), "utf8")
   ]);
-  assert.match(dockerfile, /CMD \["node", "src\/main\.mjs"\]/u);
+  assert.match(dockerfile, /node src\/main\.mjs/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
+  assert.match(dockerfile, /xvfb xauth x11-utils/u);
+  assert.match(dockerfile, /Xvfb :99/u);
   assert.match(compose, /service|zoom-sender/u);
   assert.match(compose, /healthcheck:/u);
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
+  assert.match(compose, /\.\/diagnostics:\/app\/diagnostics/u);
   assert.match(envExample, /ZOOM_ONLY_SECRET=/u);
   assert.doesNotMatch(envExample, /replace-with-worker-secret|super-secret|sk-[a-z0-9]/iu);
   assert.match(runbook, /не запускать старый `zoom-bridge`/iu);
