@@ -65,6 +65,9 @@ async function isSignedIn(page) {
   const title = await page.title().catch(() => "");
   const body = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
   if (/\/signin|\/login/iu.test(url)) return false;
+  if (/\/wc\/(?:\d+\/)?join/iu.test(url) && /join|enter meeting info|your name|mute|stop video/iu.test(`${title}\n${body}`)) {
+    return true;
+  }
   return /profile|account|meetings|settings|sign out|выйти/iu.test(`${title}\n${body}`);
 }
 
@@ -80,6 +83,7 @@ async function waitUntilSignedIn(page, deadline, { waitForManual }) {
       }
     }
     if (await isSignedIn(page)) {
+      await page.waitForTimeout(1500).catch(() => null);
       console.log("Zoom auth profile setup completed.");
       return true;
     }
