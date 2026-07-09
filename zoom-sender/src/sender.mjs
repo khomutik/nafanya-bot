@@ -2,6 +2,10 @@ function normalizeChatAtom(value) {
   return String(value || "").replace(/\s+/gu, " ").trim();
 }
 
+function normalizeLogicalPart(value) {
+  return normalizeChatAtom(value).toLowerCase();
+}
+
 function isAtomicQueueCodeMessage(message = {}) {
   return /^(?:111|222|333|444)$/u.test(normalizeChatAtom(message.text));
 }
@@ -24,25 +28,54 @@ function isValidChatAuthor(value) {
   return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);
 }
 
+export function extractZoomChatDomMessageId(rawDom = "") {
+  const html = String(rawDom || "");
+  const rtfId = html.match(/\bid=["']([^"']*-\{[0-9a-f-]{24,}\})["']/iu);
+  if (rtfId) return normalizeChatAtom(rtfId[1]);
+  const contentId = html.match(/\bid=["'](chat-message-content-[^"']+)["']/iu);
+  if (contentId) return normalizeChatAtom(contentId[1]);
+  const ariaLabel = html.match(/\baria-label=["']([^"']+\bto\s+Everyone\b[^"']+)["']/iu);
+  if (ariaLabel) return normalizeChatAtom(ariaLabel[1]);
+  return "";
+}
+
+export function buildZoomChatLogicalKey(message = {}, parsed = null) {
+  const code = normalizeChatAtom(parsed?.text || message.text);
+  const authorName = normalizeChatAtom(parsed?.authorName || message.authorName || message.displayName);
+  if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return "";
+  const domMessageId = extractZoomChatDomMessageId(message.rawDom);
+  if (domMessageId) {
+    return ["dom", normalizeLogicalPart(authorName), code, normalizeLogicalPart(domMessageId)].join("|");
+  }
+  const rawLine = normalizeLogicalPart(message.text);
+  const timestamp = normalizeLogicalPart(message.timestamp);
+  return ["line", normalizeLogicalPart(authorName), code, timestamp, rawLine].join("|");
+}
+
 export function selectZoomChatCodeIngestCandidates(messages = []) {
   const candidates = [];
+  const batchLogicalKeys = new Set();
   for (const message of messages) {
     const parsed = parseZoomQueueCodeMessage(message);
     if (!parsed && !isAtomicQueueCodeMessage(message)) continue;
     if (!parsed) continue;
+    const logicalKey = buildZoomChatLogicalKey(message, parsed);
+    if (!logicalKey || batchLogicalKeys.has(logicalKey)) continue;
+    batchLogicalKeys.add(logicalKey);
     candidates.push({
       authorName: parsed.authorName,
       text: parsed.text,
       timestamp: normalizeChatAtom(message.timestamp),
       sourceFingerprint: normalizeChatAtom(message.fingerprint),
-      observedAt: normalizeChatAtom(message.observedAt)
+      observedAt: normalizeChatAtom(message.observedAt),
+      logicalKey
     });
   }
   return candidates.filter((candidate) => candidate.sourceFingerprint);
 }
 
 export class ZoomSenderService {
-  constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), chatLogicalDedupTtlMs = 120000 }) {
     this.workerClient = workerClient;
     this.zoomAdapter = zoomAdapter;
     this.backoff = backoff;
@@ -50,6 +83,28 @@ export class ZoomSenderService {
     this.logger = logger;
     this.sleep = sleep;
     this.stopped = false;
+    this.chatLogicalDedupTtlMs = chatLogicalDedupTtlMs;
+    this.chatLogicalDedup = new Map();
+  }
+
+  pruneChatLogicalDedup(now = Date.now()) {
+    for (const [key, lastSeenAt] of this.chatLogicalDedup) {
+      if (now - lastSeenAt > this.chatLogicalDedupTtlMs) {
+        this.chatLogicalDedup.delete(key);
+      }
+    }
+  }
+
+  shouldIngestChatCandidate(candidate, now = Date.now()) {
+    this.pruneChatLogicalDedup(now);
+    const logicalKey = normalizeChatAtom(candidate?.logicalKey);
+    if (!logicalKey) return true;
+    if (this.chatLogicalDedup.has(logicalKey)) {
+      this.logger.info?.("Zoom Sender skipped duplicate chat queue-code candidate by logical message key.");
+      return false;
+    }
+    this.chatLogicalDedup.set(logicalKey, now);
+    return true;
   }
 
   async start() {
@@ -65,6 +120,7 @@ export class ZoomSenderService {
       if (this.zoomAdapter.config?.chatIngestEnabled) {
         const candidates = selectZoomChatCodeIngestCandidates(chatDiagnostics?.messages || []);
         for (const candidate of candidates) {
+          if (!this.shouldIngestChatCandidate(candidate)) continue;
           await this.workerClient.ingestChatMessage(candidate);
           this.logger.info?.("Zoom Sender forwarded one read-only chat queue-code candidate to Worker ingest.");
         }
