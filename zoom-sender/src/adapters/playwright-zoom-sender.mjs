@@ -309,6 +309,38 @@ async function collectVisibleChatMessages(page) {
       const rect = element.getBoundingClientRect();
       return style.visibility !== "hidden" && style.display !== "none" && rect.width > 10 && rect.height > 8;
     };
+    const parseGroupHeader = (value) => {
+      const text = clean(value);
+      const match = text.match(/^(.+?)\s+to\s+Everyone(?:,)?(?:\s+(\d{1,2}:\d{2}(?:\s?[AP]M)?))?/i);
+      if (!match) return { authorName: "", timestamp: "" };
+      return { authorName: clean(match[1]), timestamp: clean(match[2] || "") };
+    };
+    const groupContainerFor = (element) => element.closest([
+      '[id^="chat-message-content-"]',
+      '[aria-label*="to Everyone" i]',
+      '[class*="chat-message" i]',
+      '[class*="message-item" i]',
+      '[class*="chat-item" i]',
+      '[role="listitem"]'
+    ].join(", ")) || element;
+    const stableIdFor = (element, fallbackIndex) => clean(
+      element.getAttribute("id") ||
+      element.getAttribute("data-message-id") ||
+      element.getAttribute("data-testid") ||
+      element.getAttribute("aria-label") ||
+      `group-${fallbackIndex}`
+    );
+    const atomicCodeNodesFor = (groupElement) => {
+      const descendants = [...groupElement.querySelectorAll("*")].filter(visible);
+      const nodes = descendants.length ? descendants : [groupElement];
+      return nodes
+        .map((node, childIndex) => ({
+          node,
+          childIndex,
+          text: clean(node.innerText || node.textContent)
+        }))
+        .filter((item) => /^(?:111|222|333|444)$/.test(item.text));
+    };
     const selectors = [
       '[class*="chat-message" i]',
       '[class*="chat_item" i]',
@@ -329,26 +361,58 @@ async function collectVisibleChatMessages(page) {
       }
     }
     const uniqueNodes = [...new Set(nodes)].slice(-40);
-    return uniqueNodes.map((element, index) => {
+    const records = [];
+    const seenChildRecords = new Set();
+    uniqueNodes.forEach((element, index) => {
       const text = clean(element.innerText || element.textContent).slice(0, textLimit);
       const lines = text.split(/\n+/u).map(clean).filter(Boolean);
       const timestampPattern = /(?:\d{1,2}:\d{2}(?::\d{2})?|am|pm|сегодня|today)/iu;
       const timestamp = lines.find((line) => timestampPattern.test(line)) || "";
+      const groupElement = groupContainerFor(element);
+      const groupText = clean(groupElement.innerText || groupElement.textContent).slice(0, textLimit);
+      const groupAriaLabel = clean(groupElement.getAttribute("aria-label") || "");
+      const groupHeader = parseGroupHeader(groupAriaLabel || groupText);
+      const groupStableId = stableIdFor(groupElement, index);
       const displayName = clean(
         element.getAttribute("data-sender") ||
         element.getAttribute("data-display-name") ||
         element.querySelector('[class*="sender" i], [class*="name" i], [aria-label*="sender" i]')?.textContent ||
+        groupHeader.authorName ||
         (timestamp && lines[0] === timestamp ? lines[1] : lines[0]) ||
         ""
       );
-      return {
+      records.push({
         displayName,
         text,
         timestamp,
         domPath: `${element.tagName.toLowerCase()}:${index}`,
-        rawDom: String(element.outerHTML || "").slice(0, domLimit)
-      };
+        rawDom: String(element.outerHTML || "").slice(0, domLimit),
+        groupAuthorName: groupHeader.authorName,
+        groupTimestamp: groupHeader.timestamp || timestamp,
+        groupText,
+        groupStableId,
+        childIndex: ""
+      });
+      for (const child of atomicCodeNodesFor(groupElement)) {
+        const rawDom = String(child.node.outerHTML || "").slice(0, domLimit);
+        const childKey = [groupStableId, child.childIndex, child.text, rawDom].join("|");
+        if (seenChildRecords.has(childKey)) continue;
+        seenChildRecords.add(childKey);
+        records.push({
+          displayName: groupHeader.authorName || displayName,
+          text: child.text,
+          timestamp: groupHeader.timestamp || timestamp,
+          domPath: `${child.node.tagName.toLowerCase()}:${index}:${child.childIndex}`,
+          rawDom,
+          groupAuthorName: groupHeader.authorName,
+          groupTimestamp: groupHeader.timestamp || timestamp,
+          groupText,
+          groupStableId,
+          childIndex: String(child.childIndex)
+        });
+      }
     });
+    return records.slice(-80);
   }, { textLimit: CHAT_DIAGNOSTIC_TEXT_LIMIT, domLimit: CHAT_DIAGNOSTIC_DOM_LIMIT }).catch(() => []);
 }
 
@@ -583,7 +647,12 @@ export class PlaywrightZoomSender {
         text: normalizeDiagnosticChatText(message.text).slice(0, CHAT_DIAGNOSTIC_TEXT_LIMIT),
         timestamp: normalizeDiagnosticChatText(message.timestamp).slice(0, 80),
         domPath: normalizeDiagnosticChatText(message.domPath).slice(0, 120),
-        rawDom: sanitizeDiagnosticText(message.rawDom).slice(0, CHAT_DIAGNOSTIC_DOM_LIMIT)
+        rawDom: sanitizeDiagnosticText(message.rawDom).slice(0, CHAT_DIAGNOSTIC_DOM_LIMIT),
+        groupAuthorName: normalizeDiagnosticChatText(message.groupAuthorName).slice(0, 160),
+        groupTimestamp: normalizeDiagnosticChatText(message.groupTimestamp).slice(0, 80),
+        groupText: normalizeDiagnosticChatText(message.groupText).slice(0, CHAT_DIAGNOSTIC_TEXT_LIMIT),
+        groupStableId: normalizeDiagnosticChatText(message.groupStableId).slice(0, 240),
+        childIndex: normalizeDiagnosticChatText(message.childIndex).slice(0, 40)
       };
       if (!safeMessage.text) continue;
       const fingerprint = buildChatMessageFingerprint(safeMessage);

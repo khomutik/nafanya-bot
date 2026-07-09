@@ -306,6 +306,83 @@ test("chat ingest candidates include only atomic queue codes and ignore aggregat
   assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["full-111", "full-222", "full-333", "full-444"]);
 });
 
+test("chat ingest candidates parse atomic child codes from one Zoom message group", () => {
+  const messages = ["111", "222", "333", "444"].map((code, index) => ({
+    displayName: "Маня Х.",
+    text: code,
+    timestamp: "07:36 PM",
+    fingerprint: `group-${code}`,
+    rawDom: `<span id="chat-message-content-fast-${index}">${code}</span>`,
+    groupAuthorName: "Маня Х.",
+    groupTimestamp: "07:36 PM",
+    groupText: "Маня Х. to Everyone 07:36 PM 111 222 333 444",
+    groupStableId: "chat-message-content-fast-group",
+    childIndex: String(index)
+  }));
+
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 4);
+  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
+  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
+});
+
+test("chat ingest candidates ignore unsafe bare chunks and queue publications", () => {
+  const messages = [
+    { displayName: "222", text: "222", timestamp: "", fingerprint: "bare-222" },
+    {
+      displayName: "Маня Х.",
+      text: "111 222 333",
+      timestamp: "07:36 PM",
+      fingerprint: "aggregate",
+      groupAuthorName: "Маня Х.",
+      groupTimestamp: "07:36 PM",
+      groupText: "Маня Х. to Everyone 07:36 PM 111 222 333",
+      groupStableId: "group-aggregate",
+      childIndex: "0"
+    },
+    {
+      displayName: "Нафаня",
+      text: "111",
+      timestamp: "07:36 PM",
+      fingerprint: "own-code",
+      groupAuthorName: "Нафаня",
+      groupTimestamp: "07:36 PM",
+      groupText: "Рабочее собрание ОЧЕРЕДЬ ОТКРЫТА 1. Маня Х. — 111",
+      groupStableId: "own-publication",
+      childIndex: "1"
+    }
+  ];
+
+  assert.equal(selectZoomChatCodeIngestCandidates(messages).length, 0);
+});
+
+test("chat ingest candidates deduplicate cloned child codes but allow a new group", () => {
+  const base = {
+    displayName: "Маня Х.",
+    text: "111",
+    timestamp: "07:36 PM",
+    rawDom: '<span id="7-{9d167db1-997c-444c-844d-ba7195fc4412}">111</span>',
+    groupAuthorName: "Маня Х.",
+    groupTimestamp: "07:36 PM",
+    groupText: "Маня Х. to Everyone 07:36 PM 111",
+    groupStableId: "fast-group-a",
+    childIndex: "0"
+  };
+  const candidates = selectZoomChatCodeIngestCandidates([
+    { ...base, fingerprint: "clone-a" },
+    { ...base, fingerprint: "clone-b" },
+    {
+      ...base,
+      fingerprint: "new-real-message",
+      rawDom: '<span id="8-{9d167db1-997c-444c-844d-ba7195fc4413}">111</span>',
+      groupStableId: "fast-group-b"
+    }
+  ]);
+
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["clone-a", "new-real-message"]);
+});
+
 test("chat ingest candidates deduplicate DOM clones of one Zoom message", () => {
   const rawDom = '<div id="chat-message-content-17" aria-label="Маня Х. to Everyone, 09:06 PM, 111"><div id="6-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>';
   const messages = [

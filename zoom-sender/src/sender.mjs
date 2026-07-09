@@ -10,21 +10,34 @@ function isAtomicQueueCodeMessage(message = {}) {
   return /^(?:111|222|333|444)$/u.test(normalizeChatAtom(message.text));
 }
 
+function isQueuePublicationText(value) {
+  return /очередь|собрани|пишите в чат|рабочее собрание|очередь открыта|очередь закрыта|пока пусто|working meeting|queue open|queue closed|—\s*111|-\s*111/iu.test(normalizeChatAtom(value));
+}
+
 function parseZoomQueueCodeMessage(message = {}) {
   const text = normalizeChatAtom(message.text);
   const match = text.match(/^(.+?)\s+to\s+Everyone(?:\s+\d{1,2}:\d{2}(?:\s?[AP]M)?)?\s+(111|222|333|444)$/iu);
-  if (!match) return null;
-  const authorName = normalizeChatAtom(match[1]);
+  if (match) {
+    const authorName = normalizeChatAtom(match[1]);
+    if (!isValidChatAuthor(authorName)) return null;
+    return { authorName, text: match[2], source: "line" };
+  }
+  if (!isAtomicQueueCodeMessage(message)) return null;
+  const authorName = normalizeChatAtom(message.groupAuthorName || message.authorName);
+  const groupText = normalizeChatAtom(message.groupText);
+  const groupTimestamp = normalizeChatAtom(message.groupTimestamp || message.timestamp);
   if (!isValidChatAuthor(authorName)) return null;
-  return { authorName, text: match[2] };
+  if (!groupText || !groupTimestamp) return null;
+  if (isQueuePublicationText(groupText)) return null;
+  return { authorName, text, source: "group" };
 }
 
 function isValidChatAuthor(value) {
   const author = normalizeChatAtom(value);
   if (!author) return false;
-  if (/^(?:you|вы|\u0432\u044b|\u043d\()$/iu.test(author)) return false;
+  if (/^(?:you|вы|\u0432\u044b|\u043d\(|нафаня|nafanya|nafanya bot)$/iu.test(author)) return false;
   if (/^(?:111|222|333|444|to|everyone|\d{1,2}:\d{2}(?:\s?[ap]m)?)$/iu.test(author)) return false;
-  if (/очередь|собрани|пишите в чат|working meeting|queue open/iu.test(author)) return false;
+  if (isQueuePublicationText(author)) return false;
   return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);
 }
 
@@ -41,11 +54,22 @@ export function extractZoomChatDomMessageId(rawDom = "") {
 
 export function buildZoomChatLogicalKey(message = {}, parsed = null) {
   const code = normalizeChatAtom(parsed?.text || message.text);
-  const authorName = normalizeChatAtom(parsed?.authorName || message.authorName || message.displayName);
+  const authorName = normalizeChatAtom(parsed?.authorName || message.authorName || message.groupAuthorName || message.displayName);
   if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return "";
   const domMessageId = extractZoomChatDomMessageId(message.rawDom);
   if (domMessageId) {
     return ["dom", normalizeLogicalPart(authorName), code, normalizeLogicalPart(domMessageId)].join("|");
+  }
+  const groupStableId = normalizeChatAtom(message.groupStableId);
+  if (groupStableId) {
+    return [
+      "group",
+      normalizeLogicalPart(authorName),
+      normalizeLogicalPart(groupStableId),
+      normalizeLogicalPart(message.groupTimestamp || message.timestamp),
+      code,
+      normalizeLogicalPart(message.childIndex)
+    ].join("|");
   }
   const rawLine = normalizeLogicalPart(message.text);
   const timestamp = normalizeLogicalPart(message.timestamp);
@@ -57,7 +81,6 @@ export function selectZoomChatCodeIngestCandidates(messages = []) {
   const batchLogicalKeys = new Set();
   for (const message of messages) {
     const parsed = parseZoomQueueCodeMessage(message);
-    if (!parsed && !isAtomicQueueCodeMessage(message)) continue;
     if (!parsed) continue;
     const logicalKey = buildZoomChatLogicalKey(message, parsed);
     if (!logicalKey || batchLogicalKeys.has(logicalKey)) continue;
