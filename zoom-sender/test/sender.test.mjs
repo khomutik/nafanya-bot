@@ -383,6 +383,28 @@ test("chat ingest candidates deduplicate cloned child codes but allow a new grou
   assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["clone-a", "new-real-message"]);
 });
 
+test("chat ingest candidates use Zoom aria-label from raw DOM when group fields are empty", () => {
+  const candidates = selectZoomChatCodeIngestCandidates([
+    {
+      displayName: "333",
+      text: "333",
+      timestamp: "",
+      fingerprint: "raw-dom-333",
+      rawDom: '<div class="new-chat-message__container" id="chat-message-content-3" aria-label="Маня Х. to Everyone, 03:43 PM, 333" role="row"><p>333</p></div>',
+      groupAuthorName: "",
+      groupTimestamp: "",
+      groupText: "333",
+      groupStableId: "group-35",
+      childIndex: "0"
+    }
+  ]);
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].authorName, "Маня Х.");
+  assert.equal(candidates[0].text, "333");
+  assert.equal(candidates[0].sourceFingerprint, "raw-dom-333");
+});
+
 test("chat ingest candidates deduplicate DOM clones of one Zoom message", () => {
   const rawDom = '<div id="chat-message-content-17" aria-label="Маня Х. to Everyone, 09:06 PM, 111"><div id="6-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>';
   const messages = [

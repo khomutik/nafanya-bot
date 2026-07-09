@@ -14,6 +14,19 @@ function isQueuePublicationText(value) {
   return /очередь|собрани|пишите в чат|рабочее собрание|очередь открыта|очередь закрыта|пока пусто|working meeting|queue open|queue closed|—\s*111|-\s*111/iu.test(normalizeChatAtom(value));
 }
 
+function parseZoomChatAriaLabel(value = "") {
+  const raw = String(value || "").replace(/&quot;/giu, "\"").replace(/&#34;/giu, "\"");
+  const match = raw.match(/\baria-label=["']([^"']+\bto\s+Everyone\b[^"']*)["']/iu);
+  const label = normalizeChatAtom(match?.[1] || value);
+  const labelMatch = label.match(/^(.+?)\s+to\s+Everyone,?\s+(\d{1,2}:\d{2}(?:\s?[AP]M)?),?\s+(111|222|333|444)$/iu);
+  if (!labelMatch) return null;
+  return {
+    authorName: normalizeChatAtom(labelMatch[1]),
+    timestamp: normalizeChatAtom(labelMatch[2]),
+    text: normalizeChatAtom(labelMatch[3])
+  };
+}
+
 function parseZoomQueueCodeMessage(message = {}) {
   const text = normalizeChatAtom(message.text);
   const match = text.match(/^(.+?)\s+to\s+Everyone(?:\s+\d{1,2}:\d{2}(?:\s?[AP]M)?)?\s+(111|222|333|444)$/iu);
@@ -23,9 +36,11 @@ function parseZoomQueueCodeMessage(message = {}) {
     return { authorName, text: match[2], source: "line" };
   }
   if (!isAtomicQueueCodeMessage(message)) return null;
-  const authorName = normalizeChatAtom(message.groupAuthorName || message.authorName);
-  const groupText = normalizeChatAtom(message.groupText);
-  const groupTimestamp = normalizeChatAtom(message.groupTimestamp || message.timestamp);
+  const rawDomLabel = parseZoomChatAriaLabel(message.rawDom);
+  const authorName = normalizeChatAtom(message.groupAuthorName || message.authorName || rawDomLabel?.authorName);
+  const groupText = normalizeChatAtom(message.groupText || (rawDomLabel ? `${rawDomLabel.authorName} to Everyone ${rawDomLabel.timestamp} ${rawDomLabel.text}` : ""));
+  const groupTimestamp = normalizeChatAtom(message.groupTimestamp || message.timestamp || rawDomLabel?.timestamp);
+  if (rawDomLabel?.text && rawDomLabel.text !== text) return null;
   if (!isValidChatAuthor(authorName)) return null;
   if (!groupText || !groupTimestamp) return null;
   if (isQueuePublicationText(groupText)) return null;
