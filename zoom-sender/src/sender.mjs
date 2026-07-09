@@ -14,16 +14,24 @@ function isQueuePublicationText(value) {
   return /очередь|собрани|пишите в чат|рабочее собрание|очередь открыта|очередь закрыта|пока пусто|working meeting|queue open|queue closed|—\s*111|-\s*111/iu.test(normalizeChatAtom(value));
 }
 
-function parseZoomChatAriaLabel(value = "") {
+function extractZoomChatAriaLabel(value = "") {
   const raw = String(value || "").replace(/&quot;/giu, "\"").replace(/&#34;/giu, "\"");
   const match = raw.match(/\baria-label=["']([^"']+\bto\s+Everyone\b[^"']*)["']/iu);
-  const label = normalizeChatAtom(match?.[1] || value);
+  return normalizeChatAtom(match?.[1] || value);
+}
+
+function parseZoomChatAriaLabel(value = "") {
+  const label = extractZoomChatAriaLabel(value);
   const labelMatch = label.match(/^(.+?)\s+to\s+Everyone,?\s+(\d{1,2}:\d{2}(?:\s?[AP]M)?),?\s+(111|222|333|444)$/iu);
   if (!labelMatch) return null;
+  const authorName = normalizeChatAtom(labelMatch[1]);
+  const timestamp = normalizeChatAtom(labelMatch[2]);
+  const text = normalizeChatAtom(labelMatch[3]);
   return {
-    authorName: normalizeChatAtom(labelMatch[1]),
-    timestamp: normalizeChatAtom(labelMatch[2]),
-    text: normalizeChatAtom(labelMatch[3])
+    authorName,
+    timestamp,
+    text,
+    canonicalLabel: `${authorName} to Everyone ${timestamp} ${text}`
   };
 }
 
@@ -67,49 +75,70 @@ export function extractZoomChatDomMessageId(rawDom = "") {
   return "";
 }
 
-export function buildZoomChatLogicalKey(message = {}, parsed = null) {
+function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
   const code = normalizeChatAtom(parsed?.text || message.text);
   const authorName = normalizeChatAtom(parsed?.authorName || message.authorName || message.groupAuthorName || message.displayName);
-  if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return "";
+  if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return { primary: "", aliases: [] };
+  const keys = [];
+  const addKey = (key) => {
+    const normalized = normalizeChatAtom(key);
+    if (normalized && !keys.includes(normalized)) keys.push(normalized);
+  };
+  const ariaLabel = parseZoomChatAriaLabel(message.rawDom) || parseZoomChatAriaLabel(message.ariaLabel);
+  if (ariaLabel?.text === code && normalizeChatAtom(ariaLabel.authorName) === authorName) {
+    addKey(["aria", normalizeLogicalPart(ariaLabel.canonicalLabel), code].join("|"));
+  }
   const domMessageId = extractZoomChatDomMessageId(message.rawDom);
   if (domMessageId) {
-    return ["dom", normalizeLogicalPart(authorName), code, normalizeLogicalPart(domMessageId)].join("|");
+    addKey(["dom", normalizeLogicalPart(authorName), code, normalizeLogicalPart(domMessageId)].join("|"));
   }
   const groupStableId = normalizeChatAtom(message.groupStableId);
   if (groupStableId) {
-    return [
+    addKey([
       "group",
       normalizeLogicalPart(authorName),
       normalizeLogicalPart(groupStableId),
       normalizeLogicalPart(message.groupTimestamp || message.timestamp),
       code,
       normalizeLogicalPart(message.childIndex)
-    ].join("|");
+    ].join("|"));
   }
   const rawLine = normalizeLogicalPart(message.text);
   const timestamp = normalizeLogicalPart(message.timestamp);
-  return ["line", normalizeLogicalPart(authorName), code, timestamp, rawLine].join("|");
+  if (!keys.length) {
+    addKey(["line", normalizeLogicalPart(authorName), code, timestamp, rawLine].join("|"));
+  }
+  return { primary: keys[0] || "", aliases: keys };
+}
+
+export function buildZoomChatLogicalKey(message = {}, parsed = null) {
+  return buildZoomChatLogicalIdentities(message, parsed).primary;
 }
 
 export function selectZoomChatCodeIngestCandidates(messages = []) {
   const candidates = [];
   const batchLogicalKeys = new Set();
+  const batchFingerprints = new Set();
   for (const message of messages) {
     const parsed = parseZoomQueueCodeMessage(message);
     if (!parsed) continue;
-    const logicalKey = buildZoomChatLogicalKey(message, parsed);
-    if (!logicalKey || batchLogicalKeys.has(logicalKey)) continue;
-    batchLogicalKeys.add(logicalKey);
+    const { primary: logicalKey, aliases: logicalAliases } = buildZoomChatLogicalIdentities(message, parsed);
+    const sourceFingerprint = normalizeChatAtom(message.fingerprint);
+    if (!logicalKey || !sourceFingerprint) continue;
+    if (logicalAliases.some((key) => batchLogicalKeys.has(key)) || batchFingerprints.has(sourceFingerprint)) continue;
+    for (const key of logicalAliases) batchLogicalKeys.add(key);
+    batchFingerprints.add(sourceFingerprint);
     candidates.push({
       authorName: parsed.authorName,
       text: parsed.text,
       timestamp: normalizeChatAtom(message.timestamp),
-      sourceFingerprint: normalizeChatAtom(message.fingerprint),
+      sourceFingerprint,
       observedAt: normalizeChatAtom(message.observedAt),
-      logicalKey
+      logicalKey,
+      logicalAliases
     });
   }
-  return candidates.filter((candidate) => candidate.sourceFingerprint);
+  return candidates;
 }
 
 export class ZoomSenderService {
@@ -123,6 +152,7 @@ export class ZoomSenderService {
     this.stopped = false;
     this.chatLogicalDedupTtlMs = chatLogicalDedupTtlMs;
     this.chatLogicalDedup = new Map();
+    this.chatSourceFingerprintDedup = new Map();
   }
 
   pruneChatLogicalDedup(now = Date.now()) {
@@ -131,17 +161,29 @@ export class ZoomSenderService {
         this.chatLogicalDedup.delete(key);
       }
     }
+    for (const [key, lastSeenAt] of this.chatSourceFingerprintDedup) {
+      if (now - lastSeenAt > this.chatLogicalDedupTtlMs) {
+        this.chatSourceFingerprintDedup.delete(key);
+      }
+    }
   }
 
   shouldIngestChatCandidate(candidate, now = Date.now()) {
     this.pruneChatLogicalDedup(now);
-    const logicalKey = normalizeChatAtom(candidate?.logicalKey);
-    if (!logicalKey) return true;
-    if (this.chatLogicalDedup.has(logicalKey)) {
+    const logicalKeys = [candidate?.logicalKey, ...(Array.isArray(candidate?.logicalAliases) ? candidate.logicalAliases : [])]
+      .map(normalizeChatAtom)
+      .filter(Boolean);
+    if (logicalKeys.some((key) => this.chatLogicalDedup.has(key))) {
       this.logger.info?.("Zoom Sender skipped duplicate chat queue-code candidate by logical message key.");
       return false;
     }
-    this.chatLogicalDedup.set(logicalKey, now);
+    const sourceFingerprint = normalizeChatAtom(candidate?.sourceFingerprint);
+    if (sourceFingerprint && this.chatSourceFingerprintDedup.has(sourceFingerprint)) {
+      this.logger.info?.("Zoom Sender skipped duplicate chat queue-code candidate by source fingerprint.");
+      return false;
+    }
+    for (const key of logicalKeys) this.chatLogicalDedup.set(key, now);
+    if (sourceFingerprint) this.chatSourceFingerprintDedup.set(sourceFingerprint, now);
     return true;
   }
 
