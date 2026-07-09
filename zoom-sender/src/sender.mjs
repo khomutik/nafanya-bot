@@ -78,15 +78,19 @@ export function extractZoomChatDomMessageId(rawDom = "") {
 function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
   const code = normalizeChatAtom(parsed?.text || message.text);
   const authorName = normalizeChatAtom(parsed?.authorName || message.authorName || message.groupAuthorName || message.displayName);
-  if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return { primary: "", aliases: [] };
+  if (!authorName || !/^(?:111|222|333|444)$/u.test(code)) return { primary: "", aliases: [], hasAriaIdentity: false, ariaCollisionKey: "" };
   const keys = [];
   const addKey = (key) => {
     const normalized = normalizeChatAtom(key);
     if (normalized && !keys.includes(normalized)) keys.push(normalized);
   };
   const ariaLabel = parseZoomChatAriaLabel(message.rawDom) || parseZoomChatAriaLabel(message.ariaLabel);
+  const timestamp = normalizeChatAtom(ariaLabel?.timestamp || message.groupTimestamp || message.timestamp);
+  const ariaCollisionKey = ["aria-collision", normalizeLogicalPart(authorName), normalizeLogicalPart(timestamp), code].join("|");
+  let hasAriaIdentity = false;
   if (ariaLabel?.text === code && normalizeChatAtom(ariaLabel.authorName) === authorName) {
     addKey(["aria", normalizeLogicalPart(ariaLabel.canonicalLabel), code].join("|"));
+    hasAriaIdentity = true;
   }
   const domMessageId = extractZoomChatDomMessageId(message.rawDom);
   if (domMessageId) {
@@ -104,11 +108,10 @@ function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
     ].join("|"));
   }
   const rawLine = normalizeLogicalPart(message.text);
-  const timestamp = normalizeLogicalPart(message.timestamp);
   if (!keys.length) {
-    addKey(["line", normalizeLogicalPart(authorName), code, timestamp, rawLine].join("|"));
+    addKey(["line", normalizeLogicalPart(authorName), code, normalizeLogicalPart(message.timestamp), rawLine].join("|"));
   }
-  return { primary: keys[0] || "", aliases: keys };
+  return { primary: keys[0] || "", aliases: keys, hasAriaIdentity, ariaCollisionKey };
 }
 
 export function buildZoomChatLogicalKey(message = {}, parsed = null) {
@@ -116,15 +119,23 @@ export function buildZoomChatLogicalKey(message = {}, parsed = null) {
 }
 
 export function selectZoomChatCodeIngestCandidates(messages = []) {
-  const candidates = [];
-  const batchLogicalKeys = new Set();
-  const batchFingerprints = new Set();
+  const parsedCandidates = [];
+  const ariaCollisionKeys = new Set();
   for (const message of messages) {
     const parsed = parseZoomQueueCodeMessage(message);
     if (!parsed) continue;
-    const { primary: logicalKey, aliases: logicalAliases } = buildZoomChatLogicalIdentities(message, parsed);
+    const identities = buildZoomChatLogicalIdentities(message, parsed);
     const sourceFingerprint = normalizeChatAtom(message.fingerprint);
-    if (!logicalKey || !sourceFingerprint) continue;
+    if (!identities.primary || !sourceFingerprint) continue;
+    if (identities.hasAriaIdentity) ariaCollisionKeys.add(identities.ariaCollisionKey);
+    parsedCandidates.push({ message, parsed, identities, sourceFingerprint });
+  }
+  const candidates = [];
+  const batchLogicalKeys = new Set();
+  const batchFingerprints = new Set();
+  for (const { message, parsed, identities, sourceFingerprint } of parsedCandidates) {
+    const { primary: logicalKey, aliases: logicalAliases } = identities;
+    if (!identities.hasAriaIdentity && ariaCollisionKeys.has(identities.ariaCollisionKey)) continue;
     if (logicalAliases.some((key) => batchLogicalKeys.has(key)) || batchFingerprints.has(sourceFingerprint)) continue;
     for (const key of logicalAliases) batchLogicalKeys.add(key);
     batchFingerprints.add(sourceFingerprint);

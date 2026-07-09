@@ -465,6 +465,48 @@ test("chat ingest candidates deduplicate clones by canonical aria label before D
   assert.match(candidates[0].logicalKey, /^aria\|/u);
 });
 
+test("chat ingest candidates ignore group fallback clones when aria identity exists", () => {
+  const messages = [
+    {
+      displayName: "444",
+      text: "444",
+      timestamp: "",
+      fingerprint: "aria-444",
+      rawDom: '<div id="chat-item-container-4" aria-label="Маня Х. to Everyone, 04:12 PM, 444">444</div>',
+      groupStableId: "chat-item-container-4"
+    },
+    {
+      displayName: "Маня Х.",
+      text: "444",
+      timestamp: "04:12 PM",
+      fingerprint: "fallback-444-a",
+      rawDom: '<span>444</span>',
+      groupAuthorName: "Маня Х.",
+      groupTimestamp: "04:12 PM",
+      groupText: "Маня Х. to Everyone 04:12 PM 444",
+      groupStableId: "chat-item-container-5",
+      childIndex: "14"
+    },
+    {
+      displayName: "Маня Х.",
+      text: "444",
+      timestamp: "04:12 PM",
+      fingerprint: "fallback-444-b",
+      rawDom: '<span>444</span>',
+      groupAuthorName: "Маня Х.",
+      groupTimestamp: "04:12 PM",
+      groupText: "Маня Х. to Everyone 04:12 PM 444",
+      groupStableId: "group-16",
+      childIndex: "13"
+    }
+  ];
+
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].sourceFingerprint, "aria-444");
+  assert.equal(candidates[0].text, "444");
+});
+
 test("chat ingest candidates keep fast 111/222/333/444 as four real messages", () => {
   const messages = ["111", "222", "333", "444"].map((code, index) => ({
     displayName: code,
