@@ -4,22 +4,19 @@ services:
     image: node:22-bookworm-slim
     container_name: nafanya-zoom-control
     restart: unless-stopped
+    network_mode: host
     working_dir: ${ZOOM_CONTROL_PROJECT_HOST_PATH:-/home/masha/nafanya-zoom-sender}
     command: ["node", "control-agent/main.mjs"]
     env_file:
       - .env
     environment:
-      ZOOM_CONTROL_HOST: 0.0.0.0
+      ZOOM_CONTROL_HOST: 127.0.0.1
       ZOOM_CONTROL_PORT: 3098
       ZOOM_CONTROL_PROJECT_DIR: ${ZOOM_CONTROL_PROJECT_HOST_PATH:-/home/masha/nafanya-zoom-sender}
       ZOOM_CONTROL_ENV_PATH: ${ZOOM_CONTROL_PROJECT_HOST_PATH:-/home/masha/nafanya-zoom-sender}/.env
       ZOOM_CONTROL_PROFILE_DIR: /sender-profile
       ZOOM_CONTROL_DIAGNOSTICS_DIR: ${ZOOM_CONTROL_PROJECT_HOST_PATH:-/home/masha/nafanya-zoom-sender}/diagnostics
-      ZOOM_CONTROL_HEALTH_URL: http://host.docker.internal:3097/health
-    ports:
-      - "127.0.0.1:3098:3098"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      ZOOM_CONTROL_HEALTH_URL: http://127.0.0.1:3097/health
     volumes:
       # Keep this path identical inside and outside the container. Docker Compose
       # passes bind-mount paths to the host daemon when it starts zoom-sender.

@@ -43,6 +43,7 @@ export class ZoomControlService {
     else if (running && health?.status === "healthy" && health?.zoomJoined && health?.chatOpen) mode = "ready";
     else if (running && await this.ops.detectAuthRequired().catch(() => false)) mode = "auth_required";
     else if (running && health?.status === "unhealthy") mode = "error";
+    else if (running && this.lastMode === "error" && this.lastError) mode = "error";
     else if (!running && ["auth_required", "error"].includes(this.lastMode)) mode = this.lastMode;
     this.lastMode = mode;
     return { running, health: publicHealth(health), mode, authSetupState: this.authSetupState, authViewAvailable: this.authSetupState === "auth_setup_waiting_for_manual_action", lastError: this.lastError };

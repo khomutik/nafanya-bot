@@ -98,6 +98,8 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Нужен вход в Zoom/u);
   assert.match(html, /Открыть окно Zoom для входа/u);
   assert.match(html, /Остановить восстановление входа/u);
+  assert.match(html, /Нажмите Обновить или Выключить Нафаню/u);
+  assert.match(html, /Нажмите Починить вход Zoom/u);
   assert.match(html, /\.\/vnc\/vnc\.html/u);
   assert.match(html, /\.auth-help\[hidden\]\{display:none\}/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
@@ -118,13 +120,47 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.doesNotMatch(source, /child_process|exec\(|spawn\(/u);
 });
 
-test("control compose binds localhost and keeps a separate service", async () => {
+test("control compose uses host network but binds the agent to localhost", async () => {
   const fs = await import("node:fs/promises");
   const compose = await fs.readFile(new URL("../control-agent.compose.example.yml", import.meta.url), "utf8");
-  assert.match(compose, /127\.0\.0\.1:3098:3098/u);
+  assert.match(compose, /network_mode:\s*host/u);
+  assert.match(compose, /ZOOM_CONTROL_HOST:\s*127\.0\.0\.1/u);
+  assert.match(compose, /ZOOM_CONTROL_HEALTH_URL:\s*http:\/\/127\.0\.0\.1:3097\/health/u);
+  assert.doesNotMatch(compose, /ZOOM_CONTROL_HOST:\s*0\.0\.0\.0/u);
   assert.match(compose, /nafanya-zoom-control/u);
   assert.match(compose, /\/var\/run\/docker\.sock/u);
   assert.doesNotMatch(compose, /ZOOM_CONTROL_TOKEN:\s*\S+/u);
+});
+
+test("start timeout becomes error instead of returning to starting", async () => {
+  let running = false;
+  const ops = fakeOps({
+    async isSenderRunning() { return running; },
+    async startSender() { running = true; },
+    async getSenderHealth() { return { status: "warning", zoomJoined: false, chatOpen: false, lastError: null }; },
+    async sleep() { await new Promise((resolve) => setTimeout(resolve, 2)); }
+  });
+  const service = new ZoomControlService(ops, { startTimeoutMs: 5, pollMs: 1 });
+  service.requestStart();
+  await new Promise((resolve) => setTimeout(resolve, 12));
+  const status = await service.status();
+  assert.equal(status.mode, "error");
+  assert.match(status.lastError, /не успел/iu);
+});
+
+test("stop after start timeout returns off and safe mode", async () => {
+  let running = true;
+  const ops = fakeOps({
+    async isSenderRunning() { return running; },
+    async stopSender() { ops.calls.push("stop-sender"); running = false; }
+  });
+  const service = new ZoomControlService(ops);
+  service.lastMode = "error";
+  service.lastError = "timeout";
+  const stopped = await service.stop();
+  assert.equal(stopped.mode, "off");
+  assert.deepEqual(ops.calls, ["stop-sender", "mode:safe"]);
+  assert.equal((await service.status()).mode, "off");
 });
 
 test("auth setup exposes protected view state and closes it after completion", async () => {
