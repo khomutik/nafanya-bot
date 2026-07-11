@@ -8,6 +8,17 @@ cd /home/masha/nafanya-zoom-sender
 
 Секреты, Zoom-ссылку, `.env`, cookies и browser profile нельзя печатать в отчётах, логах, скриншотах или отправлять в GitHub.
 
+## Как пользоваться служащему
+
+1. Открыть ярлык `Nafanya Zoom Panel`.
+2. Нажать **«Включить Нафаню»**.
+3. Дождаться зелёного статуса **«В Zoom, чат открыт»**.
+4. Нажать **«Открыть рабочку»** или **«Открыть БК»**.
+5. В конце нажать **«Закрыть очередь»** и дождаться закрытия.
+6. Нажать **«Выключить Нафаню»**.
+
+Если панель показывает **«Нужен вход в Zoom»**, не открывать очередь и позвать Машу или администратора. Служащему не нужно заходить на сервер, редактировать `.env` или запускать Docker.
+
 ## 1. Safe-mode по умолчанию
 
 Когда sender не используется, в `.env` должны стоять:
@@ -264,3 +275,68 @@ ZOOM_AUTH_SETUP=false
 - временные файлы и реальные секреты.
 
 В Git можно добавлять только намеренно изменённые RUNBOOK/README, код и тесты.
+
+## 13. Установить человеческий control agent
+
+Control agent работает отдельно от sender-а. Он слушает только `127.0.0.1:3098`, выполняет только whitelist-действия start/stop/status/auth-setup и не предоставляет произвольный shell.
+
+В серверный `.env` администратор должен безопасно добавить:
+
+```bash
+ZOOM_CONTROL_TOKEN=
+ZOOM_PANEL_TOKEN=
+ZOOM_CONTROL_HOST=127.0.0.1
+ZOOM_CONTROL_PORT=3098
+```
+
+Реальные значения в runbook, чат и Git не вставлять. Для control agent нужен отдельный сильный случайный токен. `ZOOM_PANEL_TOKEN` должен совпадать с защищённым токеном существующей Worker-панели.
+
+Запускать control agent отдельным Compose-проектом:
+
+```bash
+docker compose \
+  -p nafanya-zoom-control \
+  -f control-agent.compose.example.yml \
+  up -d
+```
+
+Локальная проверка:
+
+```bash
+curl http://127.0.0.1:3098/health
+docker compose \
+  -p nafanya-zoom-control \
+  -f control-agent.compose.example.yml \
+  logs --tail=100 zoom-control
+```
+
+Health control agent подтверждает только работу пульта. Готовность самого Нафани по-прежнему определяется статусом **«В Zoom, чат открыт»**.
+
+### HTTPS через Caddy
+
+В существующий блок `pochtinormalnye.ru` администратор с root-доступом добавляет маршрут **перед** `file_server`:
+
+```caddyfile
+handle_path /nafanya-zoom-control/* {
+	reverse_proxy 127.0.0.1:3098
+}
+```
+
+После проверки конфигурации:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Control agent не открывает порт `3098` наружу: снаружи доступен только HTTPS-префикс Caddy. При первом открытии секретный bootstrap-token проверяется, переносится в `HttpOnly; Secure; SameSite=Strict` cookie, после чего панель открывается по чистому URL. Bootstrap-ярлык создаёт администратор; его содержимое и токен не публиковать.
+
+### Что делает control agent
+
+- `start` проверяет старый bridge, browser locks, включает боевой режим и запускает только sender;
+- `status` показывает: выключен, запускается, готов, нужен вход или ошибка;
+- `stop` отказывается выключать sender при открытой очереди;
+- `auth-setup` пытается восстановить профиль и при ручной проверке просит позвать администратора;
+- Worker-панель проксируется с серверным panel-token, поэтому токен не попадает в браузерный JavaScript.
+
+Control agent монтирует Docker socket и поэтому является административным компонентом. Его endpoint нельзя публиковать без HTTPS, отдельного токена и Caddy-защиты.
