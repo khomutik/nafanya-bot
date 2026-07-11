@@ -4,7 +4,7 @@ import { Backoff } from "../src/backoff.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
-import { ZoomSenderService, buildZoomChatLogicalKey, extractZoomChatDomMessageId, selectZoomChatCodeIngestCandidates } from "../src/sender.mjs";
+import { ZoomSenderService, buildZoomChatLogicalKey, extractZoomChatDomMessageId, extractZoomChatMessageId, selectZoomChatCodeIngestCandidates } from "../src/sender.mjs";
 import { WorkerOutboxClient } from "../src/worker-client.mjs";
 import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
@@ -53,12 +53,14 @@ test("outbox client sends chat ingest to dedicated endpoint", async () => {
     text: "111",
     timestamp: "03:44 PM",
     sourceFingerprint: "fp-1",
-    observedAt: "now"
+    observedAt: "now",
+    canonicalSourceMessageId: "zoom|1-{guid}|111"
   });
   assert.equal(calls[0].url, "https://worker.example/zoom-only/chat-ingest");
   assert.equal(calls[0].secret, "secret");
   assert.equal(calls[0].body.text, "111");
   assert.equal(calls[0].body.authorName, "Маня Х.");
+  assert.equal(calls[0].body.sourceFingerprint, "zoom|1-{guid}|111");
 });
 
 
@@ -367,7 +369,7 @@ test("chat ingest candidates deduplicate cloned child codes but allow a new grou
     displayName: "Маня Х.",
     text: "111",
     timestamp: "07:36 PM",
-    rawDom: '<span id="7-{9d167db1-997c-444c-844d-ba7195fc4412}">111</span>',
+    rawDom: '<span id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</span>',
     groupAuthorName: "Маня Х.",
     groupTimestamp: "07:36 PM",
     groupText: "Маня Х. to Everyone 07:36 PM 111",
@@ -380,7 +382,7 @@ test("chat ingest candidates deduplicate cloned child codes but allow a new grou
     {
       ...base,
       fingerprint: "new-real-message",
-      rawDom: '<span id="8-{9d167db1-997c-444c-844d-ba7195fc4413}">111</span>',
+      rawDom: '<span id="1-{9d167db1-997c-444c-844d-ba7195fc4413}">111</span>',
       groupStableId: "fast-group-b"
     }
   ]);
@@ -412,7 +414,7 @@ test("chat ingest candidates use Zoom aria-label from raw DOM when group fields 
 });
 
 test("chat ingest candidates deduplicate DOM clones of one Zoom message", () => {
-  const rawDom = '<div id="chat-message-content-17" aria-label="Маня Х. to Everyone, 09:06 PM, 111"><div id="6-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>';
+  const rawDom = '<div data-id="1-{9d167db1-997c-444c-844d-ba7195fc4412}" aria-label="Маня Х. to Everyone, 09:06 PM, 111"><div id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>';
   const messages = [
     {
       displayName: "Маня Х.",
@@ -426,14 +428,35 @@ test("chat ingest candidates deduplicate DOM clones of one Zoom message", () => 
       text: "Маня Х. to Everyone 09:06 PM 111",
       timestamp: "Маня Х. to Everyone 09:06 PM 111",
       fingerprint: "clone-b",
-      rawDom: '<div class="child"><div id="6-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>'
+      rawDom: '<div class="child"><div id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>'
     }
   ];
   const candidates = selectZoomChatCodeIngestCandidates(messages);
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].sourceFingerprint, "clone-a");
-  assert.match(candidates[0].logicalKey, /^aria\|/u);
+  assert.match(candidates[0].logicalKey, /^zoom\|/u);
   assert.ok(candidates[0].logicalAliases.some((key) => /9d167db1-997c-444c-844d-ba7195fc4412/u.test(key)));
+});
+
+test("chat ingest candidates collapse 27 DOM clones by one Zoom message id", () => {
+  const zoomId = "1-{83fbb5ac-5ada-4c48-93d2-c9cd968a7bd9}";
+  const messages = Array.from({ length: 27 }, (_, index) => ({
+    displayName: "Маня Х.",
+    text: "444",
+    timestamp: "12:58 PM",
+    fingerprint: `clone-${index}`,
+    domPath: `div:${index}`,
+    rawDom: `<div data-id="${zoomId}"><div id="${zoomId}" aria-label="Маня Х. to Everyone, 12:58 PM, 444">444</div></div>`,
+    groupAuthorName: "Маня Х.",
+    groupTimestamp: "12:58 PM",
+    groupText: "Маня Х. to Everyone 12:58 PM 444",
+    groupStableId: `group-${index}`,
+    childIndex: String(index)
+  }));
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].zoomMessageId, zoomId);
+  assert.equal(candidates[0].canonicalSourceMessageId, `zoom|${zoomId}|444`);
 });
 
 test("chat ingest candidates deduplicate clones by canonical aria label before DOM ids", () => {
@@ -519,32 +542,40 @@ test("chat ingest candidates keep fast 111/222/333/444 as four real messages", (
     text: code,
     timestamp: "",
     fingerprint: `fast-${code}`,
-    rawDom: `<div id="chat-item-container-${index + 1}" aria-label="Маня Х. to Everyone, 03:52 PM, ${code}">${code}</div>`,
+    rawDom: `<div data-id="1-{0000000${index + 1}-0000-4000-8000-00000000000${index + 1}}"><div id="1-{0000000${index + 1}-0000-4000-8000-00000000000${index + 1}}" aria-label="Маня Х. to Everyone, 03:52 PM, ${code}">${code}</div></div>`,
     groupStableId: `chat-item-container-${index + 1}`
   }));
 
   const candidates = selectZoomChatCodeIngestCandidates(messages);
   assert.equal(candidates.length, 4);
   assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
-  assert.ok(candidates.every((candidate) => candidate.logicalKey.startsWith("aria|")));
+  assert.ok(candidates.every((candidate) => candidate.logicalKey.startsWith("zoom|")));
+  assert.equal(new Set(candidates.map((candidate) => candidate.zoomMessageId)).size, 4);
 });
 
 test("chat logical dedup keeps separate real repeated messages from same author", () => {
+  const firstId = "1-{aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa}";
+  const secondId = "1-{bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb}";
   const first = {
     displayName: "Маня Х.",
-    text: "Маня Х. to Everyone 09:06 PM 111",
+    text: "111",
     timestamp: "09:06 PM",
-    rawDom: '<div id="chat-message-content-21" aria-label="Маня Х. to Everyone, 09:06 PM, 111">111</div>'
+    rawDom: `<div data-id="${firstId}"><div id="${firstId}" aria-label="Маня Х. to Everyone, 09:06 PM, 111">111</div></div>`
   };
   const second = {
     displayName: "Маня Х.",
-    text: "Маня Х. to Everyone 09:07 PM 111",
-    timestamp: "09:07 PM",
-    rawDom: '<div id="chat-message-content-22" aria-label="Маня Х. to Everyone, 09:07 PM, 111">111</div>'
+    text: "111",
+    timestamp: "09:06 PM",
+    rawDom: `<div data-id="${secondId}"><div id="${secondId}" aria-label="Маня Х. to Everyone, 09:06 PM, 111">111</div></div>`
   };
-  assert.equal(extractZoomChatDomMessageId(first.rawDom), "chat-message-content-21");
-  assert.equal(extractZoomChatDomMessageId(second.rawDom), "chat-message-content-22");
+  assert.equal(extractZoomChatDomMessageId(first.rawDom), firstId);
+  assert.equal(extractZoomChatDomMessageId(second.rawDom), secondId);
   assert.notEqual(buildZoomChatLogicalKey(first, { authorName: "Маня Х.", text: "111" }), buildZoomChatLogicalKey(second, { authorName: "Маня Х.", text: "111" }));
+});
+
+test("chat-message-content ids are not treated as Zoom message ids", () => {
+  assert.equal(extractZoomChatDomMessageId('<div id="chat-message-content-21">111</div>'), "");
+  assert.equal(extractZoomChatMessageId({ groupStableId: "chat-message-content-21" }), "");
 });
 
 test("chat ingest logical memory skips clones across cycles but allows new message ids", async () => {
@@ -571,14 +602,14 @@ test("chat ingest logical memory skips clones across cycles but allows new messa
               text: "Маня Х. to Everyone 09:06 PM 111",
               timestamp: "09:06 PM",
               fingerprint: `fp-${ingested.length}-clone-a`,
-              rawDom: '<div id="chat-message-content-31">111</div>'
+              rawDom: '<div data-id="1-{cccccccc-3333-4333-8333-cccccccccccc}"><div id="1-{cccccccc-3333-4333-8333-cccccccccccc}">111</div></div>'
             },
             {
               displayName: "Маня Х.",
               text: "Маня Х. to Everyone 09:06 PM 111",
               timestamp: "09:06 PM",
               fingerprint: `fp-${ingested.length}-clone-b`,
-              rawDom: '<div><div id="chat-message-content-31">111</div></div>'
+              rawDom: '<div><div id="1-{cccccccc-3333-4333-8333-cccccccccccc}">111</div></div>'
             }
           ]
         };
@@ -600,7 +631,7 @@ test("chat ingest logical memory skips clones across cycles but allows new messa
       text: "Маня Х. to Everyone 09:06 PM 111",
       timestamp: "09:06 PM",
       fingerprint: "new-real-message",
-      rawDom: '<div id="chat-message-content-32">111</div>'
+      rawDom: '<div data-id="1-{dddddddd-4444-4444-8444-dddddddddddd}"><div id="1-{dddddddd-4444-4444-8444-dddddddddddd}">111</div></div>'
     }]
   });
   await service.runOnce();
@@ -643,7 +674,7 @@ test("chat ingest logical memory also skips repeated source fingerprints", async
   await service.runOnce();
   await service.runOnce();
   assert.equal(ingested.length, 1);
-  assert.ok(logs.some((message) => /source fingerprint/u.test(message)));
+  assert.ok(logs.some((message) => /logical message key|source fingerprint/u.test(message)));
 });
 
 test("chat ingest forwards only safe candidates and never sends Zoom replies", async () => {

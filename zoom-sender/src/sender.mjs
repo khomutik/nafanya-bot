@@ -64,15 +64,32 @@ function isValidChatAuthor(value) {
   return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);
 }
 
-export function extractZoomChatDomMessageId(rawDom = "") {
-  const html = String(rawDom || "");
-  const rtfId = html.match(/\bid=["']([^"']*-\{[0-9a-f-]{24,}\})["']/iu);
-  if (rtfId) return normalizeChatAtom(rtfId[1]);
-  const contentId = html.match(/\bid=["'](chat-message-content-[^"']+)["']/iu);
-  if (contentId) return normalizeChatAtom(contentId[1]);
-  const ariaLabel = html.match(/\baria-label=["']([^"']+\bto\s+Everyone\b[^"']+)["']/iu);
-  if (ariaLabel) return normalizeChatAtom(ariaLabel[1]);
+function normalizeZoomMessageId(value) {
+  const id = normalizeChatAtom(value);
+  return /^1-\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}$/iu.test(id) ? id : "";
+}
+
+export function extractZoomChatMessageId(message = {}) {
+  const structuredCandidates = [
+    message.sourceMessageId,
+    message.itemDataId,
+    message.messageBoxId,
+    message.groupStableId
+  ];
+  for (const candidate of structuredCandidates) {
+    const id = normalizeZoomMessageId(candidate);
+    if (id) return id;
+  }
+  const html = String(message.rawDom || "");
+  for (const match of html.matchAll(/\b(?:data-id|id)=["'](1-\{[0-9a-f-]+\})["']/giu)) {
+    const id = normalizeZoomMessageId(match[1]);
+    if (id) return id;
+  }
   return "";
+}
+
+export function extractZoomChatDomMessageId(rawDom = "") {
+  return extractZoomChatMessageId({ rawDom });
 }
 
 function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
@@ -87,14 +104,29 @@ function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
   const ariaLabel = parseZoomChatAriaLabel(message.rawDom) || parseZoomChatAriaLabel(message.ariaLabel);
   const timestamp = normalizeChatAtom(ariaLabel?.timestamp || message.groupTimestamp || message.timestamp);
   const ariaCollisionKey = ["aria-collision", normalizeLogicalPart(authorName), normalizeLogicalPart(timestamp), code].join("|");
-  let hasAriaIdentity = false;
-  if (ariaLabel?.text === code && normalizeChatAtom(ariaLabel.authorName) === authorName) {
-    addKey(["aria", normalizeLogicalPart(ariaLabel.canonicalLabel), code].join("|"));
-    hasAriaIdentity = true;
+  const hasAriaIdentity = ariaLabel?.text === code && normalizeChatAtom(ariaLabel.authorName) === authorName;
+  const zoomMessageId = extractZoomChatMessageId(message);
+  if (zoomMessageId) {
+    addKey(["zoom", normalizeLogicalPart(zoomMessageId), code].join("|"));
+    return {
+      primary: keys[0],
+      aliases: keys,
+      canonicalSourceMessageId: keys[0],
+      zoomMessageId,
+      hasAriaIdentity,
+      ariaCollisionKey
+    };
   }
-  const domMessageId = extractZoomChatDomMessageId(message.rawDom);
-  if (domMessageId) {
-    addKey(["dom", normalizeLogicalPart(authorName), code, normalizeLogicalPart(domMessageId)].join("|"));
+  if (hasAriaIdentity) {
+    addKey(["aria", normalizeLogicalPart(ariaLabel.canonicalLabel), code].join("|"));
+    return {
+      primary: keys[0],
+      aliases: keys,
+      canonicalSourceMessageId: keys[0],
+      zoomMessageId: "",
+      hasAriaIdentity,
+      ariaCollisionKey
+    };
   }
   const groupStableId = normalizeChatAtom(message.groupStableId);
   if (groupStableId) {
@@ -109,9 +141,18 @@ function buildZoomChatLogicalIdentities(message = {}, parsed = null) {
   }
   const rawLine = normalizeLogicalPart(message.text);
   if (!keys.length) {
-    addKey(["line", normalizeLogicalPart(authorName), code, normalizeLogicalPart(message.timestamp), rawLine].join("|"));
+    const sourceFingerprint = normalizeChatAtom(message.fingerprint);
+    if (sourceFingerprint) addKey(["fingerprint", normalizeLogicalPart(sourceFingerprint), code].join("|"));
+    else addKey(["line", normalizeLogicalPart(authorName), code, normalizeLogicalPart(message.timestamp), rawLine].join("|"));
   }
-  return { primary: keys[0] || "", aliases: keys, hasAriaIdentity, ariaCollisionKey };
+  return {
+    primary: keys[0] || "",
+    aliases: keys,
+    canonicalSourceMessageId: keys[0] || "",
+    zoomMessageId: "",
+    hasAriaIdentity,
+    ariaCollisionKey
+  };
 }
 
 export function buildZoomChatLogicalKey(message = {}, parsed = null) {
@@ -146,7 +187,9 @@ export function selectZoomChatCodeIngestCandidates(messages = []) {
       sourceFingerprint,
       observedAt: normalizeChatAtom(message.observedAt),
       logicalKey,
-      logicalAliases
+      logicalAliases,
+      canonicalSourceMessageId: identities.canonicalSourceMessageId,
+      zoomMessageId: identities.zoomMessageId
     });
   }
   return candidates;

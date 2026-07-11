@@ -46,7 +46,7 @@ export class WorkerOutboxClient {
         authorName: message.authorName,
         text: message.text,
         timestamp: message.timestamp,
-        sourceFingerprint: message.sourceFingerprint,
+        sourceFingerprint: message.canonicalSourceMessageId || message.sourceFingerprint,
         observedAt: message.observedAt
       })
     });
