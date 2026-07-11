@@ -638,6 +638,24 @@ test("chat ingest logical memory skips clones across cycles but allows new messa
   assert.equal(ingested.length, 2);
 });
 
+test("chat message-id dedup survives longer than the old two-minute window", () => {
+  const service = new ZoomSenderService({
+    workerClient: {},
+    zoomAdapter: {},
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+  const candidate = {
+    logicalKey: "zoom|1-{eeeeeeee-5555-4555-8555-eeeeeeeeeeee}|111",
+    logicalAliases: ["zoom|1-{eeeeeeee-5555-4555-8555-eeeeeeeeeeee}|111"],
+    sourceFingerprint: "dom-clone-a"
+  };
+  assert.equal(service.shouldIngestChatCandidate(candidate, 1_000), true);
+  assert.equal(service.shouldIngestChatCandidate({ ...candidate, sourceFingerprint: "dom-clone-b" }, 181_000), false);
+  assert.equal(service.shouldIngestChatCandidate({ ...candidate, sourceFingerprint: "dom-clone-c" }, 21_601_001), true);
+});
+
 test("chat ingest logical memory also skips repeated source fingerprints", async () => {
   const ingested = [];
   const logs = [];

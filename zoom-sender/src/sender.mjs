@@ -2,6 +2,8 @@ function normalizeChatAtom(value) {
   return String(value || "").replace(/\s+/gu, " ").trim();
 }
 
+const DEFAULT_CHAT_DEDUP_TTL_MS = 6 * 60 * 60 * 1000;
+
 function normalizeLogicalPart(value) {
   return normalizeChatAtom(value).toLowerCase();
 }
@@ -196,7 +198,7 @@ export function selectZoomChatCodeIngestCandidates(messages = []) {
 }
 
 export class ZoomSenderService {
-  constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), chatLogicalDedupTtlMs = 120000 }) {
+  constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), chatLogicalDedupTtlMs = DEFAULT_CHAT_DEDUP_TTL_MS }) {
     this.workerClient = workerClient;
     this.zoomAdapter = zoomAdapter;
     this.backoff = backoff;
