@@ -412,7 +412,42 @@ async function collectVisibleChatMessages(page) {
         });
       }
     });
-    return records.slice(-80);
+    const identityRecords = [...document.querySelectorAll('[data-id^="1-{"]')]
+      .filter(visible)
+      .map((item, index) => {
+        const messageBox = item.querySelector('[id^="1-{"]');
+        const messageRow = item.querySelector('[id^="chat-message-content-"][aria-label]');
+        const sender = item.querySelector('[class*="sender" i][data-name], [class*="sender" i]');
+        const receiver = item.querySelector('[class*="receiver" i][data-name], [class*="receiver" i]');
+        const time = item.querySelector('[class*="time-stamp" i], time, [datetime]');
+        const text = clean(messageBox?.innerText || messageRow?.innerText || item.innerText).slice(0, textLimit);
+        const sourceMessageId = clean(item.getAttribute("data-id") || messageBox?.getAttribute("id"));
+        return {
+          displayName: clean(sender?.getAttribute("data-name") || sender?.textContent),
+          text,
+          timestamp: clean(time?.getAttribute("datetime") || time?.getAttribute("title") || time?.textContent),
+          domPath: `zoom-message:${index}`,
+          rawDom: String(item.outerHTML || "").slice(0, domLimit),
+          groupAuthorName: clean(sender?.getAttribute("data-name") || sender?.textContent),
+          groupTimestamp: clean(time?.getAttribute("datetime") || time?.getAttribute("title") || time?.textContent),
+          groupText: clean(item.innerText || item.textContent).slice(0, textLimit),
+          groupStableId: sourceMessageId,
+          childIndex: "",
+          recordKind: "zoom-message-identity",
+          sourceMessageId,
+          itemId: clean(item.getAttribute("id")),
+          itemDataId: clean(item.getAttribute("data-id")),
+          messageRowId: clean(messageRow?.getAttribute("id")),
+          messageBoxId: clean(messageBox?.getAttribute("id")),
+          ariaLabel: clean(messageRow?.getAttribute("aria-label") || item.getAttribute("aria-label")),
+          role: clean(messageRow?.getAttribute("role") || item.getAttribute("role")),
+          title: clean(messageRow?.getAttribute("title") || item.getAttribute("title")),
+          datetime: clean(time?.getAttribute("datetime")),
+          recipientName: clean(receiver?.getAttribute("data-name") || receiver?.textContent)
+        };
+      })
+      .filter((record) => record.text && record.sourceMessageId);
+    return [...records.slice(-80), ...identityRecords];
   }, { textLimit: CHAT_DIAGNOSTIC_TEXT_LIMIT, domLimit: CHAT_DIAGNOSTIC_DOM_LIMIT }).catch(() => []);
 }
 
@@ -652,7 +687,18 @@ export class PlaywrightZoomSender {
         groupTimestamp: normalizeDiagnosticChatText(message.groupTimestamp).slice(0, 80),
         groupText: normalizeDiagnosticChatText(message.groupText).slice(0, CHAT_DIAGNOSTIC_TEXT_LIMIT),
         groupStableId: normalizeDiagnosticChatText(message.groupStableId).slice(0, 240),
-        childIndex: normalizeDiagnosticChatText(message.childIndex).slice(0, 40)
+        childIndex: normalizeDiagnosticChatText(message.childIndex).slice(0, 40),
+        recordKind: normalizeDiagnosticChatText(message.recordKind).slice(0, 80),
+        sourceMessageId: normalizeDiagnosticChatText(message.sourceMessageId).slice(0, 240),
+        itemId: normalizeDiagnosticChatText(message.itemId).slice(0, 240),
+        itemDataId: normalizeDiagnosticChatText(message.itemDataId).slice(0, 240),
+        messageRowId: normalizeDiagnosticChatText(message.messageRowId).slice(0, 240),
+        messageBoxId: normalizeDiagnosticChatText(message.messageBoxId).slice(0, 240),
+        ariaLabel: normalizeDiagnosticChatText(message.ariaLabel).slice(0, 500),
+        role: normalizeDiagnosticChatText(message.role).slice(0, 80),
+        title: normalizeDiagnosticChatText(message.title).slice(0, 240),
+        datetime: normalizeDiagnosticChatText(message.datetime).slice(0, 120),
+        recipientName: normalizeDiagnosticChatText(message.recipientName).slice(0, 160)
       };
       if (!safeMessage.text) continue;
       const fingerprint = buildChatMessageFingerprint(safeMessage);

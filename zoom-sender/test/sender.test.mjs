@@ -238,6 +238,12 @@ test("Zoom browser adapter handles the Zoom web landing gate and read-only diagn
   assert.match(source, /page\.on\("console"/u);
   assert.match(source, /page\.on\("requestfailed"/u);
   assert.match(source, /chat-readonly-diagnostics\.jsonl/u);
+  assert.match(source, /\[data-id\^="1-\{"\]/u);
+  assert.match(source, /recordKind:\s*"zoom-message-identity"/u);
+  assert.match(source, /sourceMessageId/u);
+  assert.match(source, /itemDataId/u);
+  assert.match(source, /messageBoxId/u);
+  assert.match(source, /datetime/u);
   assert.doesNotMatch(source, /\/zoom-only\/webhook|parseQueueEntry|parseZoomCommand/u);
 });
 
