@@ -1,51 +1,110 @@
-# Zoom Sender v2: серверный runbook
+# Zoom Sender v2: боевой runbook
 
-Этот файл для будущего запуска на сервере. В этой задаче сервер не трогаем.
-
-## 1. Подготовить .env
-
-1. Скопировать `.env.example` в `.env`.
-2. Заполнить реальные значения только в `.env`.
-3. Не отправлять `.env` в чат, GitHub, логи или скриншоты.
-
-Что должна дать Маша или админ:
-
-- адрес Worker: `WORKER_BASE_URL`;
-- секрет для Zoom-only outbox: `ZOOM_ONLY_SECRET`;
-- ссылку на Zoom-встречу: `ZOOM_MEETING_URL`;
-- имя участника: `ZOOM_DISPLAY_NAME`;
-- режим браузера: `HEADLESS`;
-- порт healthcheck, если нужен не стандартный `3097`.
-
-## 2. Собрать контейнер
+Эта инструкция описывает безопасный запуск Нафани на реальном Zoom-собрании. Все команды выполняются на сервере из папки:
 
 ```bash
-docker compose -f compose.example.yml build
+cd /home/masha/nafanya-zoom-sender
 ```
 
-## 3. Первый запуск только dry-run
+Секреты, Zoom-ссылку, `.env`, cookies и browser profile нельзя печатать в отчётах, логах, скриншотах или отправлять в GitHub.
 
-В `.env` оставить:
+## 1. Safe-mode по умолчанию
+
+Когда sender не используется, в `.env` должны стоять:
 
 ```bash
 ZOOM_SENDER_DRY_RUN=true
+ZOOM_SENDER_MOCK_OUTBOX=true
+ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=false
+ZOOM_SENDER_CHAT_INGEST_ENABLED=false
+ZOOM_AUTH_SETUP=false
 ```
 
-Потом:
+Файл `.env` хранится только на сервере. Значения переменных не показывать командой `cat .env` и не копировать в чат.
+
+## 2. Pre-flight перед собранием
+
+### 2.1. Проверить контейнеры
 
 ```bash
-docker compose -f compose.example.yml up
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+docker inspect -f 'restart={{.HostConfig.RestartPolicy.Name}} status={{.State.Status}}' nafanya-zoom-bridge
 ```
 
-Dry-run нужен, чтобы проверить упаковку, связь с Worker и `/health` без реального Zoom. Это как репетиция без микрофона: видно, где спотыкаемся, но никого в чате не пугаем.
+Нужно убедиться:
 
-## 4. Посмотреть логи
+- старый `nafanya-zoom-bridge` не запущен;
+- у старого bridge `restart=no`;
+- `nafanya-zoom-sender-v2` не запущен второй копией.
+
+Старый bridge и новый sender нельзя запускать одновременно.
+
+Не запускать старый `zoom-bridge`: боевой Zoom обслуживает только `zoom-sender-v2`.
+
+### 2.2. Проверить Chromium и browser profile
 
 ```bash
-docker compose -f compose.example.yml logs -f zoom-sender
+pgrep -a -f 'chromium|chrome|playwright' || true
+docker run --rm \
+  -v nafanya-zoom-sender_zoom-sender-profile:/profile:ro \
+  alpine sh -c 'find /profile -maxdepth 1 -name "Singleton*" -print'
 ```
 
-В логах не должно быть секретов. Если видишь токен или секрет - остановить и чинить.
+Если sender остановлен, Chromium-процессов быть не должно. Lock-файлы удалять можно только после проверки, что ни sender, ни Chromium не работают:
+
+```bash
+docker run --rm \
+  -v nafanya-zoom-sender_zoom-sender-profile:/profile \
+  alpine sh -c 'rm -f /profile/SingletonLock /profile/SingletonSocket /profile/SingletonCookie'
+```
+
+Профиль должен существовать, быть доступен на запись и содержать ранее сохранённую Zoom-сессию. Сам profile, cookies и storage state никуда не копировать.
+
+### 2.3. Проверить Worker
+
+Через защищённый `/zoom-only/status` или живую Zoom-only panel проверить:
+
+- `queueOpen` — очередь закрыта либо находится в ожидаемом состоянии;
+- `outboxSize=0` перед новым собранием;
+- `entriesCount=0` перед чистым запуском;
+- нет старых тестовых сообщений.
+
+Если состояние неожиданное, не продолжать вслепую. Штатный `/zoom-only/reset` допустим только до собрания и только когда точно можно удалить тестовый хвост. Storage руками не редактировать.
+
+## 3. Подготовить боевой режим
+
+Перед реальным собранием сделать резервную копию `.env`:
+
+```bash
+cp .env ".env.backup-before-meeting-$(date +%Y%m%d-%H%M%S)"
+```
+
+Для боевой работы:
+
+```bash
+ZOOM_SENDER_DRY_RUN=false
+ZOOM_SENDER_MOCK_OUTBOX=false
+ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=false
+ZOOM_SENDER_CHAT_INGEST_ENABLED=true
+ZOOM_AUTH_SETUP=false
+```
+
+`ZOOM_SENDER_CHAT_INGEST_ENABLED=true` включать только тогда, когда нужна очередь из Zoom-чата. Read-only diagnostics включать лишь для диагностики: они создают локальные файлы и для обычного собрания не нужны.
+
+## 4. Запустить sender
+
+```bash
+docker compose -f compose.example.yml up -d
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+Посмотреть последние безопасные строки логов:
+
+```bash
+docker compose -f compose.example.yml logs --tail=100 zoom-sender
+```
+
+В логах не должно быть секретов, полной Zoom-ссылки или бесконечного цикла запросов. В тишине polling должен уходить к 15–30 секундам.
 
 ## 5. Проверить health
 
@@ -53,99 +112,155 @@ docker compose -f compose.example.yml logs -f zoom-sender
 curl http://127.0.0.1:3097/health
 ```
 
-Как читать:
+Перед открытием очереди обязательно получить:
 
-- `healthy` - Worker доступен, Zoom-страница открыта, бот в комнате, чат открыт;
-- `warning` - процесс живой, но Zoom или чат еще не готовы;
-- `unhealthy` - нет связи с Worker, браузером или другая ошибка.
+- `status=healthy`;
+- `zoomJoined=true`;
+- `chatOpen=true`;
+- `lastError=null`.
 
-Важно: один только доступный Worker не считается здоровьем. Health не должен врать "healthy", если Zoom/чат не готовы.
+Если `chatOpen=false`, очередь не открывать и участников не просить писать коды. Сначала восстановить вход или чат.
 
-## 6. Остановить контейнер
+## 6. Восстановить Zoom-авторизацию
+
+Если Zoom показывает Sign In, обычный sender остановить:
 
 ```bash
 docker compose -f compose.example.yml down
 ```
 
-## 6.1. Один раз авторизовать Zoom-профиль
-
-Если Zoom отправляет Нафаню на Sign In, нужен отдельный профиль браузера:
+Временно включить setup:
 
 ```bash
 ZOOM_AUTH_SETUP=true
 ZOOM_AUTH_WAIT_FOR_MANUAL=true
 ```
 
-Также в серверный `.env` добавить `ZOOM_AUTH_EMAIL` и `ZOOM_AUTH_PASSWORD`. Реальные значения не писать в чат, README, issue, логи или скриншоты.
+Запустить auth/setup одноразово, без restart-loop. Вручную пройти captcha, подтверждение по почте, 2FA или security prompt, если Zoom их запросил. Пароль, коды и cookies не печатать.
 
-Запускать setup лучше отдельным одноразовым запуском контейнера, а после успешного входа вернуть:
+Успешное завершение выглядит так:
+
+```text
+Zoom auth profile setup completed.
+```
+
+После этого вернуть `ZOOM_AUTH_SETUP=false`, остановить setup и снова запустить обычный sender. Повторно проверить `/health`.
+
+## 7. Открыть очередь
+
+Открывать очередь только через живую защищённую Zoom-only panel:
+
+- `open_rs` — рабочка;
+- `open_bk` — БК;
+- `close_queue` — закрыть очередь.
+
+После открытия проверить в panel/status:
+
+- action принят;
+- сообщение об открытии ушло в Zoom;
+- sender отправил `ackIds`;
+- `outboxSize=0`;
+- `queueOpen=true`;
+- выбран правильный `mode`;
+- `entriesCount` соответствует реальному состоянию.
+
+Токен панели не вставлять в runbook, команды, отчёты или скриншоты.
+
+## 8. Штатная работа очереди
+
+Для режимов `rs` и `bk`:
+
+- отдельные сообщения `111`, `222`, `333`, `444` из Zoom-чата становятся заявками;
+- в опубликованной очереди все они отображаются как `111`;
+- повторное реальное `111` того же участника создаёт новую заявку;
+- `привет`, произвольный текст и агрегаты вроде `111 222 333` игнорируются;
+- публикации Нафани и DOM-клоны не должны создавать заявки.
+
+Dedup использует настоящий Zoom message ID вида `1-{GUID}` из `data-id`/`id`. Один реальный message ingest-ится один раз, даже если Zoom показывает много DOM-клонов. `chat-message-content-N` настоящим message ID не считается.
+
+Sender передаёт входящие коды только в `/zoom-only/chat-ingest` и не вызывает `/zoom-only/webhook`.
+
+## 9. Смотреть состояние во время собрания
+
+Проверять два независимых состояния.
+
+Sender:
 
 ```bash
+curl http://127.0.0.1:3097/health
+docker compose -f compose.example.yml logs --tail=100 zoom-sender
+```
+
+Worker через защищённый `/zoom-only/status` или panel:
+
+- `queueOpen`;
+- `mode`;
+- `entriesCount`;
+- `outboxSize`.
+
+Нормальное состояние: sender healthy, чат открыт, outbox после отправки возвращается к нулю, а число заявок меняется только после реальных сообщений участников.
+
+## 10. Закрыть собрание
+
+1. Нажать `close_queue` в Zoom-only panel.
+2. Дождаться сообщения о закрытии в Zoom и `ackIds`.
+3. Проверить `queueOpen=false` и `outboxSize=0`.
+4. Остановить sender:
+
+```bash
+docker compose -f compose.example.yml down
+```
+
+5. Вернуть `.env` в safe-mode:
+
+```bash
+ZOOM_SENDER_DRY_RUN=true
+ZOOM_SENDER_MOCK_OUTBOX=true
+ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=false
+ZOOM_SENDER_CHAT_INGEST_ENABLED=false
 ZOOM_AUTH_SETUP=false
 ```
 
-Профиль сохраняется в volume `zoom-sender-profile:/app/profile`. Его нельзя коммитить, копировать в GitHub или отправлять куда-либо целиком: внутри могут быть cookies/session.
+6. Проверить, что контейнер удалён/остановлен и старый bridge не запустился.
 
-Если Zoom попросит 2FA, captcha или email confirmation - остановиться и пройти подтверждение вручную. Не пытаться обходить это кодом.
+`/zoom-only/reset` после собрания использовать только по явному решению администратора: reset очищает состояние очереди, а не просто закрывает её.
 
-## 7. Отключить автозапуск
+## 11. Аварийные ситуации
 
-В compose поменять:
+### Zoom открыл Sign In
 
-```yaml
-restart: "no"
-```
+Не открывать очередь. Остановить обычный sender и пройти auth/setup по разделу 6.
 
-После этого пересоздать контейнер.
+### `chatOpen=false`
 
-## 8. Если health warning/unhealthy
+Не просить писать `111/222/333/444`. Проверить waiting room, авторизацию, открытие чата и `lastError`.
 
-Проверить по порядку:
+### Outbox не пустой
 
-1. заполнен ли `.env`;
-2. доступен ли Worker;
-3. правильный ли `ZOOM_ONLY_SECRET`;
-4. открылась ли Zoom-страница;
-5. пустили ли участника из waiting room;
-6. открыт ли чат;
-7. не уперлись ли в ошибку Playwright/Chromium.
+Не перезапускать sender вслепую: старое сообщение может уйти после рестарта. Проверить health, логи отправки и ack. Очищать outbox только штатным ack/reset и только когда понятен смысл каждого сообщения.
 
-## 9. Чего нельзя делать
+### Неожиданный `entriesCount`
 
-- Не запускать старый `zoom-bridge` вместе с новым sender.
-- Не включать real-режим без отдельного шага и проверки.
-- Не вставлять секреты в README, compose или Dockerfile.
-- Не использовать sender для обработки входящего Zoom-чата без отдельной задачи.
-- Не дергать Worker каждые 1.5 секунды в тишине: backoff должен уходить к 15-30 секундам.
+Не продолжать тест или собрание вслепую. Проверить режим, status и последние реальные сообщения. Reset допустим только если собрание ещё не идёт либо администратор явно разрешил очистку.
 
-## 10. Что делает sender
+### Подозрение на self-ingest или дубли
 
-Sender-only забирает исходящие сообщения из `/zoom-only/outbox`, отправляет их в Zoom-чат и подтверждает только реально отправленные сообщения через `ackIds`.
+Закрыть очередь, остановить sender и сохранить только обезличенный диагностический фрагмент. Не включать старый bridge и не править Worker на живом собрании.
 
-Он не вызывает `/zoom-only/webhook`, не парсит `111/222/333/444` и не управляет очередями.
+### Падает Worker regression на Google Sheets
 
-## 11. Read-only диагностика чата
+Пустой ответ живого расписания Google Sheets нужно проверять отдельно. Он не доказывает сбой Zoom Sender, message-ID dedup или chat ingest.
 
-Для безопасной разведки DOM чата можно временно включить:
+## 12. Git hygiene
 
-```bash
-ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=true
-```
+Перед commit проверить `git status`. Никогда не добавлять:
 
-Этот режим только записывает видимые новые сообщения в `chat-readonly-diagnostics.jsonl` внутри diagnostics-папки. Он не отправляет ответы, не кладет ничего в outbox, не вызывает webhook и не меняет очередь. После проверки вернуть:
+- `.env` и его backup;
+- diagnostics;
+- screenshots;
+- logs;
+- browser profile, cookies и storage state;
+- `node_modules`;
+- временные файлы и реальные секреты.
 
-```bash
-ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS=false
-```
-
-Для ingest `111` нужен отдельный флаг:
-
-```bash
-ZOOM_SENDER_CHAT_INGEST_ENABLED=true
-```
-
-Включать его только на отдельном тесте. Он передает в Worker только атомарные `111/222/333/444` через `/zoom-only/chat-ingest`, не вызывает `/zoom-only/webhook` и не отвечает в Zoom сам. Для рабочки и БК эти коды становятся отдельными заявками и показываются как `111`; повторные реальные сообщения одного автора разрешены. Обычный текст и агрегированные DOM-строки игнорируются, дедуп идет только по `sourceFingerprint`/DOM-дублю. После проверки вернуть:
-
-```bash
-ZOOM_SENDER_CHAT_INGEST_ENABLED=false
-```
+В Git можно добавлять только намеренно изменённые RUNBOOK/README, код и тесты.
