@@ -96,6 +96,7 @@ async function run() {
   const email = readSecret("ZOOM_AUTH_EMAIL");
   const password = readSecret("ZOOM_AUTH_PASSWORD");
   const waitForManual = readBool("ZOOM_AUTH_WAIT_FOR_MANUAL", false);
+  const authViewEnabled = readBool("ZOOM_AUTH_VIEW_ENABLED", false);
   const authWaitMs = readPositiveInt("ZOOM_AUTH_WAIT_MS", AUTH_WAIT_MS);
   if (!email || !password) {
     throw new Error("Missing Zoom auth credentials: set ZOOM_AUTH_EMAIL and ZOOM_AUTH_PASSWORD in the server .env.");
@@ -104,7 +105,7 @@ async function run() {
   const config = loadConfig();
   const { chromium } = await import("playwright");
   const browser = await chromium.launchPersistentContext(config.userDataDir || "/app/profile", {
-    headless: config.headless,
+    headless: authViewEnabled ? false : config.headless,
     viewport: { width: 1280, height: 720 },
     ignoreDefaultArgs: ["--enable-automation"],
     args: [...DEFAULT_BROWSER_ARGS, ...(config.browserArgs || [])]

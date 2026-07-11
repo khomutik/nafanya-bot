@@ -10,21 +10,24 @@ const SAFE_VALUES = {
     ZOOM_SENDER_MOCK_OUTBOX: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
     ZOOM_SENDER_CHAT_INGEST_ENABLED: "false",
-    ZOOM_AUTH_SETUP: "false"
+    ZOOM_AUTH_SETUP: "false",
+    ZOOM_AUTH_VIEW_ENABLED: "false"
   },
   live: {
     ZOOM_SENDER_DRY_RUN: "false",
     ZOOM_SENDER_MOCK_OUTBOX: "false",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
     ZOOM_SENDER_CHAT_INGEST_ENABLED: "true",
-    ZOOM_AUTH_SETUP: "false"
+    ZOOM_AUTH_SETUP: "false",
+    ZOOM_AUTH_VIEW_ENABLED: "false"
   },
   auth: {
     ZOOM_SENDER_DRY_RUN: "true",
     ZOOM_SENDER_MOCK_OUTBOX: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
     ZOOM_SENDER_CHAT_INGEST_ENABLED: "false",
-    ZOOM_AUTH_SETUP: "true"
+    ZOOM_AUTH_SETUP: "true",
+    ZOOM_AUTH_VIEW_ENABLED: "true"
   }
 };
 
@@ -113,10 +116,28 @@ export class DockerOps {
     return /Sign In \| Zoom|Email or phone number|manual verification required/iu.test(snapshot);
   }
 
-  async runAuthSetup() {
-    const result = await this.docker(this.composeArgs(["run", "--rm", "--no-deps", "zoom-sender"]), { timeout: 180000 }).catch((error) => ({ stdout: "", stderr: error?.stderr || error?.message || "" }));
-    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-    return { completed: /Zoom auth profile setup completed/iu.test(output) };
+  async startAuthSetup() {
+    const { stdout } = await this.docker(this.composeArgs(["run", "-d", "--service-ports", "--no-deps", "zoom-sender"]));
+    const containerId = String(stdout || "").trim();
+    if (!/^[a-f0-9]{12,64}$/iu.test(containerId)) throw new Error("Auth setup container did not start.");
+    return containerId;
+  }
+
+  async getAuthSetupState(containerId) {
+    const { stdout: runningOut } = await this.docker(["inspect", "-f", "{{.State.Running}}", containerId]).catch(() => ({ stdout: "false" }));
+    const { stdout = "", stderr = "" } = await this.docker(["logs", "--tail", "120", containerId]).catch(() => ({ stdout: "", stderr: "" }));
+    const output = `${stdout}\n${stderr}`;
+    if (/Zoom auth profile setup completed/iu.test(output)) return { state: "completed" };
+    if (/waiting for manual verification/iu.test(output)) return { state: "waiting" };
+    if (/Zoom auth profile setup failed|fatal error/iu.test(output)) return { state: "failed" };
+    return { state: String(runningOut).trim() === "true" ? "starting" : "failed" };
+  }
+
+  async stopAuthSetup(containerId) {
+    if (containerId && /^[a-f0-9]{12,64}$/iu.test(containerId)) {
+      await this.docker(["stop", "-t", "10", containerId], { timeout: 20000 }).catch(() => null);
+      await this.docker(["rm", "-f", containerId], { timeout: 20000 }).catch(() => null);
+    }
   }
 
   sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }

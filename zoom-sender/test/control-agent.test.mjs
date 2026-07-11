@@ -18,7 +18,9 @@ function fakeOps(overrides = {}) {
     async getSenderHealth() { return { status: "healthy", zoomJoined: true, chatOpen: true, lastError: null }; },
     async getQueueStatus() { return { queueOpen: false, outboxSize: 0 }; },
     async detectAuthRequired() { return false; },
-    async runAuthSetup() { calls.push("auth-setup"); return { completed: true }; },
+    async startAuthSetup() { calls.push("auth-setup:start"); return "a".repeat(64); },
+    async getAuthSetupState() { return { state: "completed" }; },
+    async stopAuthSetup() { calls.push("auth-setup:stop"); },
     async sleep() {},
     ...overrides
   };
@@ -27,7 +29,7 @@ function fakeOps(overrides = {}) {
 
 test("control status reports sender off", async () => {
   const service = new ZoomControlService(fakeOps());
-  assert.deepEqual(await service.status(), { running: false, health: null, mode: "off", lastError: null });
+  assert.deepEqual(await service.status(), { running: false, health: null, mode: "off", authSetupState: "auth_setup_idle", authViewAvailable: false, lastError: null });
 });
 
 test("control start uses only live mode and sender start", async () => {
@@ -94,6 +96,9 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Выключить Нафаню/u);
   assert.match(html, /В Zoom, чат открыт/u);
   assert.match(html, /Нужен вход в Zoom/u);
+  assert.match(html, /Открыть окно Zoom для входа/u);
+  assert.match(html, /Остановить восстановление входа/u);
+  assert.match(html, /\.\/vnc\/vnc\.html/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
 });
 
@@ -105,6 +110,8 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.match(source, /\/api\/start/u);
   assert.match(source, /\/api\/stop/u);
   assert.match(source, /\/api\/auth-setup/u);
+  assert.match(source, /\/auth\/check/u);
+  assert.match(source, /\/api\/auth-setup\/stop/u);
   assert.match(source, /const actionPath = "\.\/zoom-only\/app\/action"/u);
   assert.match(source, /const statusPath = "\.\/zoom-only\/status"/u);
   assert.doesNotMatch(source, /child_process|exec\(|spawn\(/u);
@@ -117,4 +124,58 @@ test("control compose binds localhost and keeps a separate service", async () =>
   assert.match(compose, /nafanya-zoom-control/u);
   assert.match(compose, /\/var\/run\/docker\.sock/u);
   assert.doesNotMatch(compose, /ZOOM_CONTROL_TOKEN:\s*\S+/u);
+});
+
+test("auth setup exposes protected view state and closes it after completion", async () => {
+  let authState = "waiting";
+  const ops = fakeOps({
+    async getAuthSetupState() { const state = authState; authState = "completed"; return { state }; },
+    async sleep() { await new Promise((resolve) => setTimeout(resolve, 3)); }
+  });
+  const service = new ZoomControlService(ops, { authTimeoutMs: 50, pollMs: 1 });
+  assert.equal(service.requestAuthSetup().accepted, true);
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const waiting = await service.status();
+  assert.equal(waiting.authSetupState, "auth_setup_waiting_for_manual_action");
+  assert.equal(waiting.authViewAvailable, true);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const completed = await service.status();
+  assert.equal(completed.mode, "auth_setup_completed");
+  assert.equal(completed.authViewAvailable, false);
+  assert.ok(ops.calls.includes("auth-setup:stop"));
+  assert.ok(ops.calls.includes("mode:safe"));
+});
+
+test("stuck auth setup can be stopped and returns safe mode", async () => {
+  const ops = fakeOps({ async getAuthSetupState() { return { state: "waiting" }; }, async sleep() { await new Promise((resolve) => setTimeout(resolve, 2)); } });
+  const service = new ZoomControlService(ops, { authTimeoutMs: 100, pollMs: 1 });
+  service.requestAuthSetup();
+  await new Promise((resolve) => setTimeout(resolve, 4));
+  const stopped = await service.stopAuthSetup();
+  assert.equal(stopped.status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const status = await service.status();
+  assert.equal(status.mode, "auth_setup_failed");
+  assert.match(status.lastError, /остановлено/iu);
+  assert.ok(ops.calls.includes("mode:safe"));
+});
+
+test("auth view uses fixed docker compose commands without arbitrary shell", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../control-agent/docker-ops.mjs", import.meta.url), "utf8");
+  assert.match(source, /--service-ports/u);
+  assert.match(source, /startAuthSetup/u);
+  assert.match(source, /stopAuthSetup/u);
+  assert.match(source, /import \{ execFile \} from "node:child_process"/u);
+  assert.doesNotMatch(source, /import \{[^}]*\b(?:exec|spawn)\b[^}]*\} from "node:child_process"|shell:\s*true/u);
+});
+
+test("Docker auth view binds noVNC to localhost and has no embedded secret", async () => {
+  const fs = await import("node:fs/promises");
+  const compose = await fs.readFile(new URL("../compose.example.yml", import.meta.url), "utf8");
+  const dockerfile = await fs.readFile(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(compose, /127\.0\.0\.1:6080:6080/u);
+  assert.match(dockerfile, /novnc|websockify/u);
+  assert.match(dockerfile, /x11vnc/u);
+  assert.doesNotMatch(dockerfile, /ZOOM_AUTH_(?:EMAIL|PASSWORD)=\S+/u);
 });

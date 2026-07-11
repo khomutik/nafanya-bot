@@ -55,6 +55,7 @@ const server = http.createServer(async (request, res) => {
       return res.end();
     }
     if (!authorized(request)) return json(res, 401, { ok: false, error: "unauthorized" });
+    if (request.method === "GET" && url.pathname === "/auth/check") { res.writeHead(204, { "cache-control": "no-store" }); return res.end(); }
     if (request.method === "GET" && url.pathname === "/app") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(buildControlHtml()); }
     if (request.method === "GET" && url.pathname === "/worker-panel") return proxyWorker(request, res, "/zoom-only/app");
     if (url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/app/action") return proxyWorker(request, res, url.pathname);
@@ -62,6 +63,7 @@ const server = http.createServer(async (request, res) => {
     if (request.method === "POST" && url.pathname === "/api/start") return json(res, 202, service.requestStart());
     if (request.method === "POST" && url.pathname === "/api/stop") { const result = await service.stop(); return json(res, result.status, result); }
     if (request.method === "POST" && url.pathname === "/api/auth-setup") return json(res, 202, service.requestAuthSetup());
+    if (request.method === "POST" && url.pathname === "/api/auth-setup/stop") { const result = await service.stopAuthSetup(); return json(res, result.status, result); }
     return json(res, 404, { ok: false, error: "not_found" });
   } catch (error) {
     return json(res, 500, { ok: false, error: "control_agent_error" });

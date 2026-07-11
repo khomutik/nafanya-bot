@@ -134,28 +134,18 @@ curl http://127.0.0.1:3097/health
 
 ## 6. Восстановить Zoom-авторизацию
 
-Если Zoom показывает Sign In, обычный sender остановить:
+Если human panel показывает **«Нужен вход в Zoom»**, служащий не открывает очередь и зовёт Машу или администратора.
 
-```bash
-docker compose -f compose.example.yml down
-```
+Маша/администратор:
 
-Временно включить setup:
+1. Нажимает **«Починить вход Zoom»**.
+2. Ждёт ссылку **«Открыть окно Zoom для входа»**.
+3. Открывает окно и вручную проходит captcha, email confirmation, 2FA или security prompt.
+4. Не отправляет пароль, коды и cookies в чат и не сохраняет их в скриншотах.
+5. Ждёт статус **«Вход сохранён. Включите Нафаню»**.
+6. Нажимает **«Включить Нафаню»** и ждёт **«В Zoom, чат открыт»**.
 
-```bash
-ZOOM_AUTH_SETUP=true
-ZOOM_AUTH_WAIT_FOR_MANUAL=true
-```
-
-Запустить auth/setup одноразово, без restart-loop. Вручную пройти captcha, подтверждение по почте, 2FA или security prompt, если Zoom их запросил. Пароль, коды и cookies не печатать.
-
-Успешное завершение выглядит так:
-
-```text
-Zoom auth profile setup completed.
-```
-
-После этого вернуть `ZOOM_AUTH_SETUP=false`, остановить setup и снова запустить обычный sender. Повторно проверить `/health`.
+Если auth/setup завис, нажать **«Остановить восстановление входа»**. Control agent закроет auth-view, вернёт `.env` в safe-mode и оставит sender выключенным.
 
 ## 7. Открыть очередь
 
@@ -314,9 +304,16 @@ Health control agent подтверждает только работу пуль
 
 ### HTTPS через Caddy
 
-В существующий блок `pochtinormalnye.ru` администратор с root-доступом добавляет маршрут **перед** `file_server`:
+В существующий блок `pochtinormalnye.ru` администратор с root-доступом добавляет маршруты **перед** `file_server`. Auth-view должен стоять выше общего control route:
 
 ```caddyfile
+handle_path /nafanya-zoom-control/vnc/* {
+	forward_auth 127.0.0.1:3098 {
+		uri /auth/check
+	}
+	reverse_proxy 127.0.0.1:6080
+}
+
 handle_path /nafanya-zoom-control/* {
 	reverse_proxy 127.0.0.1:3098
 }
@@ -329,14 +326,14 @@ sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-Control agent не открывает порт `3098` наружу: снаружи доступен только HTTPS-префикс Caddy. При первом открытии секретный bootstrap-token проверяется, переносится в `HttpOnly; Secure; SameSite=Strict` cookie, после чего панель открывается по чистому URL. Bootstrap-ярлык создаёт администратор; его содержимое и токен не публиковать.
+Control agent не открывает порты `3098`, `6080` или VNC наружу: снаружи доступен только HTTPS-префикс Caddy. Caddy проверяет ту же `HttpOnly; Secure; SameSite=Strict` cookie через `/auth/check` перед каждым noVNC HTTP/WebSocket-запросом. Токен в URL auth-view не добавляется.
 
 ### Что делает control agent
 
 - `start` проверяет старый bridge, browser locks, включает боевой режим и запускает только sender;
 - `status` показывает: выключен, запускается, готов, нужен вход или ошибка;
 - `stop` отказывается выключать sender при открытой очереди;
-- `auth-setup` пытается восстановить профиль и при ручной проверке просит позвать администратора;
+- `auth-setup` запускает временный headed Chromium + noVNC, показывает защищённое окно и закрывает его после успеха, ошибки или ручной остановки;
 - Worker-панель проксируется с серверным panel-token, поэтому токен не попадает в браузерный JavaScript.
 
 Control agent монтирует Docker socket и поэтому является административным компонентом. Его endpoint нельзя публиковать без HTTPS, отдельного токена и Caddy-защиты.
