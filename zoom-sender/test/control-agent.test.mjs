@@ -135,6 +135,7 @@ test("auth setup exposes protected view state and closes it after completion", a
   });
   const service = new ZoomControlService(ops, { authTimeoutMs: 50, pollMs: 1 });
   assert.equal(service.requestAuthSetup().accepted, true);
+  assert.equal((await service.status()).authViewAvailable, false);
   await new Promise((resolve) => setTimeout(resolve, 2));
   assert.deepEqual(ops.calls.slice(0, 4), ["stop-sender", "clear-locks", "mode:auth", "auth-setup:start"]);
   const waiting = await service.status();
