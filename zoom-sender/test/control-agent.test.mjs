@@ -99,6 +99,7 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Открыть окно Zoom для входа/u);
   assert.match(html, /Остановить восстановление входа/u);
   assert.match(html, /\.\/vnc\/vnc\.html/u);
+  assert.match(html, /\.auth-help\[hidden\]\{display:none\}/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
 });
 
