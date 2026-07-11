@@ -122,6 +122,7 @@ export class ZoomControlService {
   async #authSetup() {
     try {
       await this.ops.stopSender();
+      await this.ops.clearProfileLocks();
       await this.ops.setRuntimeMode("auth");
       this.authContainerId = await this.ops.startAuthSetup();
       const deadline = Date.now() + this.authTimeoutMs;
