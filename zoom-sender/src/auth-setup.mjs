@@ -2,6 +2,7 @@ import { loadConfig } from "./config.mjs";
 import { DEFAULT_BROWSER_ARGS, sanitizePageUrl } from "./adapters/playwright-zoom-sender.mjs";
 
 const SIGN_IN_URL = "https://app.zoom.us/signin";
+const PROFILE_URL = "https://app.zoom.us/profile";
 const AUTH_WAIT_MS = 90000;
 
 function readSecret(name) {
@@ -65,10 +66,20 @@ async function isSignedIn(page) {
   const title = await page.title().catch(() => "");
   const body = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
   if (/\/signin|\/login/iu.test(url)) return false;
-  if (/\/wc\/(?:\d+\/)?join/iu.test(url) && /join|enter meeting info|your name|mute|stop video/iu.test(`${title}\n${body}`)) {
-    return true;
-  }
   return /profile|account|meetings|settings|sign out|выйти/iu.test(`${title}\n${body}`);
+}
+
+async function confirmPersistentSignIn(page) {
+  await page.goto(PROFILE_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+  if (!await isSignedIn(page)) return false;
+  await page.waitForTimeout(5000);
+  return isSignedIn(page);
+}
+
+async function finishAuthSetup(page) {
+  if (!await confirmPersistentSignIn(page)) return false;
+  console.log("Zoom auth profile setup completed.");
+  return true;
 }
 
 async function waitUntilSignedIn(page, deadline, { waitForManual }) {
@@ -83,8 +94,6 @@ async function waitUntilSignedIn(page, deadline, { waitForManual }) {
       }
     }
     if (await isSignedIn(page)) {
-      await page.waitForTimeout(1500).catch(() => null);
-      console.log("Zoom auth profile setup completed.");
       return true;
     }
     await page.waitForTimeout(2000);
@@ -134,8 +143,7 @@ async function run() {
       const passwordDeadline = Date.now() + authWaitMs;
       while (Date.now() < passwordDeadline && !(await hasFirstVisible(page, passwordSelectors))) {
         if (await isSignedIn(page)) {
-          console.log("Zoom auth profile setup completed.");
-          return;
+          if (await finishAuthSetup(page)) return;
         }
         await page.waitForTimeout(2000);
       }
@@ -146,7 +154,7 @@ async function run() {
     }
     await clickVisibleButton(page, [/sign in/i, /log in/i, /\u0432\u043e\u0439\u0442\u0438/iu]);
     const deadline = Date.now() + authWaitMs;
-    if (await waitUntilSignedIn(page, deadline, { waitForManual })) return;
+    if (await waitUntilSignedIn(page, deadline, { waitForManual }) && await finishAuthSetup(page)) return;
     throw new Error("Zoom auth did not complete before timeout.");
   } finally {
     await browser.close().catch(() => null);

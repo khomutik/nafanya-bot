@@ -768,6 +768,7 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(compose, /healthcheck:/u);
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
   assert.match(compose, /\.\/diagnostics:\/app\/diagnostics/u);
+  assert.match(compose, /stop_grace_period:\s*30s/u);
   assert.match(envExample, /ZOOM_ONLY_SECRET=/u);
   assert.match(envExample, /ZOOM_AUTH_SETUP=false/u);
   assert.match(envExample, /ZOOM_AUTH_EMAIL=\s*(?:\r?\n)/u);
@@ -785,8 +786,9 @@ test("auth setup uses server env credentials without hardcoded secrets or artifa
   assert.match(source, /ZOOM_AUTH_PASSWORD/u);
   assert.match(source, /ZOOM_AUTH_WAIT_FOR_MANUAL/u);
   assert.match(source, /waiting for manual verification/u);
-  assert.match(source, /\\\/wc\\\//u);
-  assert.match(source, /join\|enter meeting info\|your name/u);
+  assert.match(source, /https:\/\/app\.zoom\.us\/profile/u);
+  assert.match(source, /confirmPersistentSignIn/u);
+  assert.doesNotMatch(source, /join\|enter meeting info\|your name/u);
   assert.match(source, /Zoom auth profile setup completed/u);
   assert.match(source, /hasFirstVisible/u);
   assert.match(source, /launchPersistentContext/u);
