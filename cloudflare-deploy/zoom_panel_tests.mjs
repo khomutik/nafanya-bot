@@ -120,6 +120,11 @@ async function testAccess() {
   assert.match(html, /data-key="show_queue"/u);
   assert.match(html, /data-key="close_queue"/u);
   assert.match(html, /setInterval\(\(\) => refreshStatus/u);
+  assert.match(html, /data-key="yozhik"/u);
+  assert.match(html, /id="billExcerptNumber"/u);
+  assert.match(html, /id="billExcerptButton"/u);
+  assert.match(html, /id="gameQuestionNumber"/u);
+  assert.match(html, /id="gameQuestionButton"/u);
   assert.doesNotMatch(html, /data-key="open_(?:yozhik|game|excerpt)"/u);
 
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
@@ -522,6 +527,56 @@ async function testQueueControlActions() {
   assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, 1);
 }
 
+async function testYozhikBillAndGameActions() {
+  const env = makeEnv();
+  const originalFetch = globalThis.fetch;
+  const dateKey = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit" }).format(new Date());
+  globalThis.fetch = async (url, init) => {
+    const value = String(url || "");
+    if (value.includes("yozhik.json")) return Response.json({ [dateKey]: "Тестовый текст Ёжика" });
+    if (value.includes("bill.json")) return Response.json({ "17": "Заголовок\n\nТекст отрывка" });
+    if (value.includes("speaker_questions.json")) return Response.json({ "17": "Тестовый вопрос игры" });
+    return originalFetch(url, init);
+  };
+  try {
+    let response = await postPanelAction(env, { action: "yozhik" }, false);
+    assert.equal(response.status, 401);
+
+    response = await postPanelAction(env, { action: "yozhik", text: "чужой текст" });
+    assert.equal((await json(response)).ok, true);
+    let outbox = await pullOutbox(env);
+    assert.match(outbox[0].text, /Ежедневные размышления/u);
+    assert.doesNotMatch(outbox[0].text, /чужой текст/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    response = await postPanelAction(env, { action: "bill_excerpt", number: 17, text: "чужой текст" });
+    assert.equal((await json(response)).ok, true);
+    outbox = await pullOutbox(env);
+    assert.match(outbox[0].text, /Как это видит Билл\. №17/u);
+    assert.doesNotMatch(outbox[0].text, /чужой текст/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    response = await postPanelAction(env, { action: "game_question", number: 17, text: "чужой текст" });
+    assert.equal((await json(response)).ok, true);
+    outbox = await pullOutbox(env);
+    assert.match(outbox[0].text, /Вопрос 17:[\s\S]*Тестовый вопрос игры/u);
+    assert.doesNotMatch(outbox[0].text, /чужой текст/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    for (const body of [
+      { action: "bill_excerpt", number: 0 },
+      { action: "bill_excerpt", number: 333 },
+      { action: "game_question", number: 501 }
+    ]) {
+      response = await postPanelAction(env, body);
+      assert.equal((await json(response)).ok, false);
+      assert.equal((await pullOutbox(env)).length, 0);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 await testAccess();
 await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
@@ -529,5 +584,6 @@ await testSafeZoomChatCodeIngest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 await testQueueControlActions();
+await testYozhikBillAndGameActions();
 
 console.log("zoom panel tests passed");

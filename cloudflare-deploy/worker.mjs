@@ -3208,6 +3208,15 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   if (payload.action === "add_test_participant" || payload.type === "add_test_participant") {
     return Response.json(await handleZoomV2PanelAddTestParticipantAction(env));
   }
+  if (payload.action === "yozhik" || payload.type === "yozhik") {
+    return Response.json(await handleZoomV2PanelYozhikAction(env));
+  }
+  if (payload.action === "bill_excerpt" || payload.type === "bill_excerpt") {
+    return Response.json(await handleZoomV2PanelBillExcerptAction(env, payload.number));
+  }
+  if (payload.action === "game_question" || payload.type === "game_question") {
+    return Response.json(await handleZoomV2PanelGameQuestionAction(env, payload.number));
+  }
   if (payload.type === "message" || payload.key) {
     return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
   }
@@ -3244,6 +3253,48 @@ async function handleZoomV2PanelTestMessageAction(env) {
   };
 }
 __name(handleZoomV2PanelTestMessageAction, "handleZoomV2PanelTestMessageAction");
+async function enqueueZoomV2GeneratedAction(env, { key, label, messages }) {
+  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
+  await enqueueZoomOnlyMessages(env, messages.flatMap((message) => splitZoomText(message)));
+  await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label, ok: true }).catch(() => null);
+  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+  return { ok: true, key, message: `${label} добавлен в Zoom outbox`, queued: Array.isArray(outbox.messages) ? outbox.messages : [] };
+}
+__name(enqueueZoomV2GeneratedAction, "enqueueZoomV2GeneratedAction");
+async function handleZoomV2PanelYozhikAction(env) {
+  try {
+    return await enqueueZoomV2GeneratedAction(env, { key: "yozhik", label: "Ёжик", messages: [await buildYozhikText()] });
+  } catch (error) {
+    return { ok: false, key: "yozhik", error: String(error?.message || "Не удалось подготовить Ёжика.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelYozhikAction, "handleZoomV2PanelYozhikAction");
+async function handleZoomV2PanelBillExcerptAction(env, rawNumber) {
+  const number = Number(rawNumber);
+  if (!Number.isInteger(number) || number < 1 || number > 332) {
+    return { ok: false, key: "bill_excerpt", error: "Номер отрывка Билла должен быть от 1 до 332." };
+  }
+  try {
+    return await enqueueZoomV2GeneratedAction(env, { key: "bill_excerpt", label: `Отрывок Билла №${number}`, messages: [await buildBillText(number)] });
+  } catch (error) {
+    return { ok: false, key: "bill_excerpt", error: String(error?.message || "Не удалось подготовить отрывок Билла.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelBillExcerptAction, "handleZoomV2PanelBillExcerptAction");
+async function handleZoomV2PanelGameQuestionAction(env, rawNumber) {
+  const number = Number(rawNumber);
+  if (!Number.isInteger(number) || number < 1 || number > 500) {
+    return { ok: false, key: "game_question", error: "Номер вопроса игры должен быть от 1 до 500." };
+  }
+  try {
+    const question = (await getSpeakerQuestions()).get(number);
+    if (!question) return { ok: false, key: "game_question", error: `Не нашёл вопрос ${number}.` };
+    return await enqueueZoomV2GeneratedAction(env, { key: "game_question", label: `Игра, вопрос ${number}`, messages: [`Вопрос ${number}:\n\n${question}`] });
+  } catch (error) {
+    return { ok: false, key: "game_question", error: String(error?.message || "Не удалось подготовить вопрос игры.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelGameQuestionAction, "handleZoomV2PanelGameQuestionAction");
 async function handleZoomV2PanelAddTestParticipantAction(env) {
   const queueInfo = await callZoomOnlyQueueState(env, "get");
   const state = queueInfo.state || createEmptyQueueState();
@@ -3779,6 +3830,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
   const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
   const testParticipantButton = `<button class="action test" type="button" data-type="add_test_participant" data-key="add_test_participant">+ \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a</button>`;
+  const yozhikButton = `<button class="action special" type="button" data-type="yozhik" data-key="yozhik">Ёжик на сегодня</button>`;
   const modeKeys = new Set(["open_bill", "open_bk", "open_rs"]);
   const queueModeButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => modeKeys.has(action.key)).map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   const queueControlButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => !modeKeys.has(action.key) && action.key !== "remove_by_number").map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
@@ -3806,12 +3858,16 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     .action { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; background: #ffffff; color: #171b33; font-size: 15px; font-weight: 750; text-align: left; padding: 10px 12px; cursor: pointer; }
     .action.secondary { background: #edf3ff; border-color: #aebbd4; }
     .action.test { background: #fff4df; border-color: #d9ad67; }
+    .action.special { background: #eef8f0; border-color: #91b69a; }
     .action:disabled { opacity: .55; cursor: wait; }
     .remove-row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(160px, 1fr); gap: 8px; margin-top: 8px; }
     .remove-row input { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; padding: 10px 12px; font: inherit; color: #171b33; background: #fff; }
+    .number-action { display: grid; grid-template-columns: minmax(120px, 180px) minmax(180px, 1fr); gap: 8px; }
+    .number-action + .number-action { margin-top: 8px; }
+    .number-action input { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; padding: 10px 12px; font: inherit; color: #171b33; background: #fff; }
     .queue-summary { margin: 0 0 12px; color: #4c5368; font-size: 14px; font-weight: 650; }
     .log { min-height: 76px; max-height: 180px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 12px; font-size: 13px; }
-    @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue-modes, .queue-controls, .remove-row { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+    @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue-modes, .queue-controls, .remove-row, .number-action { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
   </style>
 </head>
 <body>
@@ -3828,6 +3884,18 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       <h2>Сообщения</h2>
       <div class="grid">${messageButtons}</div>
       <div class="grid">${testButton}</div>
+    </section>
+    <section>
+      <h2>Ёжик, Билл и игра</h2>
+      <div class="grid">${yozhikButton}</div>
+      <div class="number-action">
+        <input id="billExcerptNumber" type="number" min="1" max="332" inputmode="numeric" placeholder="Отрывок 1–332" aria-label="Номер отрывка Билла">
+        <button class="action special" id="billExcerptButton" type="button">Отправить отрывок Билла</button>
+      </div>
+      <div class="number-action">
+        <input id="gameQuestionNumber" type="number" min="1" max="500" inputmode="numeric" placeholder="Вопрос 1–500" aria-label="Номер вопроса игры">
+        <button class="action special" id="gameQuestionButton" type="button">Отправить вопрос игры</button>
+      </div>
     </section>
     <section>
       <h2>Очередь</h2>
@@ -3881,7 +3949,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     async function runAction(type, key, queuePayload = {}) {
       buttons.forEach((button) => button.disabled = true);
       try {
-        const body = type === "queue" ? { type, queueAction: key, queuePayload } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : { type, key };
+        const body = type === "queue" ? { type, queueAction: key, queuePayload } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : type === "yozhik" ? { action: "yozhik" } : type === "bill_excerpt" ? { action: "bill_excerpt", number: queuePayload.number } : type === "game_question" ? { action: "game_question", number: queuePayload.number } : { type, key };
         const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) throw new Error(data.error || "action failed");
@@ -3894,7 +3962,7 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       }
     }
 
-    buttons.filter((button) => button.id !== "removeButton").forEach((button) => {
+    buttons.filter((button) => !["removeButton", "billExcerptButton", "gameQuestionButton"].includes(button.id)).forEach((button) => {
       button.addEventListener("click", () => runAction(button.dataset.type, button.dataset.key));
     });
     document.getElementById("removeButton").addEventListener("click", () => {
@@ -3907,6 +3975,18 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       }
       runAction("queue", "remove_by_number", { index });
     });
+    function runNumberAction({ inputId, min, max, type, label }) {
+      const input = document.getElementById(inputId);
+      const number = Number(input.value);
+      if (!Number.isInteger(number) || number < min || number > max) {
+        addLog("Ошибка: " + label + " должен быть от " + min + " до " + max + ".");
+        input.focus();
+        return;
+      }
+      runAction(type, type, { number });
+    }
+    document.getElementById("billExcerptButton").addEventListener("click", () => runNumberAction({ inputId: "billExcerptNumber", min: 1, max: 332, type: "bill_excerpt", label: "номер отрывка" }));
+    document.getElementById("gameQuestionButton").addEventListener("click", () => runNumberAction({ inputId: "gameQuestionNumber", min: 1, max: 500, type: "game_question", label: "номер вопроса" }));
     refreshStatus().catch((error) => addLog("Статус недоступен: " + (error?.message || String(error))));
     setInterval(() => refreshStatus().catch(() => null), 3000);
   </script>
