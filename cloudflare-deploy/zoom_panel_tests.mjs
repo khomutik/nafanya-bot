@@ -112,6 +112,15 @@ async function testAccess() {
   assert.match(html, /data-key="meeting_schedule"/u);
   assert.match(html, /data-type="test_message"/u);
   assert.match(html, /data-type="add_test_participant"/u);
+  assert.match(html, /data-key="done"/u);
+  assert.match(html, /data-key="skip"/u);
+  assert.match(html, /data-key="undo"/u);
+  assert.match(html, /id="removeNumber"/u);
+  assert.match(html, /id="removeButton"/u);
+  assert.match(html, /data-key="show_queue"/u);
+  assert.match(html, /data-key="close_queue"/u);
+  assert.match(html, /setInterval\(\(\) => refreshStatus/u);
+  assert.doesNotMatch(html, /data-key="open_(?:yozhik|game|excerpt)"/u);
 
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
   assert.equal(deniedAction.status, 401);
@@ -469,11 +478,56 @@ async function testStatusAndQueueActions() {
   assert.equal((await json(close)).ok, true);
 }
 
+async function testQueueControlActions() {
+  const env = makeEnv();
+  let response = await postPanelAction(env, { type: "queue", queueAction: "open_rs" });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "add_test_participant" });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+  response = await postChatIngest(env, {
+    authorName: "Второй участник",
+    text: "111",
+    sourceFingerprint: "queue-control-second"
+  });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+  assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, 2);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "skip" });
+  const skipped = await json(response);
+  assert.equal(skipped.ok, false);
+  assert.match(skipped.error, /ниже в очереди/iu);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "done" });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "undo" });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "remove_by_number", queuePayload: { index: 2 } });
+  assert.equal((await json(response)).ok, true);
+  let status = await getZoomOnlyStatus(env);
+  assert.equal(status.queue.entries.length, 1);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "remove_by_number", queuePayload: { index: 0 } });
+  const invalid = await json(response);
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.error, /от 1 до 999/u);
+  assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, 1);
+}
+
 await testAccess();
 await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
 await testSafeZoomChatCodeIngest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
+await testQueueControlActions();
 
 console.log("zoom panel tests passed");

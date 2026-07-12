@@ -40,11 +40,16 @@ export class ZoomControlService {
     if (this.operation === "start") mode = "starting";
     else if (this.operation === "stop") mode = "stopping";
     else if (this.operation === "auth-setup" || this.authSetupState !== "auth_setup_idle") mode = this.authSetupState;
-    else if (running && health?.status === "healthy" && health?.zoomJoined && health?.chatOpen) mode = "ready";
+    else if (running && health?.status === "healthy" && health?.zoomJoined && health?.chatOpen) {
+      mode = "ready";
+      this.lastError = null;
+    }
     else if (running && await this.ops.detectAuthRequired().catch(() => false)) mode = "auth_required";
     else if (running && health?.status === "unhealthy") mode = "error";
     else if (running && this.lastMode === "error" && this.lastError) mode = "error";
-    else if (!running && ["auth_required", "error"].includes(this.lastMode)) mode = this.lastMode;
+    else if (!running && this.lastMode === "auth_required") mode = "auth_required";
+    else if (!running && this.lastMode === "error" && this.lastError && !/не успел войти в Zoom и открыть чат/iu.test(this.lastError)) mode = "error";
+    else if (!running) this.lastError = null;
     this.lastMode = mode;
     return { running, health: publicHealth(health), mode, authSetupState: this.authSetupState, authViewAvailable: this.authSetupState === "auth_setup_waiting_for_manual_action", lastError: this.lastError };
   }

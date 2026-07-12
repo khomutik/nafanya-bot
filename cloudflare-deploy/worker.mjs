@@ -3212,7 +3212,7 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
   }
   if (payload.type === "queue" || payload.queueAction) {
-    return Response.json(await handleZoomV2PanelQueueAction(env, String(payload.queueAction || "").trim()));
+    return Response.json(await handleZoomV2PanelQueueAction(env, String(payload.queueAction || "").trim(), payload.queuePayload || {}));
   }
   const command = String(payload.command || "").trim();
   if (!command || !isZoomAppControlCommand(command)) {
@@ -3307,12 +3307,13 @@ async function handleZoomV2PanelMessageAction(env, key) {
   };
 }
 __name(handleZoomV2PanelMessageAction, "handleZoomV2PanelMessageAction");
-async function handleZoomV2PanelQueueAction(env, key) {
+async function handleZoomV2PanelQueueAction(env, key, queuePayload = {}) {
   const action = ZOOM_V2_PANEL_QUEUE_ACTIONS.find((item) => item.key === key) || null;
   if (!action) {
     await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: key, ok: false }).catch(() => null);
     return { ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." };
   }
+  try {
   const queueModeByAction = {
     open_bill: "bill",
     open_bk: "bk",
@@ -3328,6 +3329,16 @@ async function handleZoomV2PanelQueueAction(env, key) {
   } else if (key === "close_queue") {
     result = await callZoomOnlyQueueState(env, "close");
     await applyZoomOnlyQueueResponse(env, result);
+  } else if (["done", "skip", "undo"].includes(key)) {
+    result = await callZoomOnlyQueueState(env, key);
+    await applyZoomOnlyQueueResponse(env, result);
+  } else if (key === "remove_by_number") {
+    const index = Number(queuePayload.index);
+    if (!Number.isInteger(index) || index < 1 || index > 999) {
+      return { ok: false, error: "Укажите номер участника в очереди от 1 до 999." };
+    }
+    result = await callZoomOnlyQueueState(env, "remove_by_number", { index });
+    await applyZoomOnlyQueueResponse(env, result);
   }
   await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: action.label, ok: true }).catch(() => null);
   return {
@@ -3336,6 +3347,11 @@ async function handleZoomV2PanelQueueAction(env, key) {
     key,
     queue: result?.state || null
   };
+  } catch (error) {
+    const message = String(error?.message || "Действие очереди не выполнено.").slice(0, 300);
+    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: action.label, ok: false }).catch(() => null);
+    return { ok: false, error: message, key };
+  }
 }
 __name(handleZoomV2PanelQueueAction, "handleZoomV2PanelQueueAction");
 function zoomDebugTextPreview(text) {
@@ -3563,6 +3579,10 @@ var ZOOM_V2_PANEL_QUEUE_ACTIONS = [
   { key: "open_bill", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u0438\u043b\u043b" },
   { key: "open_bk", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u041a" },
   { key: "open_rs", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0443" },
+  { key: "done", label: "\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f" },
+  { key: "skip", label: "\u041f\u0440\u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c" },
+  { key: "undo", label: "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435" },
+  { key: "remove_by_number", label: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u2116" },
   { key: "show_queue", label: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" },
   { key: "close_queue", label: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" }
 ];
@@ -3759,7 +3779,9 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
   const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
   const testParticipantButton = `<button class="action test" type="button" data-type="add_test_participant" data-key="add_test_participant">+ \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a</button>`;
-  const queueButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  const modeKeys = new Set(["open_bill", "open_bk", "open_rs"]);
+  const queueModeButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => modeKeys.has(action.key)).map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  const queueControlButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => !modeKeys.has(action.key) && action.key !== "remove_by_number").map((action) => `<button class="action secondary" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -3779,13 +3801,17 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     .label { display: block; color: #5d6475; font-size: 13px; margin-bottom: 6px; }
     .value { display: block; font-size: 20px; font-weight: 800; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .queue { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .queue-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .queue-controls { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .action { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; background: #ffffff; color: #171b33; font-size: 15px; font-weight: 750; text-align: left; padding: 10px 12px; cursor: pointer; }
     .action.secondary { background: #edf3ff; border-color: #aebbd4; }
     .action.test { background: #fff4df; border-color: #d9ad67; }
     .action:disabled { opacity: .55; cursor: wait; }
+    .remove-row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(160px, 1fr); gap: 8px; margin-top: 8px; }
+    .remove-row input { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; padding: 10px 12px; font: inherit; color: #171b33; background: #fff; }
+    .queue-summary { margin: 0 0 12px; color: #4c5368; font-size: 14px; font-weight: 650; }
     .log { min-height: 76px; max-height: 180px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 12px; font-size: 13px; }
-    @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+    @media (max-width: 720px) { main { padding: 14px; } .status, .grid, .queue-modes, .queue-controls, .remove-row { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
   </style>
 </head>
 <body>
@@ -3805,7 +3831,13 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     </section>
     <section>
       <h2>Очередь</h2>
-      <div class="grid queue">${queueButtons}</div>
+      <p class="queue-summary" id="queueSummary">Очередь загружается.</p>
+      <div class="grid queue-modes">${queueModeButtons}</div>
+      <div class="grid queue-controls">${queueControlButtons}</div>
+      <div class="remove-row">
+        <input id="removeNumber" type="number" min="1" max="999" inputmode="numeric" placeholder="Номер в очереди" aria-label="Номер в очереди">
+        <button class="action secondary" id="removeButton" type="button">Удалить №</button>
+      </div>
       <div class="grid">${testParticipantButton}</div>
     </section>
     <pre class="log" id="log">Пульт загружен.</pre>
@@ -3841,13 +3873,15 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       document.getElementById("senderStatus").textContent = data.sender?.connected ? "подключён" : "не подключён / ожидает";
       document.getElementById("outboxStatus").textContent = String(data.outboxSize || 0) + " сообщений";
       document.getElementById("queueStatus").textContent = queueName(data.queue);
+      const entriesCount = Array.isArray(data.queue?.entries) ? data.queue.entries.length : 0;
+      document.getElementById("queueSummary").textContent = data.queue?.isOpen ? "Режим: " + queueName(data.queue) + ". Заявок: " + entriesCount + "." : "Очередь закрыта. Заявок: " + entriesCount + ".";
       return data;
     }
 
-    async function runAction(type, key) {
+    async function runAction(type, key, queuePayload = {}) {
       buttons.forEach((button) => button.disabled = true);
       try {
-        const body = type === "queue" ? { type, queueAction: key } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : { type, key };
+        const body = type === "queue" ? { type, queueAction: key, queuePayload } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : { type, key };
         const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) throw new Error(data.error || "action failed");
@@ -3860,10 +3894,21 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       }
     }
 
-    buttons.forEach((button) => {
+    buttons.filter((button) => button.id !== "removeButton").forEach((button) => {
       button.addEventListener("click", () => runAction(button.dataset.type, button.dataset.key));
     });
+    document.getElementById("removeButton").addEventListener("click", () => {
+      const input = document.getElementById("removeNumber");
+      const index = Number(input.value);
+      if (!Number.isInteger(index) || index < 1 || index > 999) {
+        addLog("Ошибка: укажите номер участника от 1 до 999.");
+        input.focus();
+        return;
+      }
+      runAction("queue", "remove_by_number", { index });
+    });
     refreshStatus().catch((error) => addLog("Статус недоступен: " + (error?.message || String(error))));
+    setInterval(() => refreshStatus().catch(() => null), 3000);
   </script>
 </body>
 </html>`;

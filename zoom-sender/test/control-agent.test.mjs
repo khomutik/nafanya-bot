@@ -102,7 +102,30 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Нажмите Починить вход Zoom/u);
   assert.match(html, /\.\/vnc\/vnc\.html/u);
   assert.match(html, /\.auth-help\[hidden\]\{display:none\}/u);
+  assert.match(html, /<iframe id="workerPanel"[\s\S]*<section class="control">/u);
+  assert.match(html, /fetch\("\.\/api\/status"/u);
+  assert.match(html, /async function refreshAll\(\)[\s\S]*worker-panel\?refresh=/u);
+  assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
+});
+
+test("healthy refresh clears a stale timeout error", async () => {
+  const ops = fakeOps({ async isSenderRunning() { return true; } });
+  const service = new ZoomControlService(ops);
+  service.lastMode = "error";
+  service.lastError = "Нафаня не успел войти в Zoom и открыть чат.";
+  const status = await service.status();
+  assert.equal(status.mode, "ready");
+  assert.equal(status.lastError, null);
+});
+
+test("stopped sender does not keep a stale error", async () => {
+  const service = new ZoomControlService(fakeOps());
+  service.lastMode = "error";
+  service.lastError = "Нафаня не успел войти в Zoom и открыть чат.";
+  const status = await service.status();
+  assert.equal(status.mode, "off");
+  assert.equal(status.lastError, null);
 });
 
 test("control HTTP entrypoint uses protected cookie and fixed routes", async () => {
