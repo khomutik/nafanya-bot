@@ -40,7 +40,7 @@ const TECH_MESSAGES = {
   chat_rules: 1856,
 };
 
-const TOPICS_MEETING_URL = "https://t.me/c/3835668674/440/1702";
+const TOPICS_MEETING_URL = "https://telegram.me/c/3835668674/440/1702";
 const YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
 const BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
 

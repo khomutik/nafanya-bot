@@ -808,7 +808,7 @@ export async function handleServiceMessages(env, message, text, chatId, threadId
 function buildMessageLink(chatId, messageId) {
   const rawChatId = String(chatId || "");
   if (!messageId || !rawChatId.startsWith("-100")) return "";
-  return `https://t.me/c/${rawChatId.slice(4)}/${messageId}`;
+  return `https://telegram.me/c/${rawChatId.slice(4)}/${messageId}`;
 }
 
 function buildUnansweredDisplayName(user) {

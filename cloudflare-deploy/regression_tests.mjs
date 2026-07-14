@@ -185,7 +185,7 @@ async function testKnowledgeAnswers() {
   assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeaderPattern}`, "u"));
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u0438\u0442?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u0440\u043e\u0442\u0430\u0446\u0438\u044f \u0443 \u0412\u0430\u0441\u0438?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0412\u0430\u0441\u0438/u);
-  assert.match(await answer(runtime, "\u0433\u0434\u0435 \u0438\u043d\u0444\u043e\u043a\u0430\u043d\u0430\u043b?"), /https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u);
+  assert.match(await answer(runtime, "\u0433\u0434\u0435 \u0438\u043d\u0444\u043e\u043a\u0430\u043d\u0430\u043b?"), /https:\/\/telegram\.me\/\+n40PjinXX_pjNTcy/u);
   assert.match(await answer(runtime, "\u0447\u0435\u043c \u0437\u0430\u043d\u0438\u043c\u0430\u0435\u0442\u0441\u044f \u0441\u0435\u043a\u0440\u0435\u0442\u0430\u0440\u044c?"), /\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b/u);
 }
 
@@ -333,7 +333,7 @@ function testWorkerStaticRules() {
     }
   }
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u041D\u0410\u0428\u0418 \u0420\u0415\u0421\u0423\u0420\u0421\u042B \u0412 \u0418\u041D\u0422\u0415\u0420\u041D\u0415\u0422\u0415[\s\S]*https:\/\/pochtinormalnye\.ru\/[\s\S]*\u0421\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0432 Zoom:[\s\S]*https:\/\/us06web\.zoom\.us\/j\/5487249245/u, "Zoom links message should include the site and Zoom meeting");
-  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u0413\u0440\u0443\u043F\u043F\u0430 \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+mta_CKQY2c05ODRi[\s\S]*\u0418\u043D\u0444\u043E \u041A\u0430\u043D\u0430\u043B \u0432 \u0422\u0413:[\s\S]*https:\/\/t\.me\/\+n40PjinXX_pjNTcy/u, "Zoom links message should include Telegram group and info channel");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u0413\u0440\u0443\u043F\u043F\u0430 \u0432 \u0422\u0413:[\s\S]*https:\/\/telegram\.me\/\+mta_CKQY2c05ODRi[\s\S]*\u0418\u043D\u0444\u043E \u041A\u0430\u043D\u0430\u043B \u0432 \u0422\u0413:[\s\S]*https:\/\/telegram\.me\/\+n40PjinXX_pjNTcy/u, "Zoom links message should include Telegram group and info channel");
   assert.equal((ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0].match(/https:\/\/pochtinormalnye\.ru\//gu) || []).length, 1, "Zoom links message should include the site once");
   assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /max\.ru|MAX|\u041C\u0410\u0425/u, "Zoom links message should not include the old MAX fallback");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.steps12[0], /^12 \u0428\u0410\u0413\u041E\u0412 \u0410\u0410/u, "Zoom 12 steps part 1 should omit the part label");
@@ -364,7 +364,7 @@ function testWorkerStaticRules() {
   assert.match(queueEngine, /function isDuplicatePendingBillSpeechEntry[\s\S]*\(111\|222\|333\|444\)[\s\S]*duplicate: true/u, "Bill queue should ignore repeated 111 before converting it into 222/333/444");
   assert.match(queueEngine, /export const QUEUE_FOOTER_LINES = \[\];/u, "Queue text should not append Telegram or Zoom footer links");
   const queueModeText = botPanels.match(/export const QUEUE_MODE_TEXT = \{[\s\S]*?\n\};/u)?.[0] || "";
-  assert.doesNotMatch(queueModeText, /help|t\.me\/\+mta_CKQY2c05ODRi|us06web\.zoom\.us\/j\/5487249245/u, "Queue prompts should stay clean without help or link footers");
+  assert.doesNotMatch(queueModeText, /help|telegram\.me\/\+mta_CKQY2c05ODRi|us06web\.zoom\.us\/j\/5487249245/u, "Queue prompts should stay clean without help or link footers");
   assert.match(worker, /runQueueStateActionCore\(queueState, action, payload, buildQueueTextCore\)/u, "Worker queue Durable Object should delegate queue rules to the shared engine");
   assert.match(queueEngine, /if \(action === "remove_by_number"\)[\s\S]*state\.entries\.splice\(visibleNumber - 1, 1\)/u, "Queue state should remove entries by visible row number");
   assert.match(worker, /result\.queueText,[\s\S]*buildQueuePublicKeyboard\(\),[\s\S]*result\.parseMode/u, "Published queue messages should include public queue control buttons");

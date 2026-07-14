@@ -2458,7 +2458,7 @@ __name(handleServiceMessages, "handleServiceMessages");
 function buildMessageLink(chatId, messageId) {
   const rawChatId = String(chatId || "");
   if (!messageId || !rawChatId.startsWith("-100")) return "";
-  return `https://t.me/c/${rawChatId.slice(4)}/${messageId}`;
+  return `https://telegram.me/c/${rawChatId.slice(4)}/${messageId}`;
 }
 __name(buildMessageLink, "buildMessageLink");
 function buildUnansweredDisplayName(user) {
@@ -3520,7 +3520,7 @@ function createKnowledgeRuntime(deps) {
     const text = norm(question);
     if (/(?:где|куда|ссылк|линк).*(?:инфоканал|инфо\s*канал)|(?:инфоканал|инфо\s*канал).*(?:где|куда|ссылк|линк)/u.test(text)) {
       return {
-        answer: "\u0418\u043D\u0444\u043E\u041A\u0430\u043D\u0430\u043B \u0433\u0440\u0443\u043F\u043F\u044B \u0432 Telegram:\nhttps://t.me/+n40PjinXX_pjNTcy\n\n\u0418\u0441\u0442\u043E\u0447\u043D\u0438\u043A: \u041F\u043E\u043B\u043E\u0436\u0435\u043D\u0438\u0435 \u0433\u0440\u0443\u043F\u043F\u044B.",
+        answer: "\u0418\u043D\u0444\u043E\u041A\u0430\u043D\u0430\u043B \u0433\u0440\u0443\u043F\u043F\u044B \u0432 Telegram:\nhttps://telegram.me/+n40PjinXX_pjNTcy\n\n\u0418\u0441\u0442\u043E\u0447\u043D\u0438\u043A: \u041F\u043E\u043B\u043E\u0436\u0435\u043D\u0438\u0435 \u0433\u0440\u0443\u043F\u043F\u044B.",
         source: "\u041F\u043E\u043B\u043E\u0436\u0435\u043D\u0438\u0435 \u0433\u0440\u0443\u043F\u043F\u044B"
       };
     }
@@ -4673,7 +4673,7 @@ var WEEKDAY_TECH_ANNOUNCEMENTS = [
 var QUEUE_FOOTER_LINES = [
   "",
   "\u270D\uFE0F \u041F\u0438\u0448\u0435\u043C \u0432 \u0422\u0435\u043B\u0435\u0433\u0440\u0430\u043C\u0435:",
-  "https://t.me/+mta_CKQY2c05ODRi",
+  "https://telegram.me/+mta_CKQY2c05ODRi",
   "\u{1F5E3}\uFE0F \u0413\u043E\u0432\u043E\u0440\u0438\u043C \u0438 \u0441\u043B\u0443\u0448\u0430\u0435\u043C \u0432 Zoom:",
   "https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1"
 ];

@@ -243,13 +243,13 @@ https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
 
 Группа в ТГ:
 
-https://t.me/+mta\_CKQY2c05ODRi
+https://telegram.me/+mta\_CKQY2c05ODRi
 
 
 
 Инфо Канал в ТГ:
 
-https://t.me/+n40PjinXX\_pjNTcy
+https://telegram.me/+n40PjinXX\_pjNTcy
 
 
 
@@ -376,4 +376,4 @@ meeting\_schedule
 📞 Собрания в Zoom:
 https://us06web.zoom.us/j/5487249245?pwd=UE3buqca6pTDt8kGPJDW9pRoaC7gkt.1
 📲 Мы в Телеграм:
-https://t.me/+mta_CKQY2c05ODRi
+https://telegram.me/+mta_CKQY2c05ODRi
