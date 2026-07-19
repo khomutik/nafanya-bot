@@ -381,14 +381,91 @@ async function collectVisibleChatMessages(page) {
       if (!match) return { authorName: "", timestamp: "" };
       return { authorName: clean(match[1]), timestamp: clean(match[2] || "") };
     };
-    const groupContainerFor = (element) => element.closest([
-      '[id^="chat-message-content-"]',
-      '[aria-label*="to Everyone" i]',
-      '[class*="chat-message" i]',
-      '[class*="message-item" i]',
-      '[class*="chat-item" i]',
-      '[role="listitem"]'
-    ].join(", ")) || element;
+    const isSupportedAtomicChatText = (value) => /^(?:111|222|333|444|\u0438\u0433\u0440\u0430\s+\d{1,3})$/iu.test(clean(value));
+    const isTimestampText = (value) => /^(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?|am|pm|\u0441\u0435\u0433\u043e\u0434\u043d\u044f|today)$/iu.test(clean(value));
+    const isTextBubbleNode = (element) => {
+      const className = clean(element?.className || "");
+      return /(?:new-chat-message__(?:text-box|text-content)|_rtfEditor|message__text|message-text|text-content)/iu.test(className);
+    };
+    const isLikelySenderName = (value, messageText = "") => {
+      const name = clean(value);
+      if (!name || name.length > 80) return false;
+      if (name === clean(messageText)) return false;
+      if (isSupportedAtomicChatText(name) || isTimestampText(name)) return false;
+      if (/\bto\s+everyone\b|^\d+$|chat|message|\u0447\u0430\u0442|\u0441\u043e\u043e\u0431\u0449/iu.test(name)) return false;
+      return true;
+    };
+    const senderNameFrom = (scope, messageText = "") => {
+      if (!scope?.querySelectorAll) return "";
+      const selectors = [
+        "[data-sender]",
+        "[data-display-name]",
+        "[data-name]",
+        '[class*="sender" i]',
+        '[class*="author" i]',
+        '[class*="display-name" i]',
+        '[class*="user-name" i]',
+        '[class*="username" i]',
+        '[class*="name" i]',
+        '[aria-label*="sender" i]'
+      ];
+      for (const candidate of scope.querySelectorAll(selectors.join(","))) {
+        if (!visible(candidate)) continue;
+        const values = [
+          candidate.getAttribute("data-sender"),
+          candidate.getAttribute("data-display-name"),
+          candidate.getAttribute("data-name"),
+          candidate.getAttribute("aria-label"),
+          candidate.textContent
+        ];
+        for (const value of values) {
+          const name = clean(value);
+          if (isLikelySenderName(name, messageText)) return name;
+        }
+      }
+      return "";
+    };
+    const groupContainerFor = (element) => {
+      const elementText = clean(element.innerText || element.textContent);
+      let best = null;
+      let bestScore = -1;
+      for (let node = element; node && node !== document.body; node = node.parentElement) {
+        if (!visible(node)) continue;
+        const text = clean(node.innerText || node.textContent);
+        if (!text || text.length > textLimit) continue;
+        const className = clean(node.className || "");
+        const id = clean(node.getAttribute("id") || "");
+        const ariaLabel = clean(node.getAttribute("aria-label") || "");
+        const role = clean(node.getAttribute("role") || "");
+        const header = parseGroupHeader(ariaLabel || text);
+        const senderName = senderNameFrom(node, elementText);
+        const looksLikeMessageRoot = (
+          id.startsWith("chat-message-content-") ||
+          /\bnew-chat-message\b(?!__)|chat-message|message-item|chat-item/iu.test(className) ||
+          /\bto\s+Everyone\b/iu.test(ariaLabel) ||
+          role === "listitem" ||
+          role === "row"
+        );
+        if (!looksLikeMessageRoot && !senderName && !header.authorName) continue;
+        const score =
+          (looksLikeMessageRoot ? 4 : 0) +
+          (senderName ? 8 : 0) +
+          (header.authorName ? 8 : 0) +
+          (id || ariaLabel ? 2 : 0) -
+          (isTextBubbleNode(node) ? 8 : 0);
+        if (score > bestScore) {
+          best = node;
+          bestScore = score;
+        }
+      }
+      return best || element.closest([
+        '[id^="chat-message-content-"]',
+        '[aria-label*="to Everyone" i]',
+        '[class*="message-item" i]',
+        '[class*="chat-item" i]',
+        '[role="listitem"]'
+      ].join(", ")) || element;
+    };
     const stableIdFor = (element, fallbackIndex) => clean(
       element.getAttribute("id") ||
       element.getAttribute("data-message-id") ||
@@ -405,7 +482,7 @@ async function collectVisibleChatMessages(page) {
           childIndex,
           text: clean(node.innerText || node.textContent)
         }))
-        .filter((item) => /^(?:111|222|333|444|\u0438\u0433\u0440\u0430\s+\d{1,3})$/iu.test(item.text));
+        .filter((item) => isSupportedAtomicChatText(item.text));
     };
     const selectors = [
       '[class*="chat-message" i]',
@@ -439,11 +516,13 @@ async function collectVisibleChatMessages(page) {
       const groupAriaLabel = clean(groupElement.getAttribute("aria-label") || "");
       const groupHeader = parseGroupHeader(groupAriaLabel || groupText);
       const groupStableId = stableIdFor(groupElement, index);
+      const groupSenderName = senderNameFrom(groupElement, text);
       const displayName = clean(
         element.getAttribute("data-sender") ||
         element.getAttribute("data-display-name") ||
-        element.querySelector('[class*="sender" i], [class*="name" i], [aria-label*="sender" i]')?.textContent ||
         groupHeader.authorName ||
+        groupSenderName ||
+        senderNameFrom(element, text) ||
         (timestamp && lines[0] === timestamp ? lines[1] : lines[0]) ||
         ""
       );
@@ -464,13 +543,14 @@ async function collectVisibleChatMessages(page) {
         const childKey = [groupStableId, child.childIndex, child.text, rawDom].join("|");
         if (seenChildRecords.has(childKey)) continue;
         seenChildRecords.add(childKey);
+        const childAuthorName = groupHeader.authorName || senderNameFrom(groupElement, child.text) || displayName;
         records.push({
-          displayName: groupHeader.authorName || displayName,
+          displayName: childAuthorName,
           text: child.text,
           timestamp: groupHeader.timestamp || timestamp,
           domPath: `${child.node.tagName.toLowerCase()}:${index}:${child.childIndex}`,
           rawDom,
-          groupAuthorName: groupHeader.authorName,
+          groupAuthorName: groupHeader.authorName || childAuthorName,
           groupTimestamp: groupHeader.timestamp || timestamp,
           groupText,
           groupStableId,
