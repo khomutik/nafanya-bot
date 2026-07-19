@@ -170,6 +170,9 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /fetch\("\.\/api\/status"/u);
   assert.match(html, /async function refreshAll\(\)[\s\S]*worker-panel\?refresh=/u);
   assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);
+  assert.match(html, /let pendingMessage=""/u);
+  assert.match(html, /pendingMessage=data\.error\|\|"Операция не выполнена"/u);
+  assert.match(html, /\[s\.lastError,pendingMessage,next\]/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
 });
 
