@@ -297,7 +297,7 @@ export class ZoomSenderService {
       return { messages: messages.length, ackIds, delayMs: delay };
     } catch (error) {
       const delay = this.backoff.onError();
-      this.health.workerAvailable = false;
+      this.health.markWorkerUnavailable?.(error);
       this.health.markError(error);
       this.health.updateBackoff(this.backoff);
       this.logger.warn?.(`Zoom Sender cycle failed; next poll in ${delay}ms: ${this.health.lastError?.message || "unknown error"}`);

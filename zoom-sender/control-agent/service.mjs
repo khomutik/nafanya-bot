@@ -13,10 +13,24 @@ function publicHealth(health = null) {
   if (!health) return null;
   return {
     status: String(health.status || "unhealthy"),
+    workerAvailable: Boolean(health.workerAvailable),
     zoomJoined: Boolean(health.zoomJoined),
     chatOpen: Boolean(health.chatOpen),
+    chatUnavailable: Boolean(health.chatUnavailable),
+    chatReason: health.chatReason ? String(health.chatReason) : null,
+    lastWorkerError: health.lastWorkerError ? {
+      reason: String(health.lastWorkerError.reason || "unknown"),
+      httpStatus: Number.isInteger(health.lastWorkerError.httpStatus) ? health.lastWorkerError.httpStatus : null,
+      message: safeError(health.lastWorkerError.message || "")
+    } : null,
     lastError: health.lastError ? safeError(health.lastError?.message || health.lastError) : null
   };
+}
+
+function workerUnavailableMessage(health) {
+  const reason = health?.lastWorkerError?.reason || "unknown";
+  const status = Number.isInteger(health?.lastWorkerError?.httpStatus) ? ` HTTP ${health.lastWorkerError.httpStatus}` : "";
+  return `Worker \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d: ${reason}${status}.`;
 }
 
 export class ZoomControlService {
@@ -43,6 +57,14 @@ export class ZoomControlService {
     else if (running && health?.status === "healthy" && health?.zoomJoined && health?.chatOpen) {
       mode = "ready";
       this.lastError = null;
+    }
+    else if (running && health?.zoomJoined && health?.chatUnavailable) {
+      mode = "error";
+      this.lastError = "\u0412\u0441\u0442\u0440\u0435\u0447\u0430 \u043e\u0442\u043a\u0440\u044b\u0442\u0430, \u043d\u043e \u0447\u0430\u0442 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d.";
+    }
+    else if (running && health?.lastWorkerError && !health?.workerAvailable) {
+      mode = "error";
+      this.lastError = workerUnavailableMessage(health);
     }
     else if (running && await this.ops.detectAuthRequired().catch(() => false)) mode = "auth_required";
     else if (running && health?.status === "unhealthy") mode = "error";
@@ -77,6 +99,16 @@ export class ZoomControlService {
         const health = await this.ops.getSenderHealth().catch(() => null);
         if (health?.status === "healthy" && health.zoomJoined && health.chatOpen) {
           this.lastMode = "ready";
+          return;
+        }
+        if (health?.zoomJoined && health?.chatUnavailable) {
+          this.lastMode = "error";
+          this.lastError = "\u0412\u0441\u0442\u0440\u0435\u0447\u0430 \u043e\u0442\u043a\u0440\u044b\u0442\u0430, \u043d\u043e \u0447\u0430\u0442 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d.";
+          return;
+        }
+        if (health?.lastWorkerError && !health?.workerAvailable) {
+          this.lastMode = "error";
+          this.lastError = workerUnavailableMessage(health);
           return;
         }
         if (await this.ops.detectAuthRequired().catch(() => false)) {

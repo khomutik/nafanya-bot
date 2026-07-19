@@ -83,6 +83,70 @@ test("auth-required and safe public errors do not expose secrets", async () => {
   assert.deepEqual(publicHealth({ status: "unhealthy", lastError: { message: "secret=hidden" } }).lastError, "secret=[redacted]");
 });
 
+test("public health exposes readiness reasons without secrets", () => {
+  const health = publicHealth({
+    status: "unhealthy",
+    workerAvailable: false,
+    zoomJoined: true,
+    chatOpen: false,
+    chatUnavailable: true,
+    chatReason: "unavailable",
+    lastWorkerError: {
+      reason: "auth",
+      httpStatus: 403,
+      message: "secret=hidden token=abcd"
+    }
+  });
+  assert.equal(health.workerAvailable, false);
+  assert.equal(health.chatUnavailable, true);
+  assert.equal(health.chatReason, "unavailable");
+  assert.equal(health.lastWorkerError.reason, "auth");
+  assert.equal(health.lastWorkerError.httpStatus, 403);
+  assert.doesNotMatch(health.lastWorkerError.message, /hidden|abcd/u);
+});
+
+test("control start reports worker and chat readiness failures honestly", async () => {
+  let workerRunning = false;
+  const workerOps = fakeOps({
+    async isSenderRunning() { return workerRunning; },
+    async startSender() { workerRunning = true; },
+    async getSenderHealth() {
+      return {
+        status: "unhealthy",
+        workerAvailable: false,
+        zoomJoined: true,
+        chatOpen: false,
+        lastWorkerError: { reason: "auth", httpStatus: 403, message: "forbidden" }
+      };
+    },
+    async sleep() { await new Promise((resolve) => setTimeout(resolve, 2)); }
+  });
+  const workerService = new ZoomControlService(workerOps, { startTimeoutMs: 20, pollMs: 1 });
+  workerService.requestStart();
+  await new Promise((resolve) => setTimeout(resolve, 8));
+  assert.match((await workerService.status()).lastError, /Worker недоступен: auth HTTP 403/u);
+
+  let chatRunning = false;
+  const chatOps = fakeOps({
+    async isSenderRunning() { return chatRunning; },
+    async startSender() { chatRunning = true; },
+    async getSenderHealth() {
+      return {
+        status: "warning",
+        workerAvailable: true,
+        zoomJoined: true,
+        chatOpen: false,
+        chatUnavailable: true
+      };
+    },
+    async sleep() { await new Promise((resolve) => setTimeout(resolve, 2)); }
+  });
+  const chatService = new ZoomControlService(chatOps, { startTimeoutMs: 20, pollMs: 1 });
+  chatService.requestStart();
+  await new Promise((resolve) => setTimeout(resolve, 8));
+  assert.equal((await chatService.status()).lastError, "Встреча открыта, но чат недоступен.");
+});
+
 test("env mode updates only whitelisted values", () => {
   const result = updateEnvText("ZOOM_SENDER_DRY_RUN=true\nZOOM_MEETING_URL=private\n", { ZOOM_SENDER_DRY_RUN: "false", ZOOM_AUTH_SETUP: "false" });
   assert.match(result, /ZOOM_SENDER_DRY_RUN=false/u);

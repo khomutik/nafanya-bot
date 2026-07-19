@@ -7,6 +7,9 @@ export class HealthState {
     this.zoomJoined = false;
     this.waitingRoom = false;
     this.chatOpen = false;
+    this.chatUnavailable = false;
+    this.chatReason = null;
+    this.lastWorkerError = null;
     this.lastSuccessfulSendAt = null;
     this.lastOutboxPollAt = null;
     this.lastError = null;
@@ -15,7 +18,18 @@ export class HealthState {
 
   markWorkerPoll() {
     this.workerAvailable = true;
+    this.lastWorkerError = null;
     this.lastOutboxPollAt = Date.now();
+  }
+
+  markWorkerUnavailable(error) {
+    this.workerAvailable = false;
+    this.lastWorkerError = {
+      reason: normalizeWorkerReason(error?.workerReason),
+      httpStatus: Number.isInteger(error?.httpStatus) ? error.httpStatus : null,
+      message: redactSensitiveText(error?.message || String(error || "")),
+      at: Date.now()
+    };
   }
 
   markSend() {
@@ -38,6 +52,8 @@ export class HealthState {
     this.zoomJoined = Boolean(presence.zoomJoined);
     this.waitingRoom = Boolean(presence.waitingRoom);
     this.chatOpen = Boolean(presence.chatOpen);
+    this.chatUnavailable = Boolean(presence.chatUnavailable);
+    this.chatReason = presence.chatReason ? String(presence.chatReason) : null;
   }
 
   updateBackoff(backoff) {
@@ -57,6 +73,9 @@ export class HealthState {
       zoomJoined: this.zoomJoined,
       waitingRoom: this.waitingRoom,
       chatOpen: this.chatOpen,
+      chatUnavailable: this.chatUnavailable,
+      chatReason: this.chatReason,
+      lastWorkerError: this.lastWorkerError,
       lastSuccessfulSendAt: this.lastSuccessfulSendAt,
       lastOutboxPollAt: this.lastOutboxPollAt,
       currentDelayMs: this.currentDelayMs,
@@ -64,6 +83,11 @@ export class HealthState {
       uptimeMs: Date.now() - this.startedAt
     };
   }
+}
+
+function normalizeWorkerReason(value) {
+  const reason = String(value || "unknown");
+  return /^(?:missing_config|auth|timeout|network|server|client|unknown)$/u.test(reason) ? reason : "unknown";
 }
 
 export function redactSensitiveText(text) {

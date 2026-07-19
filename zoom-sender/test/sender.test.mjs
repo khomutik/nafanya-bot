@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.mjs";
 import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
 import { ZoomSenderService, buildZoomChatLogicalKey, extractZoomChatDomMessageId, extractZoomChatMessageId, selectZoomChatCodeIngestCandidates } from "../src/sender.mjs";
-import { WorkerOutboxClient } from "../src/worker-client.mjs";
+import { WorkerOutboxClient, classifyWorkerFetchError, classifyWorkerHttpStatus } from "../src/worker-client.mjs";
 import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
@@ -39,6 +39,32 @@ test("outbox client pulls zoom-only messages and sends ackIds", async () => {
   assert.equal(calls[0].url, "https://worker.example/zoom-only/outbox");
   assert.equal(calls[0].secret, "secret");
   assert.deepEqual(calls[1].body.ackIds, [1, 2]);
+});
+
+test("worker errors are classified for health without exposing secrets", async () => {
+  assert.equal(classifyWorkerHttpStatus(401), "auth");
+  assert.equal(classifyWorkerHttpStatus(403), "auth");
+  assert.equal(classifyWorkerHttpStatus(408), "timeout");
+  assert.equal(classifyWorkerHttpStatus(500), "server");
+  assert.equal(classifyWorkerFetchError(new Error("fetch failed: ENOTFOUND")), "network");
+  assert.equal(classifyWorkerFetchError(Object.assign(new Error("The operation timed out"), { name: "AbortError" })), "timeout");
+
+  const authClient = new WorkerOutboxClient(makeConfig(), async () => jsonResponse({ ok: false, error: "nope" }, 403));
+  await assert.rejects(() => authClient.pull(), (error) => {
+    assert.equal(error.workerReason, "auth");
+    assert.equal(error.httpStatus, 403);
+    assert.doesNotMatch(error.message, /secret/u);
+    return true;
+  });
+
+  const networkClient = new WorkerOutboxClient(makeConfig(), async () => {
+    throw new Error("fetch failed: ECONNRESET");
+  });
+  await assert.rejects(() => networkClient.pull(), (error) => {
+    assert.equal(error.workerReason, "network");
+    assert.doesNotMatch(error.message, /secret/u);
+    return true;
+  });
 });
 
 test("outbox client sends chat ingest to dedicated endpoint", async () => {
@@ -235,6 +261,10 @@ test("Zoom browser adapter handles the Zoom web landing gate and read-only diagn
   assert.match(source, /getByText\(pattern\)/u);
   assert.match(source, /button, a, \[role='button'\]/u);
   assert.match(source, /input\[type="text"\]:visible/u);
+  assert.match(source, /\[role="textbox"\]\[aria-placeholder\*="chat" i\]/u);
+  assert.match(source, /open\\s\+the\\s\+chat\\s\+panel/u);
+  assert.match(source, /MORE_BUTTON_PATTERNS/u);
+  assert.match(source, /chatUnavailable/u);
   assert.match(source, /after-fill-name/u);
   assert.match(source, /nameFilled/u);
   assert.match(source, /page\.on\("console"/u);

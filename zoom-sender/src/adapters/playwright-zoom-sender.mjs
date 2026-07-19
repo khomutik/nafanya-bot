@@ -1,4 +1,6 @@
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
+const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435/iu, /\u0435\u0449\u0435/iu];
+const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
 const COOKIE_BUTTON_PATTERNS = [/decline cookies/i, /accept cookies/i, /\u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c/iu, /\u043f\u0440\u0438\u043d\u044f\u0442\u044c/iu];
 const JOIN_FROM_BROWSER_PATTERNS = [/join from browser/i, /\u0432\u043e\u0439\u0442\u0438.*\u0431\u0440\u0430\u0443\u0437\u0435\u0440/iu];
 const CONTINUE_WITHOUT_MEDIA_PATTERNS = [/continue without microphone and camera/i, /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu];
@@ -35,6 +37,7 @@ async function clickButtonByText(page, patterns) {
     const button = page.getByRole("button", { name: pattern }).first();
     if (await button.isVisible({ timeout: 1200 }).catch(() => false)) {
       await button.click().catch(() => null);
+      await page.waitForTimeout(1200).catch(() => null);
       return true;
     }
   }
@@ -92,8 +95,18 @@ async function hasChatInput(page) {
     const selectors = [
       'textarea[aria-label*="chat" i]',
       'textarea[placeholder*="chat" i]',
+      'textarea[aria-placeholder*="chat" i]',
       'input[aria-label*="chat" i]',
+      'input[placeholder*="chat" i]',
+      '[role="textbox"][aria-label*="chat" i]',
+      '[role="textbox"][aria-placeholder*="chat" i]',
+      '[role="textbox"][data-placeholder*="chat" i]',
       'div[contenteditable="true"][aria-label*="chat" i]',
+      'div[contenteditable="plaintext-only"][aria-label*="chat" i]',
+      'div[contenteditable="plaintext-only"][aria-placeholder*="chat" i]',
+      'div[contenteditable="plaintext-only"][data-placeholder*="chat" i]',
+      'p[contenteditable="true"]',
+      'p[contenteditable="plaintext-only"]',
       'div[contenteditable="true"]'
     ];
     return selectors.some((selector) => [...document.querySelectorAll(selector)].some((element) => {
@@ -104,17 +117,61 @@ async function hasChatInput(page) {
   }).catch(() => false);
 }
 
+async function hasChatUnavailableNotice(page) {
+  const bodyText = await page.locator("body").innerText({ timeout: 1200 }).catch(() => "");
+  return CHAT_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(bodyText));
+}
+
+async function clickChatButtonInDom(page) {
+  const serialized = CHAT_BUTTON_PATTERNS.map((pattern) => ({ source: pattern.source, flags: pattern.flags }));
+  return page.evaluate((items) => {
+    const regexes = items.map((item) => new RegExp(item.source, item.flags));
+    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 1 && rect.height > 1;
+    };
+    const controls = [...document.querySelectorAll("button, [role='button'], a")].filter(isVisible);
+    const target = controls.find((element) => {
+      const label = [
+        clean(element.innerText || element.textContent),
+        clean(element.getAttribute("aria-label")),
+        clean(element.getAttribute("title")),
+        clean(element.getAttribute("data-tooltip"))
+      ].filter(Boolean).join(" ");
+      return /open\s+the\s+chat\s+panel/i.test(label) || regexes.some((regex) => regex.test(label));
+    });
+    if (!target) return false;
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.click();
+    return true;
+  }, serialized).catch(() => false);
+}
+
 async function openChatPanel(page) {
   if (await hasChatInput(page)) return true;
   await clickButtonByText(page, CHAT_BUTTON_PATTERNS).catch(() => false);
+  await page.waitForTimeout(1500).catch(() => null);
+  if (await hasChatInput(page)) return true;
+  await clickChatButtonInDom(page).catch(() => false);
+  await page.waitForTimeout(1500).catch(() => null);
   if (await hasChatInput(page)) return true;
   await clickFirst(page, [
+    'button[aria-label*="open the chat panel" i]',
     'button[aria-label*="chat" i]',
     'button[title*="chat" i]',
+    '[role="button"][aria-label*="open the chat panel" i]',
     '[role="button"][aria-label*="chat" i]',
     '[role="button"][title*="chat" i]'
   ]).catch(() => false);
+  await page.waitForTimeout(1500).catch(() => null);
   if (await hasChatInput(page)) return true;
+  if (await clickButtonByText(page, MORE_BUTTON_PATTERNS).catch(() => false)) {
+    await clickButtonByText(page, CHAT_BUTTON_PATTERNS).catch(() => false);
+    await page.waitForTimeout(1500).catch(() => null);
+    if (await hasChatInput(page)) return true;
+  }
   await page.keyboard.press("Alt+KeyH").catch(() => null);
   await page.waitForTimeout(800).catch(() => null);
   return hasChatInput(page);
@@ -158,7 +215,16 @@ async function sendChatText(page, text) {
   const selectors = [
     'textarea[aria-label*="chat" i]',
     'textarea[placeholder*="chat" i]',
+    'textarea[aria-placeholder*="chat" i]',
+    '[role="textbox"][aria-label*="chat" i]',
+    '[role="textbox"][aria-placeholder*="chat" i]',
+    '[role="textbox"][data-placeholder*="chat" i]',
     'div[contenteditable="true"][aria-label*="chat" i]',
+    'div[contenteditable="plaintext-only"][aria-label*="chat" i]',
+    'div[contenteditable="plaintext-only"][aria-placeholder*="chat" i]',
+    'div[contenteditable="plaintext-only"][data-placeholder*="chat" i]',
+    'p[contenteditable="true"]',
+    'p[contenteditable="plaintext-only"]',
     'div[contenteditable="true"]'
   ];
   for (const selector of selectors) {
@@ -532,7 +598,9 @@ export class PlaywrightZoomSender {
       zoomPageOpen: false,
       zoomJoined: false,
       waitingRoom: false,
-      chatOpen: false
+      chatOpen: false,
+      chatUnavailable: false,
+      chatReason: null
     };
     this.lastDiagnosticsDir = null;
     this.diagnosticsRun = null;
@@ -649,11 +717,14 @@ export class PlaywrightZoomSender {
     const bodyText = await this.page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
     const waitingRoom = /waiting room|host.*let you in|\u043e\u0436\u0438\u0434\u0430/iu.test(bodyText);
     const zoomJoined = chatOpen || /leave|mute|unmute|participants|chat|\u0447\u0430\u0442|\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu.test(bodyText);
+    const chatUnavailable = !chatOpen && await hasChatUnavailableNotice(this.page);
     this.presence = {
       zoomPageOpen: !this.page.isClosed(),
       zoomJoined,
       waitingRoom,
-      chatOpen
+      chatOpen,
+      chatUnavailable,
+      chatReason: chatOpen ? "input_found" : chatUnavailable ? "unavailable" : "input_not_found"
     };
     return { ...this.presence };
   }
@@ -721,4 +792,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, collectVisibleChatMessages, collectVisibleControls, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot };
+export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, collectVisibleChatMessages, collectVisibleControls, hasChatInput, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot };
