@@ -311,7 +311,7 @@ function testWorkerStaticRules() {
   assert.match(worker, /sendBillToGroup\(env, zoomBillNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Bill command should publish the actual Bill text");
   assert.match(messageHandlers, /sendBillToGroup\(env, billNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Telegram Bill panel flow should mirror the Bill text to Zoom");
   assert.doesNotMatch(worker + zoomMeetingTexts, /\\u0442\\u0435\\u043A\\u0441\\u0442 \\u0434\\u043B\\u044F Zoom \\u043D\\u0443\\u0436\\u043D\\u043E \\u043F\\u0435\\u0440\\u0435\\u043D\\u0435\\u0441\\u0442\\u0438/u, "Zoom meeting texts should not contain placeholder copy");
-  for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
+  for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "chat_cleanliness", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
     assert.match(zoomMeetingTexts, new RegExp(`"${key}"`, "u"), `Zoom meeting text should include ${key}`);
   }
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.steps12.length, 2, "Zoom 12 steps should be manually split into two parts");
@@ -321,6 +321,9 @@ function testWorkerStaticRules() {
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /^\u041F\u0420\u0410\u0412\u0418\u041B\u0410 \u0421\u041E\u0411\u0420\u0410\u041D\u0418\u042F\n\n\u2705 /u, "Zoom meeting rules should use the requested plain header");
   assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /\*\*/u, "Zoom meeting rules should not include Markdown bold markers");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], /\u043E\u0441\u0442\u0430\u0442\u044C\u0441\u044F \u0441\u043B\u0443\u0448\u0430\u0442\u0435\u043B\u0435\u043C$/u, "Zoom meeting rules should use the requested ending");
+  assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.chat_cleanliness.length, 1, "Zoom chat cleanliness should stay in one message");
+  assert.match(ZOOM_MEETING_MESSAGE_TEXTS.chat_cleanliness[0], /^\u0427\u0418\u0421\u0422\u041E\u0422\u0410 \u0427\u0410\u0422\u0410\n\n\u2705 /u, "Zoom chat cleanliness should use its own plain header");
+  assert.notEqual(ZOOM_MEETING_MESSAGE_TEXTS.chat_cleanliness[0], ZOOM_MEETING_MESSAGE_TEXTS.meeting_rules[0], "Zoom chat cleanliness should not reuse meeting rules");
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition.length, 1, "Zoom seventh tradition should stay in one message");
   assert.equal(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0].length, 511, "Zoom seventh tradition should fit the one-message limit");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /^\u0421\u0415\u0414\u042C\u041C\u0410\u042F \u0422\u0420\u0410\u0414\u0418\u0426\u0418\u042F\n\n\u2705 /u, "Zoom seventh tradition should use the requested plain header");

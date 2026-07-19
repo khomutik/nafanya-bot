@@ -325,7 +325,7 @@ test("chat diagnostics fingerprint is stable and separates duplicates from diffe
   assert.match(first, /^chat-[0-9a-f]{8}$/u);
 });
 
-test("chat ingest candidates include only atomic queue codes and ignore aggregates", () => {
+test("chat ingest candidates include atomic queue codes and Bill game commands, ignore aggregates", () => {
   const messages = [
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111", timestamp: "03:44 PM", fingerprint: "full-111" },
@@ -335,13 +335,15 @@ test("chat ingest candidates include only atomic queue codes and ignore aggregat
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 222", timestamp: "03:44 PM", fingerprint: "full-222" },
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:45 PM 333", timestamp: "03:45 PM", fingerprint: "full-333" },
     { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:46 PM 444", timestamp: "03:46 PM", fingerprint: "full-444" },
-    { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" }
+    { displayName: "Vladimir", text: "Vladimir to Everyone 03:47 PM игра 415", timestamp: "03:47 PM", fingerprint: "full-game-415" },
+    { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" },
+    { displayName: "Vladimir", text: "Vladimir to Everyone 03:48 PM игра 415 привет", timestamp: "03:48 PM", fingerprint: "game-extra" }
   ];
   const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 4);
-  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
-  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["full-111", "full-222", "full-333", "full-444"]);
+  assert.equal(candidates.length, 5);
+  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х.", "Vladimir"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444", "игра 415"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["full-111", "full-222", "full-333", "full-444", "full-game-415"]);
 });
 
 test("chat ingest candidates parse atomic child codes from one Zoom message group", () => {
@@ -362,6 +364,39 @@ test("chat ingest candidates parse atomic child codes from one Zoom message grou
   assert.equal(candidates.length, 4);
   assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
   assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
+});
+
+test("chat ingest candidates parse Bill game child messages", () => {
+  const messages = [
+    {
+      displayName: "Vladimir",
+      text: "игра 415",
+      timestamp: "03:48 PM",
+      fingerprint: "child-game-415",
+      groupAuthorName: "Vladimir",
+      groupTimestamp: "03:48 PM",
+      groupText: "Vladimir to Everyone 03:48 PM игра 415",
+      groupStableId: "group-game-415",
+      childIndex: 0
+    },
+    {
+      displayName: "Vladimir",
+      text: "игра 415 привет",
+      timestamp: "03:49 PM",
+      fingerprint: "child-game-extra",
+      groupAuthorName: "Vladimir",
+      groupTimestamp: "03:49 PM",
+      groupText: "Vladimir to Everyone 03:49 PM игра 415 привет",
+      groupStableId: "group-game-extra",
+      childIndex: 0
+    }
+  ];
+
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].authorName, "Vladimir");
+  assert.equal(candidates[0].text, "игра 415");
+  assert.equal(candidates[0].sourceFingerprint, "child-game-415");
 });
 
 test("chat ingest candidates ignore unsafe bare chunks and queue publications", () => {

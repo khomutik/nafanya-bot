@@ -405,7 +405,7 @@ async function collectVisibleChatMessages(page) {
           childIndex,
           text: clean(node.innerText || node.textContent)
         }))
-        .filter((item) => /^(?:111|222|333|444)$/.test(item.text));
+        .filter((item) => /^(?:111|222|333|444|\u0438\u0433\u0440\u0430\s+\d{1,3})$/iu.test(item.text));
     };
     const selectors = [
       '[class*="chat-message" i]',

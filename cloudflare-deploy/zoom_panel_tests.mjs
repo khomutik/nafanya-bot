@@ -556,6 +556,141 @@ async function testSafeZoomChatCodeIngest() {
   assert.equal(outbox.length, 0);
 }
 
+async function testZoomBillChatIngest() {
+  const env = makeEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const value = String(url || "");
+    if (value.includes("speaker_questions.json")) return Response.json({ "17": "Тестовый вопрос игры", "415": "Тестовый вопрос 415" });
+    return originalFetch(url, init);
+  };
+  try {
+    let response = await postPanelAction(env, { type: "queue", queueAction: "open_bill" });
+    let data = await json(response);
+    assert.equal(data.ok, true);
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "111",
+      sourceFingerprint: "fp-bill-111"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    assert.equal(data.queue.entries.length, 1);
+    assert.equal(data.queue.entries[0].author, "Vladimir");
+    assert.equal(data.queue.entries[0].label, "111");
+    let outbox = await pullOutbox(env);
+    assert.ok(outbox.length >= 1);
+    assert.match(outbox.at(-1).text, /Vladimir — 111/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "111",
+      sourceFingerprint: "fp-bill-111"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.duplicate, true);
+    assert.equal((await pullOutbox(env)).length, 0);
+
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "111",
+      sourceFingerprint: "fp-bill-111-new"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.duplicate, true);
+    assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, 1);
+    assert.equal((await pullOutbox(env)).length, 0);
+
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "222",
+      sourceFingerprint: "fp-bill-222"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    let status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 2);
+    assert.equal(status.queue.entries[1].label, "222");
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "Игра   415",
+      sourceFingerprint: "fp-bill-game-415"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    assert.equal(data.gameNumber, 415);
+    status = await getZoomOnlyStatus(env);
+    assert.ok(status.queue.entries.some((entry) => entry.author === "Vladimir" && entry.label === "игра 415"));
+    outbox = await pullOutbox(env);
+    assert.ok(outbox.length >= 2);
+    assert.match(outbox[0].text, /Вопрос 415:[\s\S]*Тестовый вопрос 415/u);
+    assert.match(outbox.at(-1).text, /Vladimir — игра 415/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    const entriesBeforeInvalid = (await getZoomOnlyStatus(env)).queue.entries.length;
+    for (const [text, fingerprint] of [
+      ["игра 0", "fp-bill-game-0"],
+      ["игра 501", "fp-bill-game-501"],
+      ["игра abc", "fp-bill-game-abc"],
+      ["игра 415 привет", "fp-bill-game-extra"]
+    ]) {
+      response = await postChatIngest(env, {
+        authorName: "Vladimir",
+        text,
+        sourceFingerprint: fingerprint
+      });
+      data = await json(response);
+      assert.equal(data.ok, true);
+      assert.equal(data.handled, false);
+      assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, entriesBeforeInvalid);
+      assert.equal((await pullOutbox(env)).length, 0);
+    }
+
+    response = await postChatIngest(env, {
+      authorName: "Нафаня",
+      text: "111",
+      sourceFingerprint: "fp-bill-self"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "self");
+    assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, entriesBeforeInvalid);
+
+    response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
+    assert.equal((await json(response)).ok, true);
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+    response = await postPanelAction(env, { type: "queue", queueAction: "open_rs" });
+    assert.equal((await json(response)).ok, true);
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+    response = await postChatIngest(env, {
+      authorName: "Vladimir",
+      text: "игра 415",
+      sourceFingerprint: "fp-rs-game-415"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "unsupported_mode");
+    assert.equal((await pullOutbox(env)).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function testMessageButtonsAndOutbox() {
   const env = makeEnv();
 
@@ -578,6 +713,29 @@ async function testMessageButtonsAndOutbox() {
   assert.equal(data.ok, true);
   outbox = await pullOutbox(env);
   assert.match(outbox.at(-1).text, /Собрания в Zoom/u);
+
+  response = await postPanelAction(env, { type: "message", key: "tea_rules" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  const teaRulesText = outbox.at(-1).text;
+  assert.match(teaRulesText, /чайную|чайной/iu);
+
+  response = await postPanelAction(env, { type: "message", key: "chat_cleanliness" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  const chatCleanlinessText = outbox.at(-1).text;
+  assert.match(chatCleanlinessText, /чистот[ауы]\s+чата|чат должен|без флуда|оскорб/iu);
+  assert.notEqual(chatCleanlinessText, teaRulesText);
+
+  response = await postPanelAction(env, { type: "message", key: "meeting_rules" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  const meetingRulesText = outbox.at(-1).text;
+  assert.match(meetingRulesText, /ПРАВИЛА СОБРАНИЯ/u);
+  assert.notEqual(chatCleanlinessText, meetingRulesText);
 
   response = await postPanelAction(env, { type: "message", key: "today_topic" });
   data = await json(response);
@@ -726,6 +884,7 @@ await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
 await testManualQueueEntryAction();
 await testSafeZoomChatCodeIngest();
+await testZoomBillChatIngest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
 await testQueueControlActions();

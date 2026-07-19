@@ -1240,7 +1240,10 @@ var AnnouncementStateDurableObject = class {
         const authorName = String(payload.authorName || "").trim();
         const sourceFingerprint = String(payload.sourceFingerprint || "").trim();
         const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
-        if (!/^(?:111|222|333|444)$/u.test(text)) {
+        const codeText = text.match(/^(?:111|222|333|444)$/u)?.[0] || null;
+        const gameMatch = normalizeQueueText(text).match(/^\u0438\u0433\u0440\u0430\s+(\d{1,3})$/u);
+        const gameNumber = gameMatch ? Number(gameMatch[1]) : null;
+        if (!codeText && gameNumber === null) {
           return Response.json({ ok: true, handled: false, ignored: "unsupported_text" });
         }
         if (!sourceFingerprint) {
@@ -1252,7 +1255,10 @@ var AnnouncementStateDurableObject = class {
         if (!queue.isOpen || !queue.mode) {
           return Response.json({ ok: true, handled: false, ignored: "queue_closed", queue });
         }
-        if (!["rs", "bk"].includes(queue.mode)) {
+        if (gameNumber !== null && queue.mode !== "bill") {
+          return Response.json({ ok: true, handled: false, ignored: "unsupported_mode", queue });
+        }
+        if (codeText && !["rs", "bk", "bill"].includes(queue.mode)) {
           return Response.json({ ok: true, handled: false, ignored: "unsupported_mode", queue });
         }
         if (announcementState.zoomOnlyChatIngestFingerprints.includes(sourceFingerprint)) {
@@ -1260,13 +1266,23 @@ var AnnouncementStateDurableObject = class {
         }
         announcementState.zoomOnlyChatIngestFingerprints.push(sourceFingerprint);
         announcementState.zoomOnlyChatIngestFingerprints = announcementState.zoomOnlyChatIngestFingerprints.slice(-300);
-        const entry = makeManualQueueEntryCore(authorName, queue.mode, "111", text, { source: "Zoom chat" });
-        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: true }, buildZoomOnlyQueueTextCore);
+        const zoomMessage = {
+          text,
+          message_id: sourceFingerprint,
+          chat: { id: "zoom-only-chat" },
+          from: { first_name: authorName }
+        };
+        const entry = gameNumber !== null
+          ? makeManualQueueEntryCore(authorName, "first", `\u0438\u0433\u0440\u0430 ${gameNumber}`, text, { source: "Zoom chat" })
+          : parseQueueEntryCore(zoomMessage, queue, { source: "Zoom chat" });
+        if (!entry) {
+          return Response.json({ ok: true, handled: false, ignored: "unsupported_text", queue });
+        }
+        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: queue.mode !== "bill" }, buildZoomOnlyQueueTextCore);
         announcementState.zoomOnlyQueueState = queueResult.state;
         const queued = [];
-        if (queueResult.response?.publishQueue && !queueResult.response?.duplicate && queueResult.response?.queueText) {
+        const appendZoomOnlyOutboxMessages = __name((messages) => {
           const createdAt = Date.now();
-          const messages = splitZoomText(queueResult.response.queueText);
           for (const message of messages) {
             queued.push({
               id: announcementState.zoomOnlyOutboxNextId,
@@ -1279,12 +1295,20 @@ var AnnouncementStateDurableObject = class {
           if (announcementState.zoomOnlyOutbox.length > 300) {
             announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.slice(-300);
           }
+        }, "appendZoomOnlyOutboxMessages");
+        const prependMessages = Array.isArray(payload.prependMessages) ? payload.prependMessages.map((message) => String(message || "").trim()).filter(Boolean) : [];
+        if (!queueResult.response?.duplicate && prependMessages.length) {
+          appendZoomOnlyOutboxMessages(prependMessages.flatMap((message) => splitZoomText(message)));
+        }
+        if (queueResult.response?.publishQueue && !queueResult.response?.duplicate && queueResult.response?.queueText) {
+          appendZoomOnlyOutboxMessages(splitZoomText(queueResult.response.queueText));
         }
         await this.saveState(announcementState);
         return Response.json({
           ok: true,
           handled: true,
           duplicate: Boolean(queueResult.response?.duplicate),
+          gameNumber,
           queue: announcementState.zoomOnlyQueueState,
           queued
         });
@@ -3109,23 +3133,44 @@ async function handleZoomOnlyBridgeRequest(request, env) {
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
 async function handleZoomOnlyChatIngest(env, payload) {
   const text = String(payload?.text || "").trim();
-  if (!/^(?:111|222|333|444)$/u.test(text)) {
+  const codeText = text.match(/^(?:111|222|333|444)$/u)?.[0] || null;
+  const normalized = normalizeZoomCommand(text);
+  const gameMatch = normalized.match(/^\u0438\u0433\u0440\u0430\s+(\d{1,3})$/iu);
+  const gameNumber = gameMatch ? Number(gameMatch[1]) : null;
+  if (!codeText && gameNumber === null) {
     return { ok: true, handled: false, ignored: "unsupported_text" };
+  }
+  if (gameNumber !== null && (gameNumber < 1 || gameNumber > 500)) {
+    return { ok: true, handled: false, ignored: "invalid_game_number" };
   }
   const authorName = stripTelegramHandles(String(payload?.authorName || payload?.displayName || "").trim());
   if (!authorName) {
     return { ok: true, handled: false, ignored: "empty_author" };
   }
+  const normalizedAuthorName = normalizeZoomCommand(authorName);
+  if (normalizedAuthorName === normalizeZoomCommand(ZOOM_BOT_NAME) || /^\u043D\u0430\u0444\u0430\u043D\u044F(?:\s|$)/iu.test(normalizedAuthorName) || looksLikeZoomOnlyBotEcho(authorName)) {
+    return { ok: true, handled: false, ignored: "self" };
+  }
   const sourceFingerprint = String(payload?.sourceFingerprint || "").trim();
   if (!sourceFingerprint) {
     return { ok: false, handled: false, error: "sourceFingerprint is required" };
   }
+  let prependMessages = [];
+  if (gameNumber !== null) {
+    const question = (await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map())).get(gameNumber);
+    if (question) {
+      prependMessages = [`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`];
+    } else {
+      console.warn("zoom only bill game question not found", { gameNumber });
+    }
+  }
   return callAnnouncementState(env, "zoom_only_chat_ingest_code", {
     authorName,
-    text,
+    text: gameNumber !== null ? `\u0438\u0433\u0440\u0430 ${gameNumber}` : text,
     timestamp: String(payload?.timestamp || "").trim(),
     sourceFingerprint,
-    observedAt: String(payload?.observedAt || "").trim()
+    observedAt: String(payload?.observedAt || "").trim(),
+    prependMessages
   });
 }
 __name(handleZoomOnlyChatIngest, "handleZoomOnlyChatIngest");
@@ -3378,7 +3423,7 @@ async function handleZoomV2PanelAddManualQueueEntryAction(env, rawInput) {
 }
 __name(handleZoomV2PanelAddManualQueueEntryAction, "handleZoomV2PanelAddManualQueueEntryAction");
 function getZoomV2PanelMessageAction(key) {
-  return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || null;
+  return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || (ZOOM_MEETING_MESSAGE_TEXTS[key] ? { key, label: key } : null);
 }
 __name(getZoomV2PanelMessageAction, "getZoomV2PanelMessageAction");
 function getZoomV2PanelMessages(action) {
@@ -3672,7 +3717,7 @@ var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
   { key: "free_services", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f" },
   { key: "tea_rules", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439" },
   { key: "speaker_questions", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443" },
-  { key: "chat_cleanliness", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", zoomKey: "meeting_rules" },
+  { key: "chat_cleanliness", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430" },
   { key: "meeting_schedule", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435" },
   { key: "telemost_link", label: "\u0421\u0441\u044b\u043b\u043a\u0438" }
 ];
