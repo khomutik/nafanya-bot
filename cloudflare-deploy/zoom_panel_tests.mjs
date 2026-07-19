@@ -114,7 +114,10 @@ async function testAccess() {
   assert.match(html, /Быстрое управление очередью/u);
   assert.match(html, /Текущая очередь/u);
   assert.match(html, /class="panel-status compact-status-bar"/u);
+  assert.match(html, /<main class="panel-compact">/u);
+  assert.match(html, /class="metric-row"/u);
   assert.match(html, /id="entriesStatus"/u);
+  assert.match(html, /id="entriesMetric"/u);
   assert.match(html, /class="quick-queue-section"/u);
   assert.match(html, /class="grid quick-queue-actions"/u);
   assert.match(html, /class="meeting-section accordion"/u);
@@ -139,11 +142,25 @@ async function testAccess() {
   assert.match(html, /id="removeButton"/u);
   assert.match(html, /id="manualQueueInput"/u);
   assert.match(html, /id="manualQueueButton"/u);
-  assert.match(html, /placeholder="Имя и код: Саша 111"/u);
-  assert.match(html, /Если код не указан, добавится как 111\./u);
+  assert.match(html, /id="queueWorkbench" hidden/u);
+  assert.match(html, /id="closedQueueNote" hidden/u);
+  assert.match(html, /class="queue-toolbar"/u);
+  assert.match(html, /class="queue-toolbar-row add-row"/u);
+  assert.match(html, /class="queue-toolbar-row actions-row"/u);
+  assert.match(html, /class="queue-toolbar-row remove-row"/u);
+  assert.match(html, /class="input-sm" id="manualQueueInput"/u);
+  assert.match(html, /class="input-sm" id="removeNumber"/u);
+  assert.match(html, /placeholder="Саша 111"/u);
+  assert.match(html, /Без кода добавится как 111\./u);
   assert.match(html, /action: "add_manual_queue_entry"/u);
   assert.match(html, /data-key="show_queue"/u);
   assert.match(html, /data-key="close_queue"/u);
+  assert.match(html, /button-action \{ width: auto/u);
+  assert.match(html, /button-danger \{ width: auto/u);
+  assert.match(html, /queueWorkbench"\)\.hidden = !isQueueOpen/u);
+  assert.match(html, /entriesMetric"\)\.hidden = !isQueueOpen/u);
+  assert.match(html, /История закрытой очереди/u);
+  assert.doesNotMatch(html, /Очередь закрыта\. Заявок/u);
   assert.match(html, /setInterval\(\(\) => refreshStatus/u);
   assert.match(html, /data-key="yozhik"/u);
   assert.match(html, /<h3>Ёжик<\/h3>/u);
@@ -158,7 +175,7 @@ async function testAccess() {
   assert.match(html, /queue-open-action/u);
   assert.match(html, /queue-control-action/u);
   assert.match(html, /queue-danger-action/u);
-  assert.match(html, /@media \(max-width: 640px\)[\s\S]*manual-add[\s\S]*queue-controls/u);
+  assert.match(html, /@media \(max-width: 640px\)[\s\S]*queue-toolbar-row\.add-row[\s\S]*queue-toolbar-row\.remove-row/u);
   assert.match(html, /min-height: 34px/u);
   assert.doesNotMatch(html, /data-key="open_(?:yozhik|game|excerpt)"/u);
 
