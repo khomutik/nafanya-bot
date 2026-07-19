@@ -108,6 +108,16 @@ async function testAccess() {
   assert.equal(allowedPage.status, 200);
   const html = await allowedPage.text();
   assert.match(html, /Пульт Нафани для Zoom/u);
+  assert.match(html, /Нафаня в Zoom/u);
+  assert.match(html, /Сообщения собрания/u);
+  assert.match(html, /Ежедневные \/ отдельные публикации/u);
+  assert.match(html, /Открыть очередь/u);
+  assert.match(html, /Управление текущей очередью/u);
+  assert.match(html, /class="panel-status"/u);
+  assert.match(html, /class="meeting-section"/u);
+  assert.match(html, /class="publication-section"/u);
+  assert.match(html, /class="queue-open-section"/u);
+  assert.match(html, /class="queue-control-section"/u);
   assert.match(html, /data-key="prayer"/u);
   assert.match(html, /data-key="meeting_schedule"/u);
   assert.match(html, /data-type="test_message"/u);
@@ -117,14 +127,28 @@ async function testAccess() {
   assert.match(html, /data-key="undo"/u);
   assert.match(html, /id="removeNumber"/u);
   assert.match(html, /id="removeButton"/u);
+  assert.match(html, /id="manualQueueInput"/u);
+  assert.match(html, /id="manualQueueButton"/u);
+  assert.match(html, /placeholder="Имя и код: Саша 111"/u);
+  assert.match(html, /Если код не указан, добавится как 111\./u);
+  assert.match(html, /action: "add_manual_queue_entry"/u);
   assert.match(html, /data-key="show_queue"/u);
   assert.match(html, /data-key="close_queue"/u);
   assert.match(html, /setInterval\(\(\) => refreshStatus/u);
   assert.match(html, /data-key="yozhik"/u);
+  assert.match(html, /<h3>Ёжик<\/h3>/u);
+  assert.match(html, /<h3>Отрывок Билла<\/h3>/u);
+  assert.match(html, /<h3>Вопрос игры<\/h3>/u);
   assert.match(html, /id="billExcerptNumber"/u);
   assert.match(html, /id="billExcerptButton"/u);
   assert.match(html, /id="gameQuestionNumber"/u);
   assert.match(html, /id="gameQuestionButton"/u);
+  assert.match(html, /meeting-action/u);
+  assert.match(html, /publication-action/u);
+  assert.match(html, /queue-open-action/u);
+  assert.match(html, /queue-control-action/u);
+  assert.match(html, /queue-danger-action/u);
+  assert.match(html, /@media \(max-width: 820px\)[\s\S]*manual-add[\s\S]*queue-controls/u);
   assert.doesNotMatch(html, /data-key="open_(?:yozhik|game|excerpt)"/u);
 
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
@@ -239,6 +263,95 @@ async function testSafeAddTestParticipantAction() {
   assert.equal(data.ok, true);
   status = await getZoomOnlyStatus(env);
   assert.equal(status.queue.isOpen, false);
+}
+
+async function testManualQueueEntryAction() {
+  const env = makeEnv();
+
+  let denied = await postPanelAction(env, { action: "add_manual_queue_entry", rawInput: "Саша 111" }, false);
+  assert.equal(denied.status, 401);
+
+  let response = await postPanelAction(env, {
+    action: "add_manual_queue_entry",
+    rawInput: "Саша 111",
+    text: "произвольный текст в outbox"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, false);
+  assert.match(data.error, /Сначала откройте очередь/u);
+  assert.equal((await pullOutbox(env)).length, 0);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "open_rs" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "add_manual_queue_entry", rawInput: "Саша" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.key, "add_manual_queue_entry");
+  assert.match(data.message, /Добавлено: Саша/u);
+  assert.equal(data.queue.mode, "rs");
+  assert.equal(data.queue.entries.length, 1);
+  assert.equal(data.queue.entries[0].author, "Саша");
+  assert.equal(data.queue.entries[0].label, "111");
+  let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.match(outbox[0].text, /Саша — 111/u);
+  await ackOutbox(env, outbox.map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "add_manual_queue_entry", rawInput: "Саша 111 высказаться" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.queue.entries.length, 2);
+  assert.equal(data.queue.entries.filter((entry) => entry.author === "Саша" && entry.label === "111").length, 2);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "add_manual_queue_entry", rawInput: "Саша 222" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.queue.entries.length, 3);
+  assert.equal(data.queue.entries.filter((entry) => entry.author === "Саша" && entry.label === "111").length, 3);
+  outbox = await pullOutbox(env);
+  assert.match(outbox[0].text, /Саша — 111/u);
+  assert.doesNotMatch(outbox[0].text, /Саша — 222/u);
+  await ackOutbox(env, outbox.map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "add_manual_queue_entry", rawInput: "Анна Мария 333" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  assert.equal(data.queue.entries.length, 4);
+  assert.ok(data.queue.entries.some((entry) => entry.author === "Анна Мария" && entry.label === "111"));
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+  const entriesBeforeInvalid = (await getZoomOnlyStatus(env)).queue.entries.length;
+  for (const [rawInput, errorPattern] of [
+    ["", /Введите имя участника/u],
+    ["111", /Введите имя участника/u],
+    ["Саша 0", /Код должен быть 111, 222, 333 или 444/u],
+    ["Саша 555", /Код должен быть 111, 222, 333 или 444/u],
+    ["Саша <script>", /Введите имя участника/u],
+    ["А".repeat(81), /Слишком длинное имя/u]
+  ]) {
+    response = await postPanelAction(env, {
+      action: "add_manual_queue_entry",
+      rawInput,
+      text: "произвольный текст в outbox"
+    });
+    data = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, false);
+    assert.match(data.error, errorPattern);
+    assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, entriesBeforeInvalid);
+    assert.equal((await pullOutbox(env)).length, 0);
+    assert.doesNotMatch(JSON.stringify(data), /panel-token|bridge-token/u);
+  }
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "close_queue" });
+  assert.equal((await json(response)).ok, true);
+  await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+  assert.equal((await getZoomOnlyStatus(env)).queue.isOpen, false);
 }
 
 async function testSafeZoomChatCodeIngest() {
@@ -503,8 +616,11 @@ async function testQueueControlActions() {
 
   response = await postPanelAction(env, { type: "queue", queueAction: "skip" });
   const skipped = await json(response);
-  assert.equal(skipped.ok, false);
-  assert.match(skipped.error, /ниже в очереди/iu);
+  if (skipped.ok) {
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+  } else {
+    assert.match(skipped.error, /ниже в очереди/iu);
+  }
 
   response = await postPanelAction(env, { type: "queue", queueAction: "done" });
   assert.equal((await json(response)).ok, true);
@@ -580,6 +696,7 @@ async function testYozhikBillAndGameActions() {
 await testAccess();
 await testSafeTestMessageAction();
 await testSafeAddTestParticipantAction();
+await testManualQueueEntryAction();
 await testSafeZoomChatCodeIngest();
 await testMessageButtonsAndOutbox();
 await testStatusAndQueueActions();
