@@ -166,7 +166,11 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Нажмите Починить вход Zoom/u);
   assert.match(html, /\.\/vnc\/vnc\.html/u);
   assert.match(html, /\.auth-help\[hidden\]\{display:none\}/u);
-  assert.match(html, /<iframe id="workerPanel"[\s\S]*<section class="control">/u);
+  assert.match(html, /<section class="control">[\s\S]*<iframe id="workerPanel"/u);
+  assert.match(html, /class="admin-panel"/u);
+  assert.match(html, /Админ \/ вход Zoom/u);
+  assert.match(html, /function syncAdminVisibility/u);
+  assert.match(html, /\$\("auth"\)\.hidden=!needAuth&&!admin\.open/u);
   assert.match(html, /fetch\("\.\/api\/status"/u);
   assert.match(html, /async function refreshAll\(\)[\s\S]*worker-panel\?refresh=/u);
   assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);

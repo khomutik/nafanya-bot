@@ -3883,10 +3883,15 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
   const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
   const testParticipantButton = `<button class="action test" type="button" data-type="add_test_participant" data-key="add_test_participant">+ \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a</button>`;
   const yozhikButton = `<button class="action publication-action" type="button" data-type="yozhik" data-key="yozhik">Ёжик на сегодня</button>`;
-  const modeKeys = new Set(["open_bill", "open_bk", "open_rs"]);
-  const dangerQueueKeys = new Set(["close_queue"]);
-  const queueModeButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => modeKeys.has(action.key)).map((action) => `<button class="action queue-open-action" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
-  const queueControlButtons = ZOOM_V2_PANEL_QUEUE_ACTIONS.filter((action) => !modeKeys.has(action.key) && action.key !== "remove_by_number").map((action) => `<button class="action ${dangerQueueKeys.has(action.key) ? "queue-danger-action" : "queue-control-action"}" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
+  const queueActionByKey = new Map(ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => [action.key, action]));
+  const quickQueueButtons = ["open_rs", "open_bk", "open_bill", "show_queue", "close_queue"].map((key) => {
+    const action = queueActionByKey.get(key);
+    return `<button class="action ${key === "close_queue" ? "queue-danger-action" : "queue-open-action"}" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`;
+  }).join("");
+  const queueControlButtons = ["done", "skip", "undo"].map((key) => {
+    const action = queueActionByKey.get(key);
+    return `<button class="action queue-control-action" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`;
+  }).join("");
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -3897,26 +3902,33 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; background: #f3f5f8; color: #171b33; }
-    main { max-width: 1040px; margin: 0 auto; padding: 20px; display: grid; gap: 14px; }
-    h1 { margin: 0; font-size: 30px; line-height: 1.1; }
-    h2 { margin: 0 0 10px; font-size: 18px; }
-    h3 { margin: 0 0 8px; font-size: 15px; }
-    section { border: 1px solid #d8dfe8; border-radius: 8px; padding: 15px; }
-    .panel-status { background: #eef8f0; border-color: #bad8bf; }
+    main { max-width: 1120px; margin: 0 auto; padding: 10px; display: grid; gap: 8px; }
+    h1 { margin: 0; font-size: 20px; line-height: 1.1; }
+    h2 { margin: 0 0 8px; font-size: 15px; }
+    h3 { margin: 0 0 6px; font-size: 13px; }
+    section { border: 1px solid #d8dfe8; border-radius: 8px; padding: 9px; }
+    .accordion-toggle { display: block; width: 100%; min-height: 24px; border: 0; background: transparent; padding: 0; margin: -2px 0 8px; color: inherit; font-size: 15px; font-weight: 850; line-height: 1.2; text-align: left; cursor: pointer; }
+    .accordion-toggle::before { content: "▾ "; color: #697086; }
+    .accordion-toggle[aria-expanded="false"] { margin-bottom: 0; }
+    .accordion-toggle[aria-expanded="false"]::before { content: "▸ "; }
+    .accordion-body[hidden] { display: none; }
+    .panel-status { position: sticky; top: 0; z-index: 3; background: rgba(238,248,240,.96); border-color: #bad8bf; backdrop-filter: blur(6px); }
     .meeting-section { background: #f7f9fd; border-color: #cfd8e8; }
     .publication-section { background: #fbf6ec; border-color: #e0cfae; }
-    .queue-open-section { background: #eef7fb; border-color: #bdd8e4; }
+    .quick-queue-section, .queue-open-section { background: #eef7fb; border-color: #bdd8e4; }
     .queue-control-section { background: #f4f0fb; border-color: #d6c8ea; }
-    .status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-    .metric { border: 1px solid #d8d0c1; border-radius: 8px; padding: 12px; background: #fff; min-height: 74px; }
-    .label { display: block; color: #5d6475; font-size: 13px; margin-bottom: 6px; }
-    .value { display: block; font-size: 20px; font-weight: 800; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .publication-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-    .publication-card { background: rgba(255,255,255,.66); border: 1px solid rgba(151,121,70,.24); border-radius: 8px; padding: 10px; }
-    .queue-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .compact-status-bar { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; }
+    .status { display: grid; grid-template-columns: repeat(4, minmax(90px, 1fr)); gap: 6px; }
+    .metric { border: 1px solid #d8d0c1; border-radius: 7px; padding: 6px 8px; background: #fff; min-height: 42px; }
+    .label { display: block; color: #5d6475; font-size: 11px; margin-bottom: 2px; }
+    .value { display: block; font-size: 15px; font-weight: 850; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .meeting-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .publication-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+    .publication-card { background: rgba(255,255,255,.66); border: 1px solid rgba(151,121,70,.24); border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
+    .quick-queue-actions, .queue-modes { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .queue-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .action { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; background: #ffffff; color: #171b33; font-size: 15px; font-weight: 750; text-align: left; padding: 10px 12px; cursor: pointer; }
+    .action { min-height: 34px; border: 1px solid #b9ad98; border-radius: 7px; background: #ffffff; color: #171b33; font-size: 13px; font-weight: 800; text-align: left; padding: 6px 8px; cursor: pointer; }
     .meeting-action { background: #ffffff; border-color: #b7c2d4; }
     .queue-open-action { background: #e8f6f0; border-color: #8ebca5; }
     .queue-control-action { background: #eef4ff; border-color: #aebbd4; }
@@ -3924,76 +3936,88 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     .action.test { background: #fff4df; border-color: #d9ad67; }
     .action.publication-action { background: #fffaf0; border-color: #d2b67f; }
     .action:disabled { opacity: .55; cursor: wait; }
-    .manual-add { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(120px, 160px); gap: 8px; align-items: start; margin-bottom: 10px; }
-    .manual-help { grid-column: 1 / -1; color: #697086; font-size: 13px; margin: -2px 0 0; }
-    .remove-row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(160px, 1fr); gap: 8px; margin-top: 8px; }
-    .manual-add input, .remove-row input { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; padding: 10px 12px; font: inherit; color: #171b33; background: #fff; }
-    .number-action { display: grid; grid-template-columns: minmax(120px, 180px) minmax(180px, 1fr); gap: 8px; }
-    .number-action + .number-action { margin-top: 8px; }
-    .number-action input { min-height: 48px; border: 1px solid #b9ad98; border-radius: 8px; padding: 10px 12px; font: inherit; color: #171b33; background: #fff; }
-    .queue-summary { margin: 0 0 12px; color: #4c5368; font-size: 14px; font-weight: 650; }
-    .log { min-height: 76px; max-height: 180px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 12px; font-size: 13px; }
-    @media (max-width: 820px) { main { padding: 14px; } .status, .grid, .publication-grid, .queue-modes, .queue-controls, .manual-add, .remove-row, .number-action { grid-template-columns: 1fr; } h1 { font-size: 24px; } .manual-help { grid-column: auto; } }
+    .queue-workbench { display: grid; grid-template-columns: minmax(240px, 1.35fr) minmax(220px, 1fr); gap: 7px; align-items: start; }
+    .manual-add { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(86px, 120px); gap: 6px; align-items: start; }
+    .manual-help { grid-column: 1 / -1; color: #697086; font-size: 11px; margin: -2px 0 0; }
+    .remove-row { display: grid; grid-template-columns: minmax(76px, 110px) minmax(90px, 1fr); gap: 6px; }
+    .manual-add input, .remove-row input, .number-action input { min-height: 34px; border: 1px solid #b9ad98; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; color: #171b33; background: #fff; }
+    .number-action { display: grid; grid-template-columns: minmax(88px, 120px) minmax(130px, 1fr); gap: 6px; }
+    .queue-summary { margin: 0 0 7px; color: #4c5368; font-size: 13px; font-weight: 700; }
+    .log { min-height: 38px; max-height: 88px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 7px 9px; font-size: 12px; }
+    @media (max-width: 900px) { .meeting-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .quick-queue-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); } .status { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 640px) { main { padding: 7px; } .compact-status-bar, .publication-grid, .queue-workbench { grid-template-columns: 1fr; } .grid, .meeting-grid, .quick-queue-actions, .queue-modes, .queue-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-add, .remove-row, .number-action { grid-template-columns: minmax(0, 1fr) auto; } h1 { font-size: 18px; } .action { min-height: 38px; } .manual-help { grid-column: 1 / -1; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>Пульт Нафани для Zoom</h1>
-    <section class="panel-status">
-      <h2>Нафаня в Zoom</h2>
+    <section class="panel-status compact-status-bar">
+      <h1>Пульт Нафани в Zoom</h1>
       <div class="status">
         <div class="metric"><span class="label">Zoom Sender</span><span class="value" id="senderStatus">ожидает</span></div>
-        <div class="metric"><span class="label">Outbox</span><span class="value" id="outboxStatus">0 сообщений</span></div>
         <div class="metric"><span class="label">Очередь</span><span class="value" id="queueStatus">загрузка</span></div>
+        <div class="metric"><span class="label">Outbox</span><span class="value" id="outboxStatus">0</span></div>
+        <div class="metric"><span class="label">Заявок</span><span class="value" id="entriesStatus">0</span></div>
       </div>
     </section>
-    <section class="meeting-section">
-      <h2>Сообщения собрания</h2>
-      <div class="grid meeting-grid">${messageButtons}</div>
-      <div class="grid">${testButton}</div>
+    <section class="quick-queue-section">
+      <h2>Быстрое управление очередью</h2>
+      <div class="grid quick-queue-actions">${quickQueueButtons}</div>
     </section>
-    <section class="publication-section">
-      <h2>Ежедневные / отдельные публикации</h2>
-      <div class="publication-grid">
-        <div class="publication-card">
-          <h3>Ёжик</h3>
-          ${yozhikButton}
-        </div>
-        <div class="publication-card">
-          <h3>Отрывок Билла</h3>
-          <div class="number-action">
-            <input id="billExcerptNumber" type="number" min="1" max="332" inputmode="numeric" placeholder="Отрывок 1–332" aria-label="Номер отрывка Билла">
-            <button class="action publication-action" id="billExcerptButton" type="button">Отправить отрывок Билла</button>
+    <section class="queue-control-section accordion" data-accordion="currentQueue">
+      <button class="accordion-toggle" type="button" data-accordion-toggle="currentQueue" aria-expanded="true" aria-controls="accordion-currentQueue">Текущая очередь</button>
+      <div class="accordion-body" id="accordion-currentQueue">
+        <p class="queue-summary" id="queueSummary">Очередь загружается.</p>
+        <div class="queue-workbench">
+          <div>
+            <h3>Добавить вручную</h3>
+            <div class="manual-add">
+              <input id="manualQueueInput" type="text" maxlength="120" placeholder="Имя и код: Саша 111" aria-label="Добавить в очередь вручную">
+              <button class="action queue-control-action" id="manualQueueButton" type="button">Добавить</button>
+              <p class="manual-help">Если код не указан, добавится как 111.</p>
+            </div>
+          </div>
+          <div>
+            <h3>Управление</h3>
+            <div class="grid queue-controls">${queueControlButtons}</div>
+            <div class="remove-row">
+              <input id="removeNumber" type="number" min="1" max="999" inputmode="numeric" placeholder="№" aria-label="Номер в очереди">
+              <button class="action queue-control-action" id="removeButton" type="button">Удалить №</button>
+            </div>
           </div>
         </div>
-        <div class="publication-card">
-          <h3>Вопрос игры</h3>
-          <div class="number-action">
-            <input id="gameQuestionNumber" type="number" min="1" max="500" inputmode="numeric" placeholder="Вопрос 1–500" aria-label="Номер вопроса игры">
-            <button class="action publication-action" id="gameQuestionButton" type="button">Отправить вопрос игры</button>
+        <div class="grid">${testParticipantButton}</div>
+      </div>
+    </section>
+    <section class="meeting-section accordion" data-accordion="meeting">
+      <button class="accordion-toggle" type="button" data-accordion-toggle="meeting" aria-expanded="false" aria-controls="accordion-meeting">Сообщения собрания</button>
+      <div class="accordion-body" id="accordion-meeting" hidden>
+        <div class="grid meeting-grid">${messageButtons}${testButton}</div>
+      </div>
+    </section>
+    <section class="publication-section accordion" data-accordion="publications">
+      <button class="accordion-toggle" type="button" data-accordion-toggle="publications" aria-expanded="false" aria-controls="accordion-publications">Ежедневные публикации</button>
+      <div class="accordion-body" id="accordion-publications" hidden>
+        <div class="publication-grid">
+          <div class="publication-card">
+            <h3>Ёжик</h3>
+            ${yozhikButton}
+          </div>
+          <div class="publication-card">
+            <h3>Отрывок Билла</h3>
+            <div class="number-action">
+              <input id="billExcerptNumber" type="number" min="1" max="332" inputmode="numeric" placeholder="Отрывок 1–332" aria-label="Номер отрывка Билла">
+              <button class="action publication-action" id="billExcerptButton" type="button">Отправить отрывок Билла</button>
+            </div>
+          </div>
+          <div class="publication-card">
+            <h3>Вопрос игры</h3>
+            <div class="number-action">
+              <input id="gameQuestionNumber" type="number" min="1" max="500" inputmode="numeric" placeholder="Вопрос 1–500" aria-label="Номер вопроса игры">
+              <button class="action publication-action" id="gameQuestionButton" type="button">Отправить вопрос игры</button>
+            </div>
           </div>
         </div>
       </div>
-    </section>
-    <section class="queue-open-section">
-      <h2>Открыть очередь</h2>
-      <div class="grid queue-modes">${queueModeButtons}</div>
-    </section>
-    <section class="queue-control-section">
-      <h2>Управление текущей очередью</h2>
-      <p class="queue-summary" id="queueSummary">Очередь загружается.</p>
-      <h3>Добавить в очередь вручную</h3>
-      <div class="manual-add">
-        <input id="manualQueueInput" type="text" maxlength="120" placeholder="Имя и код: Саша 111" aria-label="Добавить в очередь вручную">
-        <button class="action queue-control-action" id="manualQueueButton" type="button">Добавить</button>
-        <p class="manual-help">Если код не указан, добавится как 111.</p>
-      </div>
-      <div class="grid queue-controls">${queueControlButtons}</div>
-      <div class="remove-row">
-        <input id="removeNumber" type="number" min="1" max="999" inputmode="numeric" placeholder="Номер в очереди" aria-label="Номер в очереди">
-        <button class="action queue-control-action" id="removeButton" type="button">Удалить №</button>
-      </div>
-      <div class="grid">${testParticipantButton}</div>
     </section>
     <pre class="log" id="log">Пульт загружен.</pre>
   </main>
@@ -4003,11 +4027,33 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
     const statusPath = "${escapeAttr(statusPath)}";
     const logEl = document.getElementById("log");
     const buttons = [...document.querySelectorAll(".action")];
+    const accordionKeyPrefix = "nafanyaZoomPanelAccordion:";
 
     function addLog(text) {
       const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
     }
+
+    function setAccordion(name, isOpen) {
+      const toggle = document.querySelector('[data-accordion-toggle="' + name + '"]');
+      const body = document.getElementById("accordion-" + name);
+      if (!toggle || !body) return;
+      toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      body.hidden = !isOpen;
+    }
+
+    document.querySelectorAll("[data-accordion-toggle]").forEach((toggle) => {
+      const name = toggle.dataset.accordionToggle;
+      const key = accordionKeyPrefix + name;
+      const saved = localStorage.getItem(key);
+      const defaultOpen = toggle.getAttribute("aria-expanded") === "true";
+      setAccordion(name, saved ? saved === "open" : defaultOpen);
+      toggle.addEventListener("click", () => {
+        const isOpen = toggle.getAttribute("aria-expanded") !== "true";
+        setAccordion(name, isOpen);
+        localStorage.setItem(key, isOpen ? "open" : "closed");
+      });
+    });
 
     function headers() {
       return { "content-type": "application/json", "x-nafanya-zoom-panel-token": token };
@@ -4026,9 +4072,10 @@ function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || "status failed");
       document.getElementById("senderStatus").textContent = data.sender?.connected ? "подключён" : "не подключён / ожидает";
-      document.getElementById("outboxStatus").textContent = String(data.outboxSize || 0) + " сообщений";
+      document.getElementById("outboxStatus").textContent = String(data.outboxSize || 0);
       document.getElementById("queueStatus").textContent = queueName(data.queue);
       const entriesCount = Array.isArray(data.queue?.entries) ? data.queue.entries.length : 0;
+      document.getElementById("entriesStatus").textContent = String(entriesCount);
       document.getElementById("queueSummary").textContent = data.queue?.isOpen ? "Режим: " + queueName(data.queue) + ". Заявок: " + entriesCount + "." : "Очередь закрыта. Заявок: " + entriesCount + ".";
       return data;
     }
