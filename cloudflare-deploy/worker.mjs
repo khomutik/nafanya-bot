@@ -1278,7 +1278,7 @@ var AnnouncementStateDurableObject = class {
         if (!entry) {
           return Response.json({ ok: true, handled: false, ignored: "unsupported_text", queue });
         }
-        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: queue.mode !== "bill" }, buildZoomOnlyQueueTextCore);
+        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: true, allowDuplicateBillSpeechEntries: true }, buildZoomOnlyQueueTextCore);
         announcementState.zoomOnlyQueueState = queueResult.state;
         const queued = [];
         const appendZoomOnlyOutboxMessages = __name((messages) => {

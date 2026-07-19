@@ -561,7 +561,7 @@ async function testZoomBillChatIngest() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const value = String(url || "");
-    if (value.includes("speaker_questions.json")) return Response.json({ "17": "Тестовый вопрос игры", "415": "Тестовый вопрос 415" });
+    if (value.includes("speaker_questions.json")) return Response.json({ "17": "Тестовый вопрос игры", "55": "Тестовый вопрос 55", "415": "Тестовый вопрос 415" });
     return originalFetch(url, init);
   };
   try {
@@ -583,6 +583,7 @@ async function testZoomBillChatIngest() {
     assert.equal(data.queue.entries[0].author, "Vladimir");
     assert.equal(data.queue.entries[0].label, "111");
     let outbox = await pullOutbox(env);
+    let status = null;
     assert.ok(outbox.length >= 1);
     assert.match(outbox.at(-1).text, /Vladimir — 111/u);
     await ackOutbox(env, outbox.map((message) => message.id));
@@ -604,9 +605,14 @@ async function testZoomBillChatIngest() {
     });
     data = await json(response);
     assert.equal(data.ok, true);
-    assert.equal(data.duplicate, true);
-    assert.equal((await getZoomOnlyStatus(env)).queue.entries.length, 1);
-    assert.equal((await pullOutbox(env)).length, 0);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 2);
+    assert.equal(status.queue.entries[1].label, "222");
+    outbox = await pullOutbox(env);
+    assert.match(outbox.at(-1).text, /Vladimir — 222/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
 
     response = await postChatIngest(env, {
       authorName: "Vladimir",
@@ -617,10 +623,41 @@ async function testZoomBillChatIngest() {
     assert.equal(data.ok, true);
     assert.equal(data.handled, true);
     assert.equal(data.duplicate, false);
-    let status = await getZoomOnlyStatus(env);
-    assert.equal(status.queue.entries.length, 2);
-    assert.equal(status.queue.entries[1].label, "222");
+    status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 3);
+    assert.equal(status.queue.entries[2].label, "222");
     await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Вы",
+      text: "111",
+      sourceFingerprint: "fp-bill-you-111"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    status = await getZoomOnlyStatus(env);
+    assert.ok(status.queue.entries.some((entry) => entry.author === "Вы" && entry.label === "111"));
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Вы",
+      text: "игра 55",
+      sourceFingerprint: "fp-bill-you-game-55"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    assert.equal(data.gameNumber, 55);
+    status = await getZoomOnlyStatus(env);
+    assert.ok(status.queue.entries.some((entry) => entry.author === "Вы" && entry.label === "игра 55"));
+    outbox = await pullOutbox(env);
+    assert.ok(outbox.length >= 2);
+    assert.match(outbox[0].text, /Вопрос 55:[\s\S]*Тестовый вопрос 55/u);
+    assert.match(outbox.at(-1).text, /Вы — игра 55/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
 
     response = await postChatIngest(env, {
       authorName: "Vladimir",

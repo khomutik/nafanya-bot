@@ -399,6 +399,41 @@ test("chat ingest candidates parse Bill game child messages", () => {
   assert.equal(candidates[0].sourceFingerprint, "child-game-415");
 });
 
+test("chat ingest candidates accept local Zoom author You in Bill messages", () => {
+  const messages = [
+    {
+      displayName: "\u0412\u044b",
+      text: "111",
+      timestamp: "03:50 PM",
+      fingerprint: "you-child-111",
+      rawDom: '<div id="chat-message-content-you-111" aria-label="\u0412\u044b to Everyone, 03:50 PM, 111">111</div>',
+      groupAuthorName: "\u0412\u044b",
+      groupTimestamp: "03:50 PM",
+      groupText: "\u0412\u044b to Everyone 03:50 PM 111",
+      groupStableId: "1-{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}",
+      childIndex: "0"
+    },
+    {
+      displayName: "\u0412\u044b",
+      text: "\u0438\u0433\u0440\u0430 55",
+      timestamp: "03:51 PM",
+      fingerprint: "you-child-game-55",
+      rawDom: '<div id="chat-message-content-you-game" aria-label="\u0412\u044b to Everyone, 03:51 PM, \u0438\u0433\u0440\u0430 55">\u0438\u0433\u0440\u0430 55</div>',
+      groupAuthorName: "\u0412\u044b",
+      groupTimestamp: "03:51 PM",
+      groupText: "\u0412\u044b to Everyone 03:51 PM \u0438\u0433\u0440\u0430 55",
+      groupStableId: "1-{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}",
+      childIndex: "0"
+    }
+  ];
+
+  const candidates = selectZoomChatCodeIngestCandidates(messages);
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["\u0412\u044b", "\u0412\u044b"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "\u0438\u0433\u0440\u0430 55"]);
+  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["you-child-111", "you-child-game-55"]);
+});
+
 test("chat ingest candidates ignore unsafe bare chunks and queue publications", () => {
   const messages = [
     { displayName: "222", text: "222", timestamp: "", fingerprint: "bare-222" },
@@ -423,6 +458,31 @@ test("chat ingest candidates ignore unsafe bare chunks and queue publications", 
       groupText: "Рабочее собрание ОЧЕРЕДЬ ОТКРЫТА 1. Маня Х. — 111",
       groupStableId: "own-publication",
       childIndex: "1"
+    }
+  ];
+
+  assert.equal(selectZoomChatCodeIngestCandidates(messages).length, 0);
+});
+
+test("chat ingest candidates ignore Nafanya publications even when visible in chat", () => {
+  const messages = [
+    {
+      displayName: "\u041d\u0430\u0444\u0430\u043d\u044f",
+      text: "\u0420\u0430\u0431\u043e\u0447\u0435\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0435. \u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\". \u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410. 1. \u0412\u044b \u2014 111",
+      timestamp: "03:52 PM",
+      fingerprint: "nafanya-queue-publication",
+      groupAuthorName: "\u041d\u0430\u0444\u0430\u043d\u044f",
+      groupTimestamp: "03:52 PM",
+      groupText: "\u041d\u0430\u0444\u0430\u043d\u044f to Everyone 03:52 PM \u0420\u0430\u0431\u043e\u0447\u0435\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0435. \u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\". \u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410. 1. \u0412\u044b \u2014 111"
+    },
+    {
+      displayName: "\u041d\u0430\u0444\u0430\u043d\u044f",
+      text: "\u0412\u043e\u043f\u0440\u043e\u0441 55:\n\n\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+      timestamp: "03:53 PM",
+      fingerprint: "nafanya-game-question",
+      groupAuthorName: "\u041d\u0430\u0444\u0430\u043d\u044f",
+      groupTimestamp: "03:53 PM",
+      groupText: "\u041d\u0430\u0444\u0430\u043d\u044f to Everyone 03:53 PM \u0412\u043e\u043f\u0440\u043e\u0441 55: \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441"
     }
   ];
 

@@ -69,7 +69,7 @@ function parseZoomQueueCodeMessage(message = {}) {
 function isValidChatAuthor(value) {
   const author = normalizeChatAtom(value);
   if (!author) return false;
-  if (/^(?:you|вы|\u0432\u044b|\u043d\(|нафаня|nafanya|nafanya bot)$/iu.test(author)) return false;
+  if (/^(?:\u043D\(|\u043D\u0430\u0444\u0430\u043D\u044F|nafanya|nafanya bot)$/iu.test(author)) return false;
   if (/^(?:111|222|333|444|\u0438\u0433\u0440\u0430\s+\d{1,3}|to|everyone|\d{1,2}:\d{2}(?:\s?[ap]m)?)$/iu.test(author)) return false;
   if (isQueuePublicationText(author)) return false;
   return !/\bto\s+everyone\b|\b\d{1,2}:\d{2}\b/iu.test(author);

@@ -395,7 +395,7 @@ export function runQueueStateAction(queueState, action, payload = {}, buildText 
   }
   if (action === "add") {
     if (payload.entry?.kind === "bill_speech") {
-      if (isDuplicatePendingBillSpeechEntry(state, payload.entry)) {
+      if (!payload.allowDuplicateBillSpeechEntries && isDuplicatePendingBillSpeechEntry(state, payload.entry)) {
         return queueResult(state, { ok: true, duplicate: true, publishQueue: true }, buildText);
       }
       pushQueueHistory(state);
@@ -409,7 +409,7 @@ export function runQueueStateAction(queueState, action, payload = {}, buildText 
       }
       pushQueueHistory(state);
     }
-    addQueueEntryToState(state, payload.entry, { allowDuplicateEntries: Boolean(payload.allowDuplicateEntries) });
+    addQueueEntryToState(state, payload.entry, { allowDuplicateEntries: Boolean(payload.allowDuplicateEntries || payload.allowDuplicateBillSpeechEntries) });
     state.queueMessageId = null;
     return queueResult(state, { ok: true, publishQueue: true, previousMessageId }, buildText);
   }

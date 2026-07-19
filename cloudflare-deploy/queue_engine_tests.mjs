@@ -103,6 +103,19 @@ function testBillMode() {
   assert.doesNotMatch(text, /111 \u2014 111/u);
 }
 
+function testBillZoomChatAllowsNewSourceRepeats() {
+  let state = open("bill");
+  state = addParsed(state, "\u0412\u044b", "111", "Zoom");
+  const repeated = act(state, "add", {
+    entry: parseQueueEntry(message("\u0412\u044b", "111", "Zoom"), state, { source: "Zoom" }),
+    allowDuplicateBillSpeechEntries: true,
+    allowDuplicateEntries: true
+  });
+  assert.equal(repeated.response.duplicate, undefined);
+  assert.equal(repeated.state.entries.length, 2);
+  assert.deepEqual(repeated.state.entries.map((entry) => entry.label), ["111", "222"]);
+}
+
 function testBkMode() {
   let state = open("bk");
   state = addParsed(state, "\u041c\u0430\u0448\u0430", "111 \u0447\u0438\u0442\u0430\u0442\u044c");
@@ -142,6 +155,7 @@ function testSourceCleanup() {
 testSeparateStates();
 testCommonRules();
 testBillMode();
+testBillZoomChatAllowsNewSourceRepeats();
 testBkMode();
 testRsMode();
 testSourceCleanup();
