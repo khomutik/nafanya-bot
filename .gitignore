@@ -14,8 +14,14 @@
 # Local dependency and tool caches
 node_modules/
 .wrangler/
+.wrangler-dry-run-*/
+.codex/
+deliverables/
 __pycache__/
 *.pyc
+exec-*.png
+nafanya-493610-8cea2c43c14d.json
+*service-account*.json
 zoom-bridge/logs/
 zoom-bridge/assets/*.y4m
 

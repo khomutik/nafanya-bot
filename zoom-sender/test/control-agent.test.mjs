@@ -1,8 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ZoomControlService, publicHealth, safeError } from "../control-agent/service.mjs";
-import { updateEnvText } from "../control-agent/docker-ops.mjs";
+import { SAFE_VALUES, updateEnvText } from "../control-agent/docker-ops.mjs";
 import { buildControlHtml } from "../control-agent/html.mjs";
+import { createCipheriv, createHash } from "node:crypto";
+import { buildZoomAppSessionCookie, decryptZoomAppContext, issueZoomAppSession, verifyZoomAppSession } from "../control-agent/zoom-app-auth.mjs";
+
+function encryptZoomAppContext(context, secret) {
+  const iv = Buffer.from("000102030405060708090a0b", "hex");
+  const aad = Buffer.from("zoom-app", "utf8");
+  const key = createHash("sha256").update(secret, "utf8").digest();
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(aad);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(context), "utf8"), cipher.final()]);
+  const header = Buffer.alloc(1 + iv.length + 2 + aad.length + 4);
+  let offset = 0;
+  header.writeUInt8(iv.length, offset); offset += 1;
+  iv.copy(header, offset); offset += iv.length;
+  header.writeUInt16LE(aad.length, offset); offset += 2;
+  aad.copy(header, offset); offset += aad.length;
+  header.writeUInt32LE(ciphertext.length, offset);
+  return Buffer.concat([header, ciphertext, cipher.getAuthTag()]).toString("base64url");
+}
 
 function fakeOps(overrides = {}) {
   const calls = [];
@@ -57,13 +76,12 @@ test("control start refuses to run while old bridge is active", async () => {
   assert.ok(!ops.calls.includes("start-sender"));
 });
 
-test("control stop blocks while queue is open", async () => {
+test("control stop ignores preserved legacy queue state", async () => {
   const ops = fakeOps({ async getQueueStatus() { return { queueOpen: true }; } });
   const service = new ZoomControlService(ops);
   const result = await service.stop();
-  assert.equal(result.status, 409);
-  assert.match(result.error, /Сначала закройте очередь/u);
-  assert.ok(!ops.calls.includes("stop-sender"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(ops.calls, ["stop-sender", "mode:safe"]);
 });
 
 test("control stop uses only sender stop and safe mode", async () => {
@@ -154,6 +172,10 @@ test("env mode updates only whitelisted values", () => {
   assert.match(result, /ZOOM_MEETING_URL=private/u);
 });
 
+test("live mode has no legacy Zoom chat-ingest switch", () => {
+  assert.equal("ZOOM_SENDER_CHAT_INGEST_ENABLED" in SAFE_VALUES.live, false);
+});
+
 test("control page exposes human buttons and statuses without secrets", () => {
   const html = buildControlHtml();
   assert.match(html, /Включить Нафаню/u);
@@ -171,13 +193,104 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Админ \/ вход Zoom/u);
   assert.match(html, /function syncAdminVisibility/u);
   assert.match(html, /\$\("auth"\)\.hidden=!needAuth&&!admin\.open/u);
-  assert.match(html, /fetch\("\.\/api\/status"/u);
+  assert.match(html, /authorizedFetch\("\.\/api\/status"/u);
   assert.match(html, /async function refreshAll\(\)[\s\S]*worker-panel\?refresh=/u);
   assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);
   assert.match(html, /let pendingMessage=""/u);
   assert.match(html, /pendingMessage=data\.error\|\|"Операция не выполнена"/u);
   assert.match(html, /\[s\.lastError,pendingMessage,next\]/u);
+  assert.match(html, /button:active,.auth-link:active\{transform:translateY\(2px\)/u);
+  assert.match(html, /box-shadow:0 3px 0 #777267/u);
+  assert.match(html, /class="power-row">[\s\S]*id="start"[\s\S]*id="stop"[\s\S]*<\/div>/u);
+  assert.match(html, /Обновить состояние/u);
+  assert.match(html, /body\{margin:0;min-height:100vh;overflow:auto;background:#f5f6fa\}/u);
+  assert.match(html, /\.control\{position:static/u);
+  assert.match(html, /new ResizeObserver\(resizeWorkerPanel\)/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
+});
+
+test("control page has a configurable shared host timer and collapsible tech panel", () => {
+  const html = buildControlHtml({ zoomApp: true });
+  assert.match(html, /<section class="control">[\s\S]*id="timerPanel"[\s\S]*id="techPanel"/u);
+  assert.match(html, /id="timerPanel" open>[\s\S]*Таймер ведущего/u);
+  assert.match(html, /id="techPanel" open>[\s\S]*Пульт техведа/u);
+  assert.match(html, /id="timerDisplay"[^>]*>5:00</u);
+  assert.match(html, /id="timerMinutes"[^>]*value="5"/u);
+  assert.match(html, /id="timerStart">Старт</u);
+  assert.match(html, /id="timerPause" disabled>Пауза</u);
+  assert.match(html, /id="timerPlus1">\+1</u);
+  assert.match(html, /id="timerPlus2">\+2</u);
+  assert.match(html, /id="timerReset">Стоп \/ сброс</u);
+  assert.match(html, /const TIMER_DEFAULT_MS=5\*60\*1000/u);
+  assert.match(html, /baseMs:TIMER_DEFAULT_MS/u);
+  assert.match(html, /action:"zoom_timer_action"/u);
+  assert.match(html, /timerRequest\("sync"\)/u);
+  assert.match(html, /setInterval\(syncSharedTimer,5000\)/u);
+  assert.doesNotMatch(html, /setInterval\(syncSharedTimer,1500\)/u);
+  assert.match(html, /configured\.product/u);
+  assert.match(html, /zoomProduct==="desktop"&&timerExecutor&&timerIndicatorSupported/u);
+  assert.match(html, /configured\.product/u);
+  assert.doesNotMatch(html, /timerPreview|Проверить 7 гудков/u);
+  assert.match(html, /withSound:true/u);
+  assert.match(html, /function indicatorMilliseconds\(\)\{return Math\.max\(0,Math\.ceil\(remainingNow\(\)\)\)\}/u);
+  assert.match(html, /start:indicatorMilliseconds\(\)/u);
+  assert.doesNotMatch(html, /indicatorMilliseconds\(\)[\s\S]{0,80}\/1000/u);
+  assert.doesNotMatch(html, /songChoice|timerSound/u);
+  assert.match(html, /getSupportedJsApis/u);
+  assert.match(html, /indicatorSupported:timerIndicatorSupported/u);
+  assert.doesNotMatch(html, /for\(let index=0;index<7;index\+\+|shareComputerAudio|onParticipantChange|meeting_board_replay|claim_finish/u);
+  assert.match(html, /timerCommand\("extend",\{deltaMs:minutes\*60000\}\)/u);
+  assert.doesNotMatch(html, /extendDuration:minutes\*60000/u);
+  assert.doesNotMatch(html, /AudioContext|webkitAudioContext/u);
+  assert.doesNotMatch(html, /timer-note|id="timerNote"|Цифры видят|семь гудков слышат/u);
+  assert.match(html, /document\.activeElement!==minutesInput/u);
+});
+
+test("Zoom App page initializes the SDK and hides server administration", () => {
+  const html = buildControlHtml({ zoomApp: true });
+  assert.match(html, /https:\/\/appssdk\.zoom\.us\/sdk\.js/u);
+  assert.match(html, /zoomSdk\.config/u);
+  assert.match(html, /appPopout/u);
+  assert.match(html, /setDynamicIndicator/u);
+  assert.match(html, /removeDynamicIndicator/u);
+  assert.match(html, /extendDynamicIndicator/u);
+  assert.doesNotMatch(html, /setVirtualForeground|removeVirtualForeground|timerOnTile/u);
+  assert.match(html, /id="popout"/u);
+  assert.match(html, /class="utility-row"><button id="popout"/u);
+  assert.match(html, /Сделать отдельным окном/u);
+  assert.doesNotMatch(html, /showAppInvitationDialog|id="invite"|Пригласить помощника/u);
+  assert.match(html, /id="adminPanel" hidden>[\s\S]*id="refresh"/u);
+  assert.doesNotMatch(buildControlHtml(), /appssdk\.zoom\.us/u);
+  assert.match(html, /function reauthorizeZoomApp\(response\)/u);
+  assert.match(html, /response\.status!==401/u);
+  assert.match(html, /location\.replace\(url\.toString\(\)\)/u);
+  assert.match(html, /async function authorizedFetch\(resource,options\)/u);
+});
+
+test("native timer treats an already absent indicator as a successful reset", () => {
+  const html = buildControlHtml({ zoomApp: true });
+  assert.match(html, /dynamicIndicatorAlreadyAbsent/u);
+  assert.match(html, /no dynamic indicator to remove/iu);
+  assert.match(html, /if\(dynamicIndicatorAlreadyAbsent\(error\)\)return true/u);
+});
+
+test("Zoom App context issues a meeting-length session after validation", () => {
+  const nowMs = Date.UTC(2026, 6, 30, 20, 0, 0);
+  const secret = "test-client-secret";
+  const context = { typ: "meeting", mid: "meeting-uuid", uid: "user-id", exp: Math.floor(nowMs / 1000) + 3600 };
+  const encrypted = encryptZoomAppContext(context, secret);
+  assert.deepEqual(decryptZoomAppContext(encrypted, secret, { nowMs }), context);
+
+  const session = issueZoomAppSession(context, secret, { nowMs });
+  assert.equal(verifyZoomAppSession(session, secret, { nowMs })?.mid, "meeting-uuid");
+  assert.equal(verifyZoomAppSession(`${session}x`, secret, { nowMs }), null);
+  assert.equal(verifyZoomAppSession(session, secret, { nowMs: nowMs + 3_700_000 })?.mid, "meeting-uuid");
+  assert.equal(verifyZoomAppSession(session, secret, { nowMs: nowMs + 12 * 60 * 60 * 1000 + 1 }), null);
+  assert.match(buildZoomAppSessionCookie("nafanya_zoom_app", session), /HttpOnly; Secure; SameSite=None/u);
+
+  assert.throws(() => decryptZoomAppContext(encryptZoomAppContext({ ...context, exp: Math.floor(nowMs / 1000) - 1 }, secret), secret, { nowMs }), /expired/u);
+  assert.throws(() => decryptZoomAppContext(encryptZoomAppContext({ ...context, mid: "" }, secret), secret, { nowMs }), /meeting_required/u);
+  assert.throws(() => decryptZoomAppContext(encrypted.slice(0, -2) + "aa", secret, { nowMs }), /invalid/u);
 });
 
 test("healthy refresh clears a stale timeout error", async () => {
@@ -208,9 +321,19 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.match(source, /\/api\/stop/u);
   assert.match(source, /\/api\/auth-setup/u);
   assert.match(source, /\/auth\/check/u);
+  assert.match(source, /x-zoom-app-context/u);
+  assert.match(source, /\/zoom-app/u);
+  assert.match(source, /decryptZoomAppContext/u);
+  assert.doesNotMatch(source, /team_chat_test|ZOOM_TEAM_CHAT|workerMeetingId/u);
+  assert.match(source, /zoomAppLockedHtml/u);
+  assert.match(source, /strict-transport-security/u);
+  assert.match(source, /url\.pathname === "\/zoom-only\/library\/import" && access !== "admin"/u);
   assert.match(source, /\/api\/auth-setup\/stop/u);
-  assert.match(source, /const actionPath = "\.\/zoom-only\/app\/action"/u);
-  assert.match(source, /const statusPath = "\.\/zoom-only\/status"/u);
+  assert.ok(source.includes(`.replaceAll('\"/zoom-only/app/action\"', '\"./zoom-only/app/action\"')`));
+  assert.ok(source.includes(`.replaceAll('\"/zoom-only/library/status\"', '\"./zoom-only/library/status\"')`));
+  assert.match(source, /"\/zoom-only\/library\/import"/u);
+  assert.match(source, /new URLSearchParams\(search\)/u);
+  assert.match(source, /url\.pathname, url\.search/u);
   assert.doesNotMatch(source, /child_process|exec\(|spawn\(/u);
 });
 

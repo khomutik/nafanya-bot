@@ -4,9 +4,9 @@ import { Backoff } from "../src/backoff.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
-import { ZoomSenderService, buildZoomChatLogicalKey, extractZoomChatDomMessageId, extractZoomChatMessageId, selectZoomChatCodeIngestCandidates } from "../src/sender.mjs";
+import { ZoomSenderService } from "../src/sender.mjs";
 import { WorkerOutboxClient, classifyWorkerFetchError, classifyWorkerHttpStatus } from "../src/worker-client.mjs";
-import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
+import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, exactOwnChatRecords, isOwnIdentityChatRecord, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -67,29 +67,6 @@ test("worker errors are classified for health without exposing secrets", async (
   });
 });
 
-test("outbox client sends chat ingest to dedicated endpoint", async () => {
-  const calls = [];
-  const client = new WorkerOutboxClient(makeConfig(), async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body), secret: init.headers["x-nafanya-zoom-secret"] });
-    return jsonResponse({ ok: true, handled: true });
-  });
-
-  await client.ingestChatMessage({
-    authorName: "Маня Х.",
-    text: "111",
-    timestamp: "03:44 PM",
-    sourceFingerprint: "fp-1",
-    observedAt: "now",
-    canonicalSourceMessageId: "zoom|1-{guid}|111"
-  });
-  assert.equal(calls[0].url, "https://worker.example/zoom-only/chat-ingest");
-  assert.equal(calls[0].secret, "secret");
-  assert.equal(calls[0].body.text, "111");
-  assert.equal(calls[0].body.authorName, "Маня Х.");
-  assert.equal(calls[0].body.sourceFingerprint, "zoom|1-{guid}|111");
-});
-
-
 test("config reads dry-run and polling intervals from env with safe fallbacks", () => {
   const config = loadConfig({
     WORKER_BASE_URL: "https://worker.example/",
@@ -98,13 +75,13 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_DISPLAY_NAME: "Display Name",
     ZOOM_SENDER_DRY_RUN: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "true",
-    ZOOM_SENDER_CHAT_INGEST_ENABLED: "true",
     ZOOM_SENDER_MIN_POLL_MS: "2000",
     ZOOM_SENDER_MAX_POLL_MS: "25000",
     ZOOM_SENDER_ERROR_POLL_MS: "7000",
     ZOOM_SENDER_HEALTH_PORT: "4001",
     ZOOM_SENDER_DIAGNOSTICS_DIR: "/tmp/zoom-diagnostics",
     ZOOM_SENDER_BROWSER_ARGS: "--one --two",
+    ZOOM_SENDER_OUTBOX_MEETING_ID: "81047381947",
     HEADLESS: "false"
   });
   assert.equal(config.workerBaseUrl, "https://worker.example");
@@ -112,7 +89,6 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.participantName, "Display Name");
   assert.equal(config.dryRun, true);
   assert.equal(config.chatReadonlyDiagnostics, true);
-  assert.equal(config.chatIngestEnabled, true);
   assert.equal(config.minIntervalMs, 2000);
   assert.equal(config.maxIntervalMs, 25000);
   assert.equal(config.errorIntervalMs, 7000);
@@ -120,6 +96,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.diagnosticsDir, "/tmp/zoom-diagnostics");
   assert.deepEqual(config.browserArgs, ["--one", "--two"]);
   assert.equal(config.headless, false);
+  assert.equal(config.outboxMeetingId, "81047381947");
 
   const fallback = loadConfig({
     ZOOM_SENDER_MIN_POLL_MS: "bad",
@@ -130,7 +107,21 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.maxIntervalMs, 1500);
   assert.equal(fallback.errorIntervalMs, 10000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
-  assert.equal(fallback.chatIngestEnabled, false);
+  assert.equal(fallback.outboxMeetingId, "");
+});
+
+test("replacement safety matches only exact messages owned by Nafanya", () => {
+  const records = [
+    { recordKind: "zoom-message-identity", sourceMessageId: "9-{c1c14f7f-14ab-4154-b8de-6bddb7ab8f81}", displayName: "You", rawDom: '<div class="new-chat-message__text-box--self"></div>', text: "\u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410:\n\n1. \u0412\u0430\u0441\u044f" },
+    { recordKind: "zoom-message-identity", sourceMessageId: "7-{9f60eaa0-5d15-4b3b-a2da-00a57ca61ac4}", displayName: "\u0410\u043d\u043d\u0430", rawDom: '<div class="new-chat-message__text-box"></div>', text: "\u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410:\n\n1. \u0412\u0430\u0441\u044f" },
+    { recordKind: "zoom-message-group", sourceMessageId: "8-{f394eaff-300a-40c9-9140-2295d49d9fb9}", displayName: "You", rawDom: '<div class="new-chat-message__text-box--self"></div>', text: "\u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410:\n\n1. \u0412\u0430\u0441\u044f" },
+    { recordKind: "zoom-message-identity", sourceMessageId: "10-{f96b0fd8-e0a6-4ec7-b86b-4d67aeff9f3f}", ariaLabel: "\u0412\u044b \u041a\u043e\u043c\u0443 \u0412\u0441\u0435, \u0441\u0435\u0439\u0447\u0430\u0441", text: "\u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410:\n\n1. \u0412\u0430\u0441\u044f\n2. \u041c\u0430\u0448\u0430" }
+  ];
+  assert.equal(isOwnIdentityChatRecord(records[0]), true);
+  assert.equal(isOwnIdentityChatRecord(records[1]), false);
+  assert.equal(isOwnIdentityChatRecord(records[2]), false);
+  assert.equal(isOwnIdentityChatRecord(records[3]), true);
+  assert.deepEqual(exactOwnChatRecords(records, records[0].text), [records[0]]);
 });
 
 test("diagnostics sanitize Zoom URLs before saving", () => {
@@ -212,8 +203,9 @@ test("sender does not ack failed individual sends that return no ack", async () 
   assert.deepEqual(result.ackIds, [1]);
 });
 
-test("empty outbox increases backoff and does not hammer Worker every 1.5 seconds", async () => {
-  const backoff = new Backoff(makeConfig());
+test("interactive default keeps polling at 1.5 seconds even when outbox is empty", async () => {
+  const config = loadConfig({});
+  const backoff = new Backoff(config);
   const service = new ZoomSenderService({
     workerClient: { async pull() { return { messages: [] }; } },
     zoomAdapter: { async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; } },
@@ -222,24 +214,23 @@ test("empty outbox increases backoff and does not hammer Worker every 1.5 second
     logger: { info() {}, warn() {} }
   });
 
-  assert.equal((await service.runOnce()).delayMs, 3000);
-  assert.equal((await service.runOnce()).delayMs, 6000);
-  assert.equal((await service.runOnce()).delayMs, 12000);
-  assert.equal((await service.runOnce()).delayMs, 24000);
-  assert.equal((await service.runOnce()).delayMs, 30000);
+  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal(backoff.onError(), 10000);
 });
 
-test("messages reset backoff to minimum, errors back off without becoming frantic", async () => {
+test("messages reset backoff to minimum and errors use the configured retry delay", async () => {
   const backoff = new Backoff(makeConfig());
   backoff.onMessages(0);
   backoff.onMessages(0);
   assert.equal(backoff.currentDelayMs, 6000);
   assert.equal(backoff.onMessages(1), 1500);
   assert.equal(backoff.onError(), 10000);
-  assert.equal(backoff.onError(), 20000);
+  assert.equal(backoff.onError(), 10000);
 });
 
-test("sender-only code does not import queue engine or call Worker webhook", async () => {
+test("sender-only code uses only the outbox and has no retired Zoom chat ingest", async () => {
   const senderSources = await Promise.all([
     import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/sender.mjs", import.meta.url), "utf8")),
     import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/worker-client.mjs", import.meta.url), "utf8")),
@@ -247,8 +238,7 @@ test("sender-only code does not import queue engine or call Worker webhook", asy
   ]);
   const source = senderSources.join("\n");
   assert.doesNotMatch(source, /queue-engine|parseQueueEntry|parseZoomCommand/u);
-  assert.match(source, /selectZoomChatCodeIngestCandidates/u);
-  assert.doesNotMatch(source, /\/zoom-only\/webhook|sendIncomingMessage|parseZoomCommand/u);
+  assert.doesNotMatch(source, /chatIngestEnabled|ingestChatMessage|\/zoom-only\/chat-ingest|\/zoom-only\/webhook|sendIncomingMessage|selectZoomChatCodeIngestCandidates/u);
   assert.match(source, /\/zoom-only\/outbox/u);
 });
 
@@ -270,7 +260,10 @@ test("Zoom browser adapter handles the Zoom web landing gate and read-only diagn
   assert.match(source, /page\.on\("console"/u);
   assert.match(source, /page\.on\("requestfailed"/u);
   assert.match(source, /chat-readonly-diagnostics\.jsonl/u);
-  assert.match(source, /\[data-id\^="1-\{"\]/u);
+  assert.match(source, /ZOOM_MESSAGE_REF_RE/u);
+  assert.match(source, /document\.querySelectorAll\("\[data-id\], \[id\]"\)/u);
+  assert.match(source, /img\[data-emoji\]/u);
+  assert.doesNotMatch(source, /new-chat-message__options button|ancestor-or-self::\*\[@role='row'\]|menuitemradio/u);
   assert.match(source, /recordKind:\s*"zoom-message-identity"/u);
   assert.match(source, /sourceMessageId/u);
   assert.match(source, /itemDataId/u);
@@ -325,554 +318,27 @@ test("chat diagnostics fingerprint is stable and separates duplicates from diffe
   assert.match(first, /^chat-[0-9a-f]{8}$/u);
 });
 
-test("chat ingest candidates include atomic queue codes and Bill game commands, ignore aggregates", () => {
-  const messages = [
-    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
-    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111", timestamp: "03:44 PM", fingerprint: "full-111" },
-    { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" },
-    { displayName: "Рабочее собрание", text: "Рабочее собрание Пишите в чат \"111\" для высказывания ОЧЕРЕДЬ ОТКРЫТА • 1. Маня Х. — 111", timestamp: "", fingerprint: "own-queue" },
-    { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
-    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 222", timestamp: "03:44 PM", fingerprint: "full-222" },
-    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:45 PM 333", timestamp: "03:45 PM", fingerprint: "full-333" },
-    { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:46 PM 444", timestamp: "03:46 PM", fingerprint: "full-444" },
-    { displayName: "Vladimir", text: "Vladimir to Everyone 03:47 PM игра 415", timestamp: "03:47 PM", fingerprint: "full-game-415" },
-    { displayName: "Маня Х.", text: "111 111 привет 222", timestamp: "", fingerprint: "words" },
-    { displayName: "Vladimir", text: "Vladimir to Everyone 03:48 PM игра 415 привет", timestamp: "03:48 PM", fingerprint: "game-extra" }
-  ];
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 5);
-  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х.", "Vladimir"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444", "игра 415"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["full-111", "full-222", "full-333", "full-444", "full-game-415"]);
-});
-
-test("chat ingest candidates parse atomic child codes from one Zoom message group", () => {
-  const messages = ["111", "222", "333", "444"].map((code, index) => ({
-    displayName: "Маня Х.",
-    text: code,
-    timestamp: "07:36 PM",
-    fingerprint: `group-${code}`,
-    rawDom: `<span id="chat-message-content-fast-${index}">${code}</span>`,
-    groupAuthorName: "Маня Х.",
-    groupTimestamp: "07:36 PM",
-    groupText: "Маня Х. to Everyone 07:36 PM 111 222 333 444",
-    groupStableId: "chat-message-content-fast-group",
-    childIndex: String(index)
-  }));
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 4);
-  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["Маня Х.", "Маня Х.", "Маня Х.", "Маня Х."]);
-  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
-});
-
-test("chat ingest candidates parse Bill game child messages", () => {
-  const messages = [
-    {
-      displayName: "Vladimir",
-      text: "игра 415",
-      timestamp: "03:48 PM",
-      fingerprint: "child-game-415",
-      groupAuthorName: "Vladimir",
-      groupTimestamp: "03:48 PM",
-      groupText: "Vladimir to Everyone 03:48 PM игра 415",
-      groupStableId: "group-game-415",
-      childIndex: 0
-    },
-    {
-      displayName: "Vladimir",
-      text: "игра 415 привет",
-      timestamp: "03:49 PM",
-      fingerprint: "child-game-extra",
-      groupAuthorName: "Vladimir",
-      groupTimestamp: "03:49 PM",
-      groupText: "Vladimir to Everyone 03:49 PM игра 415 привет",
-      groupStableId: "group-game-extra",
-      childIndex: 0
-    }
-  ];
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].authorName, "Vladimir");
-  assert.equal(candidates[0].text, "игра 415");
-  assert.equal(candidates[0].sourceFingerprint, "child-game-415");
-});
-
-test("chat ingest candidates accept local Zoom author You in Bill messages", () => {
-  const messages = [
-    {
-      displayName: "\u0412\u044b",
-      text: "111",
-      timestamp: "03:50 PM",
-      fingerprint: "you-child-111",
-      rawDom: '<div id="chat-message-content-you-111" aria-label="\u0412\u044b to Everyone, 03:50 PM, 111">111</div>',
-      groupAuthorName: "\u0412\u044b",
-      groupTimestamp: "03:50 PM",
-      groupText: "\u0412\u044b to Everyone 03:50 PM 111",
-      groupStableId: "1-{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}",
-      childIndex: "0"
-    },
-    {
-      displayName: "\u0412\u044b",
-      text: "\u0438\u0433\u0440\u0430 55",
-      timestamp: "03:51 PM",
-      fingerprint: "you-child-game-55",
-      rawDom: '<div id="chat-message-content-you-game" aria-label="\u0412\u044b to Everyone, 03:51 PM, \u0438\u0433\u0440\u0430 55">\u0438\u0433\u0440\u0430 55</div>',
-      groupAuthorName: "\u0412\u044b",
-      groupTimestamp: "03:51 PM",
-      groupText: "\u0412\u044b to Everyone 03:51 PM \u0438\u0433\u0440\u0430 55",
-      groupStableId: "1-{bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}",
-      childIndex: "0"
-    }
-  ];
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 2);
-  assert.deepEqual(candidates.map((candidate) => candidate.authorName), ["\u0412\u044b", "\u0412\u044b"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "\u0438\u0433\u0440\u0430 55"]);
-  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["you-child-111", "you-child-game-55"]);
-});
-
-test("chat ingest candidates ignore unsafe bare chunks and queue publications", () => {
-  const messages = [
-    { displayName: "222", text: "222", timestamp: "", fingerprint: "bare-222" },
-    {
-      displayName: "Маня Х.",
-      text: "111 222 333",
-      timestamp: "07:36 PM",
-      fingerprint: "aggregate",
-      groupAuthorName: "Маня Х.",
-      groupTimestamp: "07:36 PM",
-      groupText: "Маня Х. to Everyone 07:36 PM 111 222 333",
-      groupStableId: "group-aggregate",
-      childIndex: "0"
-    },
-    {
-      displayName: "Нафаня",
-      text: "111",
-      timestamp: "07:36 PM",
-      fingerprint: "own-code",
-      groupAuthorName: "Нафаня",
-      groupTimestamp: "07:36 PM",
-      groupText: "Рабочее собрание ОЧЕРЕДЬ ОТКРЫТА 1. Маня Х. — 111",
-      groupStableId: "own-publication",
-      childIndex: "1"
-    }
-  ];
-
-  assert.equal(selectZoomChatCodeIngestCandidates(messages).length, 0);
-});
-
-test("chat ingest candidates ignore Nafanya publications even when visible in chat", () => {
-  const messages = [
-    {
-      displayName: "\u041d\u0430\u0444\u0430\u043d\u044f",
-      text: "\u0420\u0430\u0431\u043e\u0447\u0435\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0435. \u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\". \u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410. 1. \u0412\u044b \u2014 111",
-      timestamp: "03:52 PM",
-      fingerprint: "nafanya-queue-publication",
-      groupAuthorName: "\u041d\u0430\u0444\u0430\u043d\u044f",
-      groupTimestamp: "03:52 PM",
-      groupText: "\u041d\u0430\u0444\u0430\u043d\u044f to Everyone 03:52 PM \u0420\u0430\u0431\u043e\u0447\u0435\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0435. \u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\". \u041e\u0427\u0415\u0420\u0415\u0414\u042c \u041e\u0422\u041a\u0420\u042b\u0422\u0410. 1. \u0412\u044b \u2014 111"
-    },
-    {
-      displayName: "\u041d\u0430\u0444\u0430\u043d\u044f",
-      text: "\u0412\u043e\u043f\u0440\u043e\u0441 55:\n\n\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
-      timestamp: "03:53 PM",
-      fingerprint: "nafanya-game-question",
-      groupAuthorName: "\u041d\u0430\u0444\u0430\u043d\u044f",
-      groupTimestamp: "03:53 PM",
-      groupText: "\u041d\u0430\u0444\u0430\u043d\u044f to Everyone 03:53 PM \u0412\u043e\u043f\u0440\u043e\u0441 55: \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441"
-    }
-  ];
-
-  assert.equal(selectZoomChatCodeIngestCandidates(messages).length, 0);
-});
-
-test("chat ingest candidates deduplicate cloned child codes but allow a new group", () => {
-  const base = {
-    displayName: "Маня Х.",
-    text: "111",
-    timestamp: "07:36 PM",
-    rawDom: '<span id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</span>',
-    groupAuthorName: "Маня Х.",
-    groupTimestamp: "07:36 PM",
-    groupText: "Маня Х. to Everyone 07:36 PM 111",
-    groupStableId: "fast-group-a",
-    childIndex: "0"
-  };
-  const candidates = selectZoomChatCodeIngestCandidates([
-    { ...base, fingerprint: "clone-a" },
-    { ...base, fingerprint: "clone-b" },
-    {
-      ...base,
-      fingerprint: "new-real-message",
-      rawDom: '<span id="1-{9d167db1-997c-444c-844d-ba7195fc4413}">111</span>',
-      groupStableId: "fast-group-b"
-    }
-  ]);
-
-  assert.equal(candidates.length, 2);
-  assert.deepEqual(candidates.map((candidate) => candidate.sourceFingerprint), ["clone-a", "new-real-message"]);
-});
-
-test("chat ingest candidates use Zoom aria-label from raw DOM when group fields are empty", () => {
-  const candidates = selectZoomChatCodeIngestCandidates([
-    {
-      displayName: "333",
-      text: "333",
-      timestamp: "",
-      fingerprint: "raw-dom-333",
-      rawDom: '<div class="new-chat-message__container" id="chat-message-content-3" aria-label="Маня Х. to Everyone, 03:43 PM, 333" role="row"><p>333</p></div>',
-      groupAuthorName: "",
-      groupTimestamp: "",
-      groupText: "333",
-      groupStableId: "group-35",
-      childIndex: "0"
-    }
-  ]);
-
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].authorName, "Маня Х.");
-  assert.equal(candidates[0].text, "333");
-  assert.equal(candidates[0].sourceFingerprint, "raw-dom-333");
-});
-
-test("chat ingest candidates deduplicate DOM clones of one Zoom message", () => {
-  const rawDom = '<div data-id="1-{9d167db1-997c-444c-844d-ba7195fc4412}" aria-label="Маня Х. to Everyone, 09:06 PM, 111"><div id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>';
-  const messages = [
-    {
-      displayName: "Маня Х.",
-      text: "Маня Х. to Everyone 09:06 PM 111",
-      timestamp: "Маня Х. to Everyone 09:06 PM 111",
-      fingerprint: "clone-a",
-      rawDom
-    },
-    {
-      displayName: "Маня Х.",
-      text: "Маня Х. to Everyone 09:06 PM 111",
-      timestamp: "Маня Х. to Everyone 09:06 PM 111",
-      fingerprint: "clone-b",
-      rawDom: '<div class="child"><div id="1-{9d167db1-997c-444c-844d-ba7195fc4412}">111</div></div>'
-    }
-  ];
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].sourceFingerprint, "clone-a");
-  assert.match(candidates[0].logicalKey, /^zoom\|/u);
-  assert.ok(candidates[0].logicalAliases.some((key) => /9d167db1-997c-444c-844d-ba7195fc4412/u.test(key)));
-});
-
-test("chat ingest candidates collapse 27 DOM clones by one Zoom message id", () => {
-  const zoomId = "1-{83fbb5ac-5ada-4c48-93d2-c9cd968a7bd9}";
-  const messages = Array.from({ length: 27 }, (_, index) => ({
-    displayName: "Маня Х.",
-    text: "444",
-    timestamp: "12:58 PM",
-    fingerprint: `clone-${index}`,
-    domPath: `div:${index}`,
-    rawDom: `<div data-id="${zoomId}"><div id="${zoomId}" aria-label="Маня Х. to Everyone, 12:58 PM, 444">444</div></div>`,
-    groupAuthorName: "Маня Х.",
-    groupTimestamp: "12:58 PM",
-    groupText: "Маня Х. to Everyone 12:58 PM 444",
-    groupStableId: `group-${index}`,
-    childIndex: String(index)
-  }));
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].zoomMessageId, zoomId);
-  assert.equal(candidates[0].canonicalSourceMessageId, `zoom|${zoomId}|444`);
-});
-
-test("chat ingest candidates deduplicate clones by canonical aria label before DOM ids", () => {
-  const messages = [
-    {
-      displayName: "444",
-      text: "444",
-      timestamp: "",
-      fingerprint: "clone-a",
-      rawDom: '<div id="chat-item-container-4" aria-label="Маня Х. to Everyone, 03:51 PM, 444">444</div>',
-      groupStableId: "chat-item-container-4"
-    },
-    {
-      displayName: "444",
-      text: "444",
-      timestamp: "",
-      fingerprint: "clone-b",
-      rawDom: '<div id="group-18" aria-label="Маня Х. to Everyone, 03:51 PM, 444">444</div>',
-      groupStableId: "group-18"
-    },
-    {
-      displayName: "444",
-      text: "444",
-      timestamp: "",
-      fingerprint: "clone-c",
-      rawDom: '<div id="group-19" aria-label="Маня Х. to Everyone, 03:51 PM, 444">444</div>',
-      groupStableId: "group-19"
-    }
-  ];
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].text, "444");
-  assert.equal(candidates[0].authorName, "Маня Х.");
-  assert.match(candidates[0].logicalKey, /^aria\|/u);
-});
-
-test("chat ingest candidates ignore group fallback clones when aria identity exists", () => {
-  const messages = [
-    {
-      displayName: "444",
-      text: "444",
-      timestamp: "",
-      fingerprint: "aria-444",
-      rawDom: '<div id="chat-item-container-4" aria-label="Маня Х. to Everyone, 04:12 PM, 444">444</div>',
-      groupStableId: "chat-item-container-4"
-    },
-    {
-      displayName: "Маня Х.",
-      text: "444",
-      timestamp: "04:12 PM",
-      fingerprint: "fallback-444-a",
-      rawDom: '<span>444</span>',
-      groupAuthorName: "Маня Х.",
-      groupTimestamp: "04:12 PM",
-      groupText: "Маня Х. to Everyone 04:12 PM 444",
-      groupStableId: "chat-item-container-5",
-      childIndex: "14"
-    },
-    {
-      displayName: "Маня Х.",
-      text: "444",
-      timestamp: "04:12 PM",
-      fingerprint: "fallback-444-b",
-      rawDom: '<span>444</span>',
-      groupAuthorName: "Маня Х.",
-      groupTimestamp: "04:12 PM",
-      groupText: "Маня Х. to Everyone 04:12 PM 444",
-      groupStableId: "group-16",
-      childIndex: "13"
-    }
-  ];
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].sourceFingerprint, "aria-444");
-  assert.equal(candidates[0].text, "444");
-});
-
-test("chat ingest candidates keep fast 111/222/333/444 as four real messages", () => {
-  const messages = ["111", "222", "333", "444"].map((code, index) => ({
-    displayName: code,
-    text: code,
-    timestamp: "",
-    fingerprint: `fast-${code}`,
-    rawDom: `<div data-id="1-{0000000${index + 1}-0000-4000-8000-00000000000${index + 1}}"><div id="1-{0000000${index + 1}-0000-4000-8000-00000000000${index + 1}}" aria-label="Маня Х. to Everyone, 03:52 PM, ${code}">${code}</div></div>`,
-    groupStableId: `chat-item-container-${index + 1}`
-  }));
-
-  const candidates = selectZoomChatCodeIngestCandidates(messages);
-  assert.equal(candidates.length, 4);
-  assert.deepEqual(candidates.map((candidate) => candidate.text), ["111", "222", "333", "444"]);
-  assert.ok(candidates.every((candidate) => candidate.logicalKey.startsWith("zoom|")));
-  assert.equal(new Set(candidates.map((candidate) => candidate.zoomMessageId)).size, 4);
-});
-
-test("chat logical dedup keeps separate real repeated messages from same author", () => {
-  const firstId = "1-{aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa}";
-  const secondId = "1-{bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb}";
-  const first = {
-    displayName: "Маня Х.",
-    text: "111",
-    timestamp: "09:06 PM",
-    rawDom: `<div data-id="${firstId}"><div id="${firstId}" aria-label="Маня Х. to Everyone, 09:06 PM, 111">111</div></div>`
-  };
-  const second = {
-    displayName: "Маня Х.",
-    text: "111",
-    timestamp: "09:06 PM",
-    rawDom: `<div data-id="${secondId}"><div id="${secondId}" aria-label="Маня Х. to Everyone, 09:06 PM, 111">111</div></div>`
-  };
-  assert.equal(extractZoomChatDomMessageId(first.rawDom), firstId);
-  assert.equal(extractZoomChatDomMessageId(second.rawDom), secondId);
-  assert.notEqual(buildZoomChatLogicalKey(first, { authorName: "Маня Х.", text: "111" }), buildZoomChatLogicalKey(second, { authorName: "Маня Х.", text: "111" }));
-});
-
-test("chat-message-content ids are not treated as Zoom message ids", () => {
-  assert.equal(extractZoomChatDomMessageId('<div id="chat-message-content-21">111</div>'), "");
-  assert.equal(extractZoomChatMessageId({ groupStableId: "chat-message-content-21" }), "");
-});
-
-test("chat ingest logical memory skips clones across cycles but allows new message ids", async () => {
-  const ingested = [];
-  const logs = [];
-  const service = new ZoomSenderService({
-    workerClient: {
-      async ingestChatMessage(message) {
-        ingested.push(message);
-        return { ok: true, handled: true };
-      },
-      async pull() {
-        return { messages: [] };
-      }
-    },
-    zoomAdapter: {
-      config: { chatIngestEnabled: true },
-      async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
-      async observeChatDiagnostics() {
-        return {
-          messages: [
-            {
-              displayName: "Маня Х.",
-              text: "Маня Х. to Everyone 09:06 PM 111",
-              timestamp: "09:06 PM",
-              fingerprint: `fp-${ingested.length}-clone-a`,
-              rawDom: '<div data-id="1-{cccccccc-3333-4333-8333-cccccccccccc}"><div id="1-{cccccccc-3333-4333-8333-cccccccccccc}">111</div></div>'
-            },
-            {
-              displayName: "Маня Х.",
-              text: "Маня Х. to Everyone 09:06 PM 111",
-              timestamp: "09:06 PM",
-              fingerprint: `fp-${ingested.length}-clone-b`,
-              rawDom: '<div><div id="1-{cccccccc-3333-4333-8333-cccccccccccc}">111</div></div>'
-            }
-          ]
-        };
-      }
-    },
-    backoff: new Backoff(makeConfig()),
-    health: new HealthState(),
-    logger: { info(message) { logs.push(String(message)); }, warn() {} }
-  });
-
-  await service.runOnce();
-  await service.runOnce();
-  assert.equal(ingested.length, 1);
-  assert.ok(logs.some((message) => /skipped duplicate chat queue-code candidate/u.test(message)));
-
-  service.zoomAdapter.observeChatDiagnostics = async () => ({
-    messages: [{
-      displayName: "Маня Х.",
-      text: "Маня Х. to Everyone 09:06 PM 111",
-      timestamp: "09:06 PM",
-      fingerprint: "new-real-message",
-      rawDom: '<div data-id="1-{dddddddd-4444-4444-8444-dddddddddddd}"><div id="1-{dddddddd-4444-4444-8444-dddddddddddd}">111</div></div>'
-    }]
-  });
-  await service.runOnce();
-  assert.equal(ingested.length, 2);
-});
-
-test("chat message-id dedup survives longer than the old two-minute window", () => {
-  const service = new ZoomSenderService({
-    workerClient: {},
-    zoomAdapter: {},
-    backoff: new Backoff(makeConfig()),
-    health: new HealthState(),
-    logger: { info() {}, warn() {} }
-  });
-  const candidate = {
-    logicalKey: "zoom|1-{eeeeeeee-5555-4555-8555-eeeeeeeeeeee}|111",
-    logicalAliases: ["zoom|1-{eeeeeeee-5555-4555-8555-eeeeeeeeeeee}|111"],
-    sourceFingerprint: "dom-clone-a"
-  };
-  assert.equal(service.shouldIngestChatCandidate(candidate, 1_000), true);
-  assert.equal(service.shouldIngestChatCandidate({ ...candidate, sourceFingerprint: "dom-clone-b" }, 181_000), false);
-  assert.equal(service.shouldIngestChatCandidate({ ...candidate, sourceFingerprint: "dom-clone-c" }, 21_601_001), true);
-});
-
-test("chat ingest logical memory also skips repeated source fingerprints", async () => {
-  const ingested = [];
-  const logs = [];
-  const service = new ZoomSenderService({
-    workerClient: {
-      async ingestChatMessage(message) {
-        ingested.push(message);
-        return { ok: true, handled: true };
-      },
-      async pull() {
-        return { messages: [] };
-      }
-    },
-    zoomAdapter: {
-      config: { chatIngestEnabled: true },
-      async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
-      async observeChatDiagnostics() {
-        return {
-          messages: [{
-            displayName: "Маня Х.",
-            text: "Маня Х. to Everyone 09:06 PM 222",
-            timestamp: "09:06 PM",
-            fingerprint: "same-fp",
-            rawDom: `<div id="chat-message-content-${31 + ingested.length}">222</div>`
-          }]
-        };
-      }
-    },
-    backoff: new Backoff(makeConfig()),
-    health: new HealthState(),
-    logger: { info(message) { logs.push(String(message)); }, warn() {} }
-  });
-
-  await service.runOnce();
-  await service.runOnce();
-  assert.equal(ingested.length, 1);
-  assert.ok(logs.some((message) => /logical message key|source fingerprint/u.test(message)));
-});
-
-test("chat ingest forwards only safe candidates and never sends Zoom replies", async () => {
-  const ingested = [];
-  let sent = 0;
-  const service = new ZoomSenderService({
-    workerClient: {
-      async ingestChatMessage(message) {
-        ingested.push(message);
-        return { ok: true, handled: true };
-      },
-      async pull() {
-        return { messages: [] };
-      }
-    },
-    zoomAdapter: {
-      config: { chatIngestEnabled: true },
-      async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
-      async observeChatDiagnostics() {
-        return {
-          messages: [
-            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111 111 привет 222", timestamp: "03:44 PM", fingerprint: "agg" },
-            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:44 PM 111", timestamp: "03:44 PM", fingerprint: "full-111" },
-            { displayName: "222", text: "222", timestamp: "", fingerprint: "two" },
-            { displayName: "Маня Х.", text: "Маня Х. to Everyone 03:45 PM 222", timestamp: "03:45 PM", fingerprint: "full-222" },
-            { displayName: "Рабочее собрание", text: "Рабочее собрание Пишите в чат \"111\" для высказывания ОЧЕРЕДЬ ОТКРЫТА • 1. Маня Х. — 111", timestamp: "", fingerprint: "own-queue" },
-            { displayName: "привет", text: "привет", timestamp: "", fingerprint: "hi" }
-          ]
-        };
-      },
-      async sendMessage() {
-        sent += 1;
-        return { sent: true, ack: true };
-      }
-    },
-    backoff: new Backoff(makeConfig()),
-    health: new HealthState(),
-    logger: { info() {}, warn() {} }
-  });
-
-  await service.runOnce();
-  assert.equal(ingested.length, 2);
-  assert.equal(ingested[0].authorName, "Маня Х.");
-  assert.equal(ingested[0].text, "111");
-  assert.equal(ingested[1].authorName, "Маня Х.");
-  assert.equal(ingested[1].text, "222");
-  assert.equal(sent, 0);
-});
-
 test("real-mode browser launch uses safe Zoom Web Client flags", () => {
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--no-sandbox"));
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--disable-dev-shm-usage"));
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--use-fake-ui-for-media-stream"));
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--use-fake-device-for-media-stream"));
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--disable-blink-features=AutomationControlled"));
+});
+
+test("sender explicitly turns microphone and video off after joining", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8");
+  assert.match(source, /mute my microphone/iu);
+  assert.match(source, /stop my video/iu);
+  assert.match(source, /await ensureMeetingMediaOff\(this\.page\)/u);
+});
+
+test("pre-meeting host wait is not reported as joined merely because microphone controls exist", () => {
+  const waiting = classifyZoomPresenceText("\u0414\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c, \u043a\u043e\u0433\u0434\u0430 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0442\u043e\u0440 \u043d\u0430\u0447\u043d\u0435\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044e. \u041c\u0438\u043a\u0440\u043e\u0444\u043e\u043d");
+  assert.deepEqual(waiting, { waitingRoom: true, zoomJoined: false });
+  const joined = classifyZoomPresenceText("\u0423\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0438 3 \u0427\u0430\u0442 \u0412\u044b\u0439\u0442\u0438");
+  assert.deepEqual(joined, { waitingRoom: false, zoomJoined: true });
 });
 
 test("docker packaging is sender-only and contains no obvious secrets", async () => {
@@ -900,8 +366,8 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(envExample, /ZOOM_AUTH_PASSWORD=\s*(?:\r?\n)/u);
   assert.match(envExample, /ZOOM_AUTH_WAIT_FOR_MANUAL=false/u);
   assert.doesNotMatch(envExample, /replace-with-worker-secret|super-secret|sk-[a-z0-9]/iu);
-  assert.match(runbook, /не запускать старый `zoom-bridge`/iu);
-  assert.match(runbook, /не вызывает `\/zoom-only\/webhook`/iu);
+  assert.match(runbook, /старый `zoom-bridge` удалён/iu);
+  assert.match(runbook, /не вызывает старые webhook\/ingest-маршруты/iu);
 });
 
 test("auth setup uses server env credentials without hardcoded secrets or artifacts", async () => {

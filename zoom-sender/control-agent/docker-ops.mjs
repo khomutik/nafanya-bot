@@ -9,7 +9,6 @@ const SAFE_VALUES = {
     ZOOM_SENDER_DRY_RUN: "true",
     ZOOM_SENDER_MOCK_OUTBOX: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
-    ZOOM_SENDER_CHAT_INGEST_ENABLED: "false",
     ZOOM_AUTH_SETUP: "false",
     ZOOM_AUTH_VIEW_ENABLED: "false"
   },
@@ -17,7 +16,6 @@ const SAFE_VALUES = {
     ZOOM_SENDER_DRY_RUN: "false",
     ZOOM_SENDER_MOCK_OUTBOX: "false",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
-    ZOOM_SENDER_CHAT_INGEST_ENABLED: "true",
     ZOOM_AUTH_SETUP: "false",
     ZOOM_AUTH_VIEW_ENABLED: "false"
   },
@@ -25,7 +23,6 @@ const SAFE_VALUES = {
     ZOOM_SENDER_DRY_RUN: "true",
     ZOOM_SENDER_MOCK_OUTBOX: "true",
     ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS: "false",
-    ZOOM_SENDER_CHAT_INGEST_ENABLED: "false",
     ZOOM_AUTH_SETUP: "true",
     ZOOM_AUTH_VIEW_ENABLED: "true"
   }
@@ -91,7 +88,7 @@ export class DockerOps {
   }
 
   async stopSender() {
-    await this.docker(this.composeArgs(["down"]));
+    await this.docker(this.composeArgs(["stop", "zoom-sender"]));
   }
 
   async getSenderHealth() {

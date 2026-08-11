@@ -298,9 +298,7 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
     isBillPromptCommand,
     callAnnouncementState,
     parseBillInput,
-    sendBillToGroup,
-    enqueueZoomMessages,
-    splitZoomText
+    sendBillToGroup
   } = deps;
 
   const chatType = message.chat?.type ?? TEXT.unknown;
@@ -340,10 +338,7 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
 
   if (isTechThread(chatId, threadId) && isYozhikCommand(text)) {
     try {
-      const messageText = await sendYozhikToGroup(env);
-      if (enqueueZoomMessages) {
-        await enqueueZoomMessages(env, splitZoomText ? splitZoomText(messageText) : messageText).catch(() => null);
-      }
+      await sendYozhikToGroup(env);
       await sendMessage(env, INFO_CHAT_ID, TEXT.yozhikOk, TECH_THREAD_ID, message.message_id);
     } catch (error) {
       await sendMessage(env, INFO_CHAT_ID, `${TEXT.yozhikError}: ${error.message}`, TECH_THREAD_ID, message.message_id);
@@ -380,10 +375,7 @@ export async function handleTechThreadMessage(env, message, text, chatId, thread
       try {
         await callAnnouncementState(env, "set_message_id", { key: billLastRequestKey, messageId: message.message_id });
         await callAnnouncementState(env, "set_message_id", { key: billPromptStateKey, messageId: null });
-        const messageText = await sendBillToGroup(env, billNumber);
-        if (enqueueZoomMessages) {
-          await enqueueZoomMessages(env, splitZoomText ? splitZoomText(messageText) : messageText).catch(() => null);
-        }
+        await sendBillToGroup(env, billNumber);
         if (!isChatGroup(chatId, threadId)) {
           await sendMessage(env, chatId, `${TEXT.billSent} \u2116${billNumber} ${TEXT.billSentTail}`, threadId, message.message_id);
         }
@@ -780,8 +772,9 @@ export async function handleServiceMessages(env, message, text, chatId, threadId
 
   const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, { isPrivateChat, CHAT_GROUP_ID, INFO_CHAT_ID, normalizeLightText, parseNafanyaQuestion });
   const canSendAdminSignal = nafanyaRequestHere || isPrepThread(chatId, threadId);
+  const canSendFixSignal = canSendAdminSignal || isChatGroup(chatId, threadId);
 
-  if (canSendAdminSignal && hasFixMarker(text)) {
+  if (canSendFixSignal && hasFixMarker(text)) {
     const author = getAuthorLabel(message);
     await sendAdminDigest(env, "\u0424\u0418\u041a\u0421\u0418\u0420\u0423\u042e", author, text, "#\u0444\u0438\u043a\u0441\u0438\u0440\u0443\u044e");
     await sendMessage(env, chatId, FIX_CONFIRMATION, threadId, message.message_id);

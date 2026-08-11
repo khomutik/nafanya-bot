@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
-import worker, { AnnouncementStateDurableObject } from "./worker.mjs";
+import worker, { AnnouncementStateDurableObject, ZoomMeetingStateDurableObject, ZoomSharedTimerStateDurableObject } from "./worker.mjs";
+import { splitBoardZoomMessages, unicodeLength } from "./zoom_meeting_board.js";
 
 class MemoryStorage {
   constructor() {
     this.data = new Map();
+    this.getCount = 0;
+    this.putCount = 0;
   }
 
   async get(key) {
+    this.getCount += 1;
     return this.data.get(key);
   }
 
   async put(key, value) {
+    this.putCount += 1;
     this.data.set(key, value);
   }
 
@@ -19,24 +24,63 @@ class MemoryStorage {
   }
 }
 
-function makeEnv() {
-  const announcementObjects = new Map();
+class MemoryR2 {
+  constructor() { this.data = new Map(); }
+  async get(key) {
+    if (!this.data.has(key)) return null;
+    const value = this.data.get(key);
+    return {
+      body: new Blob([value]).stream(),
+      async json() { return JSON.parse(value); },
+      async text() { return value; }
+    };
+  }
+  async put(key, value) {
+    this.data.set(key, value instanceof ReadableStream ? await new Response(value).text() : String(value));
+  }
+}
+
+function makeEnv(overrides = {}) {
+  const makeNamespace = (DurableObjectClass) => {
+    const objects = new Map();
+    return {
+      objects,
+      binding: {
+        getByName(name) {
+          if (!objects.has(name)) {
+            const storage = new MemoryStorage();
+            const durableObject = new DurableObjectClass({ storage });
+            let previous = Promise.resolve();
+            const record = {
+              durableObject,
+              storage,
+              fetchCount: 0,
+              fetch(url, init = {}) {
+                record.fetchCount += 1;
+                const run = () => durableObject.fetch(new Request(url, init));
+                const response = previous.then(run, run);
+                previous = response.then(() => undefined, () => undefined);
+                return response;
+              }
+            };
+            objects.set(name, record);
+          }
+          return objects.get(name);
+        }
+      }
+    };
+  };
+  const announcements = makeNamespace(AnnouncementStateDurableObject);
+  const zoomMeeting = makeNamespace(ZoomMeetingStateDurableObject);
+  const zoomTimer = makeNamespace(ZoomSharedTimerStateDurableObject);
   return {
     ZOOM_PANEL_TOKEN: "panel-token",
     ZOOM_BRIDGE_SECRET: "bridge-token",
-    ANNOUNCEMENT_STATE: {
-      getByName(name) {
-        if (!announcementObjects.has(name)) {
-          const durableObject = new AnnouncementStateDurableObject({ storage: new MemoryStorage() });
-          announcementObjects.set(name, {
-            fetch(url, init = {}) {
-              return durableObject.fetch(new Request(url, init));
-            }
-          });
-        }
-        return announcementObjects.get(name);
-      }
-    }
+    ANNOUNCEMENT_STATE: announcements.binding,
+    ZOOM_MEETING_STATE: zoomMeeting.binding,
+    ZOOM_SHARED_TIMER_STATE: zoomTimer.binding,
+    __testing: { announcements, zoomMeeting, zoomTimer },
+    ...overrides
   };
 }
 
@@ -65,6 +109,10 @@ async function pullOutbox(env) {
   return (await json(response)).messages || [];
 }
 
+function outboxTexts(outbox) {
+  return outbox.map((item) => item?.text).filter((text) => typeof text === "string" && text.length > 0);
+}
+
 async function ackOutbox(env, ids) {
   const response = await worker.fetch(bridgeRequest("/zoom-only/outbox", {
     body: JSON.stringify({ ackIds: ids, limit: 50 })
@@ -79,9 +127,10 @@ async function getZoomOnlyStatus(env) {
   return await json(response);
 }
 
-async function postPanelAction(env, body, token = true) {
+async function postPanelAction(env, body, token = true, extraHeaders = {}) {
   const headers = { "content-type": "application/json" };
   if (token) headers["x-nafanya-zoom-panel-token"] = "panel-token";
+  Object.assign(headers, extraHeaders);
   return worker.fetch(new Request("https://example.com/zoom-only/app/action", {
     method: "POST",
     headers,
@@ -107,84 +156,40 @@ async function testAccess() {
   const allowedPage = await worker.fetch(panelRequest("/zoom-only/app?token=panel-token"), env);
   assert.equal(allowedPage.status, 200);
   const html = await allowedPage.text();
-  assert.match(html, /Пульт Нафани для Zoom/u);
-  assert.match(html, /Пульт Нафани в Zoom/u);
-  assert.match(html, /Сообщения собрания/u);
-  assert.match(html, /Ежедневные публикации/u);
-  assert.match(html, /Быстрое управление очередью/u);
-  assert.match(html, /Текущая очередь/u);
-  assert.match(html, /class="panel-status compact-status-bar"/u);
-  assert.match(html, /<main class="panel-compact">/u);
-  assert.match(html, /class="metric-row"/u);
-  assert.match(html, /id="entriesStatus"/u);
-  assert.match(html, /id="entriesMetric"/u);
-  assert.match(html, /class="quick-queue-section"/u);
-  assert.match(html, /class="grid quick-queue-actions"/u);
-  assert.match(html, /class="meeting-section accordion"/u);
-  assert.match(html, /class="publication-section accordion"/u);
-  assert.match(html, /class="queue-control-section accordion" data-accordion="currentQueue"/u);
-  assert.match(html, /data-accordion-toggle="meeting" aria-expanded="false"/u);
-  assert.match(html, /data-accordion-toggle="publications" aria-expanded="false"/u);
-  assert.match(html, /data-accordion-toggle="currentQueue" aria-expanded="true"/u);
-  assert.match(html, /id="accordion-meeting" hidden/u);
-  assert.match(html, /id="accordion-publications" hidden/u);
-  assert.match(html, /function setAccordion/u);
-  assert.match(html, /localStorage\.getItem\(key\)/u);
-  assert.match(html, /localStorage\.setItem\(key, isOpen \? "open" : "closed"\)/u);
-  assert.match(html, /data-key="prayer"/u);
-  assert.match(html, /data-key="meeting_schedule"/u);
-  assert.match(html, /data-type="test_message"/u);
-  assert.match(html, /data-type="add_test_participant"/u);
-  assert.match(html, /data-key="done"/u);
-  assert.match(html, /data-key="skip"/u);
-  assert.match(html, /data-key="undo"/u);
-  assert.match(html, /id="removeNumber"/u);
-  assert.match(html, /id="removeButton"/u);
-  assert.match(html, /id="manualQueueInput"/u);
-  assert.match(html, /id="manualQueueButton"/u);
-  assert.match(html, /id="queueWorkbench" hidden/u);
-  assert.match(html, /id="closedQueueNote" hidden/u);
-  assert.match(html, /class="queue-toolbar"/u);
-  assert.match(html, /class="queue-toolbar-row add-row"/u);
-  assert.match(html, /class="queue-toolbar-row actions-row"/u);
-  assert.match(html, /class="queue-toolbar-row remove-row"/u);
-  assert.match(html, /class="input-sm" id="manualQueueInput"/u);
-  assert.match(html, /class="input-sm" id="removeNumber"/u);
-  assert.match(html, /placeholder="Саша 111"/u);
-  assert.match(html, /Без кода добавится как 111\./u);
-  assert.match(html, /action: "add_manual_queue_entry"/u);
-  assert.match(html, /data-key="show_queue"/u);
-  assert.match(html, /data-key="close_queue"/u);
-  assert.match(html, /button-action \{ width: auto/u);
-  assert.match(html, /button-danger \{ width: auto/u);
-  assert.match(html, /queueWorkbench"\)\.hidden = !isQueueOpen/u);
-  assert.match(html, /entriesMetric"\)\.hidden = !isQueueOpen/u);
-  assert.match(html, /История закрытой очереди/u);
-  assert.doesNotMatch(html, /Очередь закрыта\. Заявок/u);
-  assert.match(html, /setInterval\(\(\) => refreshStatus/u);
-  assert.match(html, /data-key="yozhik"/u);
-  assert.match(html, /<h3>Ёжик<\/h3>/u);
-  assert.match(html, /<h3>Отрывок Билла<\/h3>/u);
-  assert.match(html, /<h3>Вопрос игры<\/h3>/u);
-  assert.match(html, /id="billExcerptNumber"/u);
-  assert.match(html, /id="billExcerptButton"/u);
-  assert.match(html, /id="gameQuestionNumber"/u);
-  assert.match(html, /id="gameQuestionButton"/u);
-  assert.match(html, /meeting-action/u);
-  assert.match(html, /publication-action/u);
-  assert.match(html, /queue-open-action/u);
-  assert.match(html, /queue-control-action/u);
-  assert.match(html, /queue-danger-action/u);
-  assert.match(html, /@media \(max-width: 640px\)[\s\S]*queue-toolbar-row\.add-row[\s\S]*queue-toolbar-row\.remove-row/u);
-  assert.match(html, /min-height: 34px/u);
-  assert.doesNotMatch(html, /data-key="open_(?:yozhik|game|excerpt)"/u);
-
+  assert.match(html, /<title>Пульт техведа<\/title>/u);
+  assert.match(html, /data-day="monday"/u);
+  assert.match(html, /data-day="tuesday"/u);
+  assert.match(html, /data-speaker/u);
+  assert.match(html, /data-add-entry/u);
+  assert.match(html, /data-board-clear/u);
+  assert.match(html, /meeting_board_clear_all/u);
+  assert.match(html, /\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451/u);
+  assert.doesNotMatch(html, /meeting_board_replay/u);
+  assert.match(html, /data-message-key="prayer"/u);
+  assert.doesNotMatch(html, /add_test_participant|manualQueueInput|queueWorkbench/u);
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
   assert.equal(deniedAction.status, 401);
 
   const allowedAction = await postPanelAction(env, { type: "message", key: "prayer" });
   assert.equal(allowedAction.status, 200);
   assert.equal((await json(allowedAction)).ok, true);
+}
+
+async function testRetiredLegacyZoomSurface() {
+  const env = makeEnv();
+
+  for (const path of ["/zoom/outbox", "/zoom/debug", "/zoom/app/action", "/zoom-only/reset"]) {
+    const response = await worker.fetch(bridgeRequest(path), env);
+    assert.equal(response.status, 404, `${path} must stay retired`);
+  }
+
+  for (const path of ["/zoom-only/webhook", "/zoom-only/chat-ingest"]) {
+    const response = await worker.fetch(bridgeRequest(path), env);
+    assert.equal(response.status, 200);
+    const data = await json(response);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "queue_paused");
+  }
 }
 
 async function testSafeTestMessageAction() {
@@ -615,6 +620,60 @@ async function testZoomBillChatIngest() {
     await ackOutbox(env, outbox.map((message) => message.id));
 
     response = await postChatIngest(env, {
+      authorName: "Маня Х.",
+      text: "игра 55",
+      sourceFingerprint: "fp-bill-manya-game-55"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    assert.equal(data.gameNumber, 55);
+    status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 3);
+    assert.equal(status.queue.entries[2].label, "222");
+    assert.ok(status.queue.entries.slice(0, 2).some((entry) => entry.label === "111"));
+    assert.ok(status.queue.entries.slice(0, 2).some((entry) => entry.label === "игра 55"));
+    outbox = await pullOutbox(env);
+    assert.ok(outbox.length >= 2);
+    assert.match(outbox[0].text, /Вопрос 55:[\s\S]*Тестовый вопрос 55/u);
+    assert.match(outbox.at(-1).text, /Маня Х\. — игра 55/u);
+    await ackOutbox(env, outbox.map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Маня Х.",
+      text: "111",
+      sourceFingerprint: "fp-bill-manya-111"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 4);
+    assert.equal(status.queue.entries[3].label, "222");
+    assert.equal(status.queue.entries.slice(0, 3).filter((entry) => entry.label === "111").length, 2);
+    assert.ok(status.queue.entries.slice(0, 3).some((entry) => entry.author === "Маня Х." && entry.label === "игра 55"));
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
+      authorName: "Маня Х.",
+      text: "111",
+      sourceFingerprint: "fp-bill-manya-111-repeat"
+    });
+    data = await json(response);
+    assert.equal(data.ok, true);
+    assert.equal(data.handled, true);
+    assert.equal(data.duplicate, false);
+    status = await getZoomOnlyStatus(env);
+    assert.equal(status.queue.entries.length, 5);
+    assert.deepEqual(status.queue.entries.slice(3).map((entry) => entry.label), ["222", "222"]);
+    assert.equal(status.queue.entries.slice(0, 3).filter((entry) => entry.label === "111").length, 2);
+    assert.ok(status.queue.entries.slice(0, 3).some((entry) => entry.author === "Маня Х." && entry.label === "игра 55"));
+    assert.ok(status.queue.entries.slice(3).some((entry) => entry.author === "Маня Х." && entry.label === "222"));
+    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+
+    response = await postChatIngest(env, {
       authorName: "Vladimir",
       text: "222",
       sourceFingerprint: "fp-bill-222"
@@ -624,8 +683,8 @@ async function testZoomBillChatIngest() {
     assert.equal(data.handled, true);
     assert.equal(data.duplicate, false);
     status = await getZoomOnlyStatus(env);
-    assert.equal(status.queue.entries.length, 3);
-    assert.equal(status.queue.entries[2].label, "222");
+    assert.equal(status.queue.entries.length, 6);
+    assert.deepEqual(status.queue.entries.slice(3).map((entry) => entry.label), ["222", "222", "222"]);
     await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
 
     response = await postChatIngest(env, {
@@ -635,11 +694,11 @@ async function testZoomBillChatIngest() {
     });
     data = await json(response);
     assert.equal(data.ok, true);
-    assert.equal(data.handled, true);
-    assert.equal(data.duplicate, false);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "self");
     status = await getZoomOnlyStatus(env);
-    assert.ok(status.queue.entries.some((entry) => entry.author === "Вы" && entry.label === "111"));
-    await ackOutbox(env, (await pullOutbox(env)).map((message) => message.id));
+    assert.equal(status.queue.entries.length, 6);
+    assert.equal((await pullOutbox(env)).length, 0);
 
     response = await postChatIngest(env, {
       authorName: "Вы",
@@ -648,16 +707,11 @@ async function testZoomBillChatIngest() {
     });
     data = await json(response);
     assert.equal(data.ok, true);
-    assert.equal(data.handled, true);
-    assert.equal(data.duplicate, false);
-    assert.equal(data.gameNumber, 55);
+    assert.equal(data.handled, false);
+    assert.equal(data.ignored, "self");
     status = await getZoomOnlyStatus(env);
-    assert.ok(status.queue.entries.some((entry) => entry.author === "Вы" && entry.label === "игра 55"));
-    outbox = await pullOutbox(env);
-    assert.ok(outbox.length >= 2);
-    assert.match(outbox[0].text, /Вопрос 55:[\s\S]*Тестовый вопрос 55/u);
-    assert.match(outbox.at(-1).text, /Вы — игра 55/u);
-    await ackOutbox(env, outbox.map((message) => message.id));
+    assert.equal(status.queue.entries.length, 6);
+    assert.equal((await pullOutbox(env)).length, 0);
 
     response = await postChatIngest(env, {
       authorName: "Vladimir",
@@ -794,6 +848,17 @@ async function testMessageButtonsAndOutbox() {
   outbox = await pullOutbox(env);
   assert.ok(outbox.length > beforeUnknown);
   assert.ok(outbox.some((message) => /12 ШАГОВ/u.test(message.text)));
+
+  const beforeTraditions = outbox.length;
+  response = await postPanelAction(env, { type: "message", key: "traditions12" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  const traditionMessages = outbox.slice(beforeTraditions);
+  assert.equal(traditionMessages.length, 2);
+  assert.match(traditionMessages[0].text, /12 ТРАДИЦИЙ АА/u);
+  assert.ok(traditionMessages.every((message) => Array.from(message.text).length <= 950));
+  assert.ok(traditionMessages.every((message) => !/Часть \d+\/\d+/u.test(message.text)));
 }
 
 async function testStatusAndQueueActions() {
@@ -916,15 +981,553 @@ async function testYozhikBillAndGameActions() {
   }
 }
 
+async function testQueuePausedLibraryPanelAndActions() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  let response = await worker.fetch(panelRequest("/zoom-only/app"), env);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  const embeddedScripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/giu)].map((match) => match[1]);
+  assert.ok(embeddedScripts.length > 0);
+  assert.doesNotThrow(() => embeddedScripts.forEach((script) => new Function(script)));
+  assert.match(html, /Сообщения собрания/u);
+  assert.match(html, /Большая книга/u);
+  assert.match(html, /12 шагов и 12 традиций/u);
+  assert.match(html, /Жить трезвыми/u);
+  assert.match(html, /Как это видит Билл/u);
+  assert.match(html, /Ежедневные размышления/u);
+  assert.match(html, /500 вопросов/u);
+  assert.match(html, /webkitdirectory/u);
+  assert.match(html, /Тест Zoom/u);
+  assert.match(html, /\.action:active\{transform:translateY\(2px\)/u);
+  assert.match(html, /\.action\.is-success\{background:#19734a;color:#fff/u);
+  assert.match(html, /button\.classList\.add\("is-success"\)/u);
+  assert.match(html, /feedbackLabels\(button,"success"\)/u);
+  assert.match(html, /setButtonFeedback\(targetButton,"success"\)/u);
+  assert.match(html, /data-day="monday"/u);
+  assert.match(html, /data-day="tuesday"/u);
+  assert.match(html, /data-day="thursday"/u);
+  assert.match(html, /data-day="friday"/u);
+  assert.match(html, /data-day="sunday"/u);
+  assert.match(html, /data-speaker/u);
+  assert.match(html, /data-add-entry/u);
+  assert.match(html, /data-speaker-add/u);
+  assert.match(html, /meeting_board_defer_entry/u);
+  assert.match(html, /\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442/u);
+  assert.match(html, /data-board-clear|meeting_board_clear_all/u);
+  assert.doesNotMatch(html, /data-speaker-clear/u);
+  assert.doesNotMatch(html, /data-clear-board/u);
+  const speakerPanelHtml = html.match(/<details class="day-panel speaker" data-speaker>[\s\S]*?<\/details><button class="action danger clear-button" data-board-clear/u)?.[0] || "";
+  assert.ok(speakerPanelHtml, "Speaker panel should be present");
+  assert.doesNotMatch(speakerPanelHtml, /data-message-key="meeting_rules"|\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f/u);
+  assert.match(html, /\.publication-row label\{[^}]*font-size:17px/u);
+  assert.match(html, /\.meeting-action\{height:56px;min-height:56px/u);
+  assert.match(html, /\.state-row \.action\.rare\{min-height:27px/u);
+  assert.match(html, /\.state-row \.action\.frequent\{grid-column:1\/-1;width:100%/u);
+  assert.match(html, /"danger rare"/u);
+  assert.match(html, /"frequent "\+\(spoken/u);
+  assert.match(html, /publication-big_book/u);
+  assert.match(html, /publication-twelve_twelve/u);
+  assert.match(html, /publication-living_sober/u);
+  assert.match(html, /publication-as_bill_sees_it/u);
+  assert.match(html, /publication-daily_reflections/u);
+  assert.match(html, /publication-game_questions/u);
+  assert.doesNotMatch(html, /class="status"|id="statusText"/u);
+  assert.match(html, /<details class="admin">[\s\S]*id="libraryStatusText"/u);
+  assert.doesNotMatch(html, /Быстрое управление очередью|Текущая очередь|add_test_participant/u);
+
+  response = await postPanelAction(env, { type: "queue", queueAction: "show_queue" });
+  assert.equal(response.status, 409);
+  assert.equal((await json(response)).reason, "queue_paused");
+  response = await postChatIngest(env, { authorName: "Участник", text: "111", sourceFingerprint: "paused" });
+  assert.equal(response.status, 200);
+  assert.equal((await json(response)).ignored, "queue_paused");
+  assert.equal((await pullOutbox(env)).length, 0);
+
+  response = await worker.fetch(new Request("https://example.com/zoom-only/library/status"), env);
+  assert.equal(response.status, 401);
+  response = await worker.fetch(panelRequest("/zoom-only/library/status"), env);
+  assert.equal(response.status, 200);
+  assert.equal((await json(response)).available, false);
+
+  const importPayload = { collections: { big_book: { entries: [
+    { key: 1, text: "Первое длинное предложение закончено. ".repeat(30), sourcePath: "Большая книга/001.md" },
+    { key: 2, text: "Второй отрывок", sourcePath: "Большая книга/002.md" }
+  ] } } };
+  response = await worker.fetch(panelRequest("/zoom-only/library/import?dryRun=1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(importPayload)
+  }), env);
+  assert.equal(response.status, 200);
+  const preview = await json(response);
+  assert.equal(preview.validated, true);
+  assert.equal(preview.preview.totalEntries, 2);
+  assert.equal(preview.preview.totalMessages, 2);
+  response = await worker.fetch(panelRequest("/zoom-only/library/status"), env);
+  assert.equal((await json(response)).available, false);
+
+  response = await worker.fetch(panelRequest("/zoom-only/library/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(importPayload)
+  }), env);
+  assert.equal(response.status, 200);
+  const imported = await json(response);
+  assert.equal(imported.collections.big_book.count, 2);
+  assert.equal(imported.collections.as_bill_sees_it.available, false);
+
+  response = await postPanelAction(env, { action: "book_excerpt", collectionId: "big_book", number: 1 });
+  assert.equal((await json(response)).ok, true);
+  let outbox = await pullOutbox(env);
+  assert.ok(outbox.length >= 1);
+  assert.ok(outbox.every((message) => Array.from(message.text).length <= 950));
+  assert.match(outbox[0].text, /Большая книга\. Отрывок №1/u);
+  assert.ok(outbox.slice(1).every((message) => !/Большая книга\. Отрывок №1|Часть \d+\/\d+/u.test(message.text)));
+  await ackOutbox(env, outbox.map((message) => message.id));
+
+  const todayKey = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit" }).format(new Date());
+  const currentLibrary = JSON.parse(env.ZOOM_LIBRARY.data.get("zoom-library/current.json"));
+  currentLibrary.collections.daily_reflections = {
+    label: "Ежедневные размышления",
+    kind: "dated",
+    entries: { [todayKey]: { text: "Размышление на сегодня", sourcePath: `${todayKey}.md` } }
+  };
+  await env.ZOOM_LIBRARY.put("zoom-library/current.json", JSON.stringify(currentLibrary));
+  response = await postPanelAction(env, { action: "daily_reflection" });
+  assert.equal((await json(response)).ok, true);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.match(outbox[0].text, new RegExp(`Ежедневные размышления\\. ${todayKey.replace(".", "\\.")}`, "u"));
+  assert.ok(Array.from(outbox[0].text).length <= 950);
+  await ackOutbox(env, outbox.map((message) => message.id));
+
+  response = await postPanelAction(env, { action: "book_excerpt", collectionId: "as_bill_sees_it", number: 1 });
+  assert.equal((await json(response)).ok, false);
+  assert.equal((await pullOutbox(env)).length, 0);
+  response = await postPanelAction(env, { action: "book_excerpt", collectionId: "big_book", number: 1.5 });
+  assert.equal((await json(response)).ok, false);
+  assert.equal((await pullOutbox(env)).length, 0);
+}
+
+async function testMeetingBoardAndSpeakerState() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  let response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: "\u0412\u0430\u0441\u044f \u0447\u0438\u0442\u0430\u0435\u0442 \u043f\u043e\u0441\u043b\u0435 \u041c\u0430\u0448\u0438 \u2014 \u043a\u0430\u043a \u0434\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u043b\u0438\u0441\u044c",
+    requestId: "request-entry-1"
+  });
+  assert.equal(response.status, 200);
+  let data = await json(response);
+  assert.equal(data.state.entries.length, 1);
+  assert.equal(data.state.entries[0].status, "waiting");
+  const entryId = data.state.entries[0].id;
+  let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].kind, undefined,
+    "The production meeting board must use ordinary outbox messages");
+  assert.equal(typeof outbox[0].text, "string");
+  assert.ok(outboxTexts(outbox).every((message) => Array.from(message).length <= 950));
+  assert.match(outboxTexts(outbox).join("\n"), /\u0412\u0430\u0441\u044f \u0447\u0438\u0442\u0430\u0435\u0442/u);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: "\u041c\u0430\u0448\u0430 111",
+    requestId: "request-entry-2"
+  });
+  data = await json(response);
+  const secondEntryId = data.state.entries[1].id;
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].kind, undefined);
+  assert.equal(typeof outbox[0].text, "string");
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, { action: "meeting_board_defer_entry", dayKey: "tuesday", id: entryId, requestId: "request-defer-1" });
+  data = await json(response);
+  assert.equal(data.state.entries[0].id, secondEntryId);
+  assert.equal(data.state.entries[1].id, entryId);
+  outbox = await pullOutbox(env);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, { action: "meeting_board_defer_entry", dayKey: "tuesday", id: secondEntryId, requestId: "request-defer-2" });
+  data = await json(response);
+  assert.equal(data.state.entries[0].id, entryId);
+  assert.equal(data.state.entries[1].id, secondEntryId);
+  outbox = await pullOutbox(env);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, { action: "meeting_board_mark_spoken", dayKey: "tuesday", id: entryId, requestId: "request-spoken-1" });
+  data = await json(response);
+  assert.equal(data.state.entries[0].status, "spoken");
+  outbox = await pullOutbox(env);
+  assert.match(outboxTexts(outbox).join("\n"), /\u2705 \u0412\u0430\u0441\u044f/u);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, { action: "meeting_board_mark_spoken", dayKey: "tuesday", id: entryId, requestId: "request-spoken-1" });
+  data = await json(response);
+  assert.equal(data.duplicate, true);
+  assert.equal((await pullOutbox(env)).length, 0);
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_topic",
+    dayKey: "tuesday",
+    text: "1. \u041c\u043e\u0436\u043d\u043e \u043b\u0438 \u0441\u0434\u0430\u0432\u0430\u0442\u044c \u043f\u044f\u0442\u044b\u0439 \u0448\u0430\u0433 \u043d\u0435 \u0441\u043f\u043e\u043d\u0441\u043e\u0440\u0443?",
+    requestId: "request-topic-1"
+  });
+  data = await json(response);
+  assert.equal(data.state.additionalTopics[0].text.startsWith("1."), false);
+  outbox = await pullOutbox(env);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, { action: "speaker_questions_add", text: "\u0421\u0430\u0448\u0430: \u043a\u0430\u043a \u0442\u044b \u043f\u0440\u0438\u0448\u0451\u043b \u0432 \u0410\u0410?", requestId: "speaker-1" });
+  data = await json(response);
+  assert.equal(data.state.entries.length, 1);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].kind, undefined);
+  assert.equal(typeof outbox[0].text, "string");
+  assert.match(outboxTexts(outbox).join("\n"), /\u0412\u041e\u041f\u0420\u041e\u0421\u042b \u0421\u041f\u0418\u041a\u0415\u0420\u0423/u);
+  assert.match(outboxTexts(outbox).join("\n"), /1\. \u0421\u0430\u0448\u0430:/u);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  const statusBeforeClear = await getZoomOnlyStatus(env);
+  const boardVersionBeforeClear = statusBeforeClear.meetingBoard.version;
+  const speakerVersionBeforeClear = statusBeforeClear.speakerQuestions.version;
+  response = await postPanelAction(env, {
+    action: "meeting_board_clear_all",
+    dayKey: "tuesday",
+    requestId: "clear-all-1"
+  });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.state.entries.length, 0);
+  assert.equal(data.state.additionalTopics.length, 0);
+  assert.equal(data.speakerQuestions.entries.length, 0);
+  assert.ok(data.state.version > boardVersionBeforeClear);
+  assert.ok(data.speakerQuestions.version > speakerVersionBeforeClear);
+  assert.ok(data.queued.length >= 1);
+  assert.ok(outboxTexts(data.queued).every((message) => Array.from(message).length <= 950));
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 2);
+  assert.ok(outbox.every((item) => item.kind === undefined && typeof item.text === "string"));
+  assert.ok(outboxTexts(outbox).every((message) => Array.from(message).length <= 950));
+  await ackOutbox(env, outbox.map((item) => item.id));
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_clear_all",
+    dayKey: "tuesday",
+    requestId: "clear-all-1"
+  });
+  data = await json(response);
+  assert.equal(data.duplicate, true);
+  assert.equal(data.state.entries.length, 0);
+  assert.equal((await pullOutbox(env)).length, 0);
+
+  const status = await getZoomOnlyStatus(env);
+  assert.equal(status.meetingBoard.entries.length, 0);
+  assert.equal(status.meetingBoard.additionalTopics.length, 0);
+  assert.equal(status.speakerQuestions.entries.length, 0);
+  assert.equal(status.activeMode, "meeting");
+
+  response = await postPanelAction(env, { action: "meeting_board_add_entry", dayKey: "tuesday", text: "\n", requestId: "bad-1" });
+  assert.equal(response.status, 400);
+  assert.equal((await pullOutbox(env)).length, 0);
+}
+
+async function testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  const repeatedText = "111 \u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440";
+  let response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: repeatedText,
+    requestId: "repeat-entry-1"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.state.entries.length, 1);
+  await ackOutbox(env, (await pullOutbox(env)).map((item) => item.id));
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: repeatedText,
+    requestId: "repeat-entry-2"
+  });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.duplicate, false);
+  assert.equal(data.state.entries.length, 2);
+  assert.deepEqual(data.state.entries.map((item) => item.text), [repeatedText, repeatedText]);
+  assert.notEqual(data.state.entries[0].id, data.state.entries[1].id);
+  await ackOutbox(env, (await pullOutbox(env)).map((item) => item.id));
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: repeatedText,
+    requestId: "repeat-entry-2"
+  });
+  data = await json(response);
+  assert.equal(data.duplicate, true);
+  assert.equal(data.state.entries.length, 2);
+  assert.equal((await pullOutbox(env)).length, 0);
+}
+
+function testMeetingBoardUnicodeLimit() {
+  const source = Array.from({ length: 18 }, (_, index) => `${index + 1}. ${"\u0416".repeat(280)} \uD83D\uDE4F`).join("\n");
+  const messages = splitBoardZoomMessages(source);
+  assert.ok(messages.length > 1);
+  assert.ok(messages.every((message) => unicodeLength(message) <= 950));
+  assert.ok(messages.every((message) => !/^\u0427\u0430\u0441\u0442\u044c \d+\/\d+\n/u.test(message)));
+  const restored = messages.join("");
+  assert.equal(restored.replace(/\s+/gu, ""), source.replace(/\s+/gu, ""));
+}
+
+async function testSharedZoomTimerState() {
+  const env = makeEnv();
+  let response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "sync",
+    instanceId: "android-1",
+    product: "mobile"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.executorActive, false);
+  assert.equal(data.isExecutor, false);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "sync",
+    instanceId: "desktop-1",
+    product: "desktop",
+    indicatorSupported: false
+  });
+  data = await json(response);
+  assert.equal(data.executorActive, false);
+  assert.equal(data.isExecutor, false);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "sync",
+    instanceId: "desktop-1",
+    product: "desktop",
+    indicatorSupported: true
+  });
+  data = await json(response);
+  assert.equal(data.executorActive, true);
+  assert.equal(data.isExecutor, true);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "start",
+    instanceId: "android-1",
+    product: "mobile",
+    baseMs: 60000,
+    remainingMs: 60000,
+    requestId: "mobile-start-1"
+  });
+  data = await json(response);
+  assert.equal(data.state.status, "running");
+  assert.equal(data.state.running, true);
+  assert.equal(data.executorActive, true);
+  const startRevision = data.state.revision;
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "start",
+    instanceId: "android-1",
+    product: "mobile",
+    baseMs: 60000,
+    remainingMs: 60000,
+    requestId: "mobile-start-1"
+  });
+  data = await json(response);
+  assert.equal(data.duplicate, true);
+  assert.equal(data.state.revision, startRevision);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "extend",
+    instanceId: "android-1",
+    product: "mobile",
+    deltaMs: 60000,
+    requestId: "mobile-extend-1"
+  });
+  data = await json(response);
+  assert.ok(data.state.remainingMs > 118000 && data.state.remainingMs <= 120000);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "pause",
+    instanceId: "android-1",
+    product: "mobile",
+    requestId: "mobile-pause-1"
+  });
+  data = await json(response);
+  assert.equal(data.state.status, "paused");
+  assert.equal(data.state.running, false);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "reset",
+    instanceId: "android-1",
+    product: "mobile",
+    baseMs: 60000,
+    requestId: "mobile-reset-1"
+  });
+  data = await json(response);
+  assert.equal(data.state.status, "idle");
+  assert.equal(data.state.remainingMs, 60000);
+
+  response = await postPanelAction(env, {
+    action: "zoom_timer_action",
+    timerAction: "claim_finish",
+    instanceId: "desktop-1",
+    product: "desktop",
+    indicatorSupported: true
+  });
+  assert.equal(response.status, 400);
+}
+
+async function testZoomStateMigrationAndIsolation() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  const legacy = env.ANNOUNCEMENT_STATE.getByName("main");
+  await legacy.storage.put("announcement-state", {
+    messageIds: { daily: 77 },
+    personalSubscriptions: { user: { enabled: true } },
+    adminDmDrafts: {},
+    adminDmUsers: {},
+    replacementRequests: {},
+    zoomOnlyOutbox: [{ id: 7, text: "\u041d\u0435\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435", createdAt: 1 }],
+    zoomOnlyOutboxNextId: 8,
+    zoomOnlyPanelLastAction: { key: "legacy", label: "Legacy", ok: true, createdAt: 1 },
+    zoomMeetingBoard: {
+      sessionDate: "2026-08-01",
+      dayKey: "tuesday",
+      version: 3,
+      entries: [{ id: "legacy-entry", text: "\u0412\u0430\u0441\u044f 111", status: "waiting", createdAt: 1, updatedAt: 1 }],
+      additionalTopics: [],
+      lastMessages: ["\u0421\u0442\u0430\u0440\u043e\u0435 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435"],
+      processedRequestIds: [],
+      updatedAt: 1
+    },
+    zoomSpeakerQuestions: { sessionDate: "2026-08-01", version: 0, entries: [], lastMessages: [], processedRequestIds: [], updatedAt: 0 },
+    zoomPanelActiveMode: "meeting",
+    zoomSharedTimer: {
+      status: "paused",
+      running: false,
+      baseMs: 120000,
+      remainingMs: 45000,
+      endAt: 0,
+      revision: 4,
+      updatedAt: 1,
+      finishedAt: 0,
+      executor: null,
+      soundClaimRevision: -1,
+      processedRequestIds: []
+    }
+  });
+
+  const status = await getZoomOnlyStatus(env);
+  assert.equal(status.meetingBoard.entries[0].text, "\u0412\u0430\u0441\u044f 111");
+  assert.equal(status.activeMode, "meeting");
+  assert.equal((await pullOutbox(env))[0].id, 7);
+
+  let response = await postPanelAction(env, { action: "zoom_timer_action", timerAction: "sync", instanceId: "mobile", product: "mobile" });
+  let timer = await json(response);
+  assert.equal(timer.state.status, "paused");
+  assert.equal(timer.state.remainingMs, 45000);
+
+  const announcementReadsAfterMigration = legacy.storage.getCount;
+  for (let index = 0; index < 12; index += 1) {
+    response = await postPanelAction(env, { action: "zoom_timer_action", timerAction: "sync", instanceId: "mobile", product: "mobile" });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(legacy.storage.getCount, announcementReadsAfterMigration, "Timer sync must not return to the announcement singleton after migration");
+
+  const meeting = env.ZOOM_MEETING_STATE.getByName("main");
+  const sharedTimer = env.ZOOM_SHARED_TIMER_STATE.getByName("main");
+  assert.ok(meeting.storage.data.has("zoom-meeting-state"));
+  assert.ok(sharedTimer.storage.data.has("zoom-shared-timer-state"));
+  assert.equal(meeting.storage.data.has("announcement-state"), false);
+  assert.equal(sharedTimer.storage.data.has("announcement-state"), false);
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "tuesday",
+    text: "\u041c\u0438\u0433\u0440\u0430\u0446\u0438\u044f \u0436\u0438\u0432\u0430",
+    requestId: "after-migration"
+  });
+  assert.equal(response.status, 200);
+  const beforeSecondInitialization = await getZoomOnlyStatus(env);
+  const secondInitialization = await meeting.fetch("https://state/initialize_from_legacy", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ state: createEmptyLegacyReplacementStateForTest() })
+  });
+  assert.equal(secondInitialization.status, 200);
+  const afterSecondInitialization = await getZoomOnlyStatus(env);
+  assert.deepEqual(afterSecondInitialization.meetingBoard.entries, beforeSecondInitialization.meetingBoard.entries,
+    "A repeated migration request must not overwrite live Zoom state");
+}
+
+function createEmptyLegacyReplacementStateForTest() {
+  return {
+    zoomOnlyOutbox: [],
+    zoomOnlyOutboxNextId: 1,
+    zoomMeetingBoard: { sessionDate: "", dayKey: "", version: 0, entries: [], additionalTopics: [], lastMessages: [], processedRequestIds: [], updatedAt: 0 },
+    zoomSpeakerQuestions: { sessionDate: "", version: 0, entries: [], lastMessages: [], processedRequestIds: [], updatedAt: 0 },
+    zoomPanelActiveMode: "meeting"
+  };
+}
+
+async function testConcurrentTechHostUpdatesAreSerialized() {
+  const env = makeEnv();
+  const requests = [
+    postPanelAction(env, { action: "meeting_board_add_entry", dayKey: "tuesday", text: "\u0412\u0430\u0441\u044f 111", requestId: "parallel-1" }),
+    postPanelAction(env, { action: "meeting_board_add_entry", dayKey: "tuesday", text: "\u0421\u0430\u0448\u0430 111", requestId: "parallel-2" })
+  ];
+  const responses = await Promise.all(requests);
+  assert.ok(responses.every((response) => response.status === 200));
+  const status = await getZoomOnlyStatus(env);
+  assert.deepEqual(status.meetingBoard.entries.map((item) => item.text), ["\u0412\u0430\u0441\u044f 111", "\u0421\u0430\u0448\u0430 111"]);
+
+  const duplicate = await postPanelAction(env, { action: "meeting_board_add_entry", dayKey: "tuesday", text: "\u0421\u0430\u0448\u0430 111", requestId: "parallel-2" });
+  assert.equal((await json(duplicate)).duplicate, true);
+  assert.equal((await getZoomOnlyStatus(env)).meetingBoard.entries.length, 2);
+}
+
+async function testRetiredTeamChatSurface() {
+  const env = makeEnv();
+  const response = await worker.fetch(panelRequest("/zoom-only/team-chat/status"), env);
+  assert.equal(response.status, 410);
+  assert.equal((await json(response)).error, "team_chat_test_retired");
+
+  const panelResponse = await worker.fetch(panelRequest("/zoom-only/app"), env);
+  const panelHtml = await panelResponse.text();
+  assert.equal(panelResponse.status, 200);
+  assert.doesNotMatch(panelHtml, /Team Chat|sendMessageToChat|data-speaker-clear/u);
+  assert.match(panelHtml, /meeting_board_clear_all/u);
+  assert.match(panelHtml, /\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451/u);
+}
+
+testMeetingBoardUnicodeLimit();
 await testAccess();
+await testRetiredLegacyZoomSurface();
 await testSafeTestMessageAction();
-await testSafeAddTestParticipantAction();
-await testManualQueueEntryAction();
-await testSafeZoomChatCodeIngest();
-await testZoomBillChatIngest();
 await testMessageButtonsAndOutbox();
-await testStatusAndQueueActions();
-await testQueueControlActions();
 await testYozhikBillAndGameActions();
+await testQueuePausedLibraryPanelAndActions();
+await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
+await testMeetingBoardAndSpeakerState();
+await testSharedZoomTimerState();
+await testZoomStateMigrationAndIsolation();
+await testConcurrentTechHostUpdatesAreSerialized();
+await testRetiredTeamChatSurface();
 
 console.log("zoom panel tests passed");

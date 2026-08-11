@@ -143,19 +143,26 @@ export async function deleteMessageSafe(env, chatId, messageId) {
   return (await deleteMessageResult(env, chatId, messageId)).ok;
 }
 
+export function isExpectedDeleteMessageFailure(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return /(?:message (?:can(?:not|'t) be deleted|to delete not found)|message_id_invalid)/u.test(message);
+}
+
 export async function deleteMessageResult(env, chatId, messageId) {
   if (!messageId) {
-    return { ok: false, error: new Error("deleteMessage skipped: message_id is empty") };
+    return { ok: false, expected: true, error: new Error("deleteMessage skipped: message_id is empty") };
   }
   try {
     await callTelegram(env, "deleteMessage", {
       chat_id: chatId,
       message_id: messageId
     });
-    return { ok: true, error: null };
+    return { ok: true, expected: false, error: null };
   } catch (error) {
-    console.error("deleteMessageSafe failed", { chatId, messageId, error });
-    return { ok: false, error };
+    const expected = isExpectedDeleteMessageFailure(error);
+    const log = expected ? console.warn : console.error;
+    log("deleteMessageSafe failed", { chatId, messageId, expected, error });
+    return { ok: false, expected, error };
   }
 }
 

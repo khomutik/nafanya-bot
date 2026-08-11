@@ -20,8 +20,4 @@ export class MockWorkerOutboxClient {
     this.messages = this.messages.filter((message) => !idSet.has(Number(message.id)));
     return { ok: true, remaining: this.messages.length };
   }
-
-  async ingestChatMessage(message = {}) {
-    return { ok: true, handled: false, mock: true, message };
-  }
 }

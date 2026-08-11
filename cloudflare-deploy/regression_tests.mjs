@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { QUERY_HINT, FAQ_HINT, sysPrompt } from "./bot_prompts.js";
 import { ROLE_ALIASES, looksLikeBlockedProgramQuestion, scoreChunkBonus } from "./bot_lexicon.js";
-import { buildZoomPayloadFromChatEvent, buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, handleStatusRequest, handleZoomOAuthReturn, isChatGroup, parseGameCommand, parseQueueEntry, verifyZoomWebhookSignature } from "./worker.mjs";
+import { buildZoomValidationResponse, hmacSha256Hex, getQueue111Note, handleRootRequest, handleStatusRequest, handleZoomOAuthReturn, isChatGroup, parseGameCommand, parseQueueEntry, saveAnnouncementMessageIdAfterCopy, verifyZoomWebhookSignature } from "./worker.mjs";
 import { handleGroupQueueAndGameMessage, handleServiceMessages, handleTechThreadMessage, handleWebhookMessage } from "./message_handlers.js";
 import { MEETING_PANEL_TEXT, QUEUE_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard } from "./bot_panels.js";
 import { createVacancyReplacementRequest, handleCallbackQuery } from "./callback_handlers.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS } from "./zoom_meeting_texts.js";
+import { isExpectedDeleteMessageFailure } from "./telegram_api.js";
 
 const root = new URL("../", import.meta.url);
 const serviceAccountPath = process.env.SA_PATH || new URL("../\u0414\u043e\u0441\u0442\u0443\u043f\u044b/nafanya-493610-8cea2c43c14d.json", import.meta.url);
@@ -59,33 +60,6 @@ async function testZoomWebhookHelpers() {
   });
   assert.equal(await verifyZoomWebhookSignature(signedRequest, { ZOOM_WEBHOOK_SECRET_TOKEN: secret }, rawBody), true);
 
-  const zoomPayload = buildZoomPayloadFromChatEvent(
-    { ZOOM_ADMIN_NAMES: "\u041c\u0430\u0448\u0430;\u041b\u0438\u043b\u044f" },
-    {
-      event: "meeting.chat_message_received",
-      event_ts: 1782400000000,
-      payload: {
-        object: {
-          id: 5487249245,
-          uuid: "meeting-uuid",
-          chat_message: {
-            message_id: "msg-1",
-            message_content: "111",
-            sender_name: "\u041b\u0438\u043b\u044f",
-            sender_type: "guest",
-            recipient_type: "everyone",
-            recipient_context: "meeting",
-            sender_context: "meeting"
-          }
-        }
-      }
-    }
-  );
-  assert.equal(zoomPayload.text, "111");
-  assert.equal(zoomPayload.user.displayName, "\u041b\u0438\u043b\u044f");
-  assert.equal(zoomPayload.user.isCoHost, true);
-  assert.equal(zoomPayload.recipientType, "everyone");
-  assert.equal(zoomPayload.recipientContext, "meeting");
 }
 
 async function testRootResponseHasZoomRequiredSecurityHeaders() {
@@ -96,18 +70,13 @@ async function testRootResponseHasZoomRequiredSecurityHeaders() {
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
 }
 
-async function testZoomAppHomePage() {
+async function testRootHomePageUsesBotStatus() {
   const response = await handleRootRequest({});
-  const html = await response.text();
+  const body = await response.text();
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
-  assert.match(response.headers.get("content-security-policy") || "", /appssdk\.zoom\.us/u);
-  assert.doesNotMatch(response.headers.get("content-security-policy") || "", /frame-ancestors/u);
-  assert.match(html, /Nafanya Zoom Bridge/u);
-  assert.match(html, /sendMessageToChat/u);
-  assert.match(html, /\u0441\u0435\u0440\u0432\u0435\u0440\u043d\u044b\u0439 Zoom-\u043c\u043e\u0441\u0442/u);
-  assert.match(html, /data-command="\u043c\u043e\u043b\u0438\u0442\u0432\u0430"/u);
-  assert.match(html, /\/zoom\/app\/action/u);
+  assert.equal(response.headers.get("content-type"), "text/plain; charset=UTF-8");
+  assert.match(body, /\u041d\u0430\u0444\u0430\u043d\u044f/u);
+  assert.doesNotMatch(body, /\/zoom\/app\/action/u);
 }
 
 async function testZoomOAuthReturnEndpoint() {
@@ -167,14 +136,21 @@ async function testKnowledgeAnswers() {
   const scheduleIdx = {
     date: headerIndex(scheduleHeaders, ["дата"]),
     day: headerIndex(scheduleHeaders, ["день недели", "день"]),
-    leader: headerIndex(scheduleHeaders, ["ведущий", "ведет", "ведёт", "вед"])
+    leader: headerIndex(scheduleHeaders, ["ведущий", "ведет", "ведёт", "вед"]),
+    techHost: headerIndex(scheduleHeaders, ["техвед"])
   };
 
   const denisTechAnswer = await answer(runtime, "\u043a\u0430\u043a\u043e\u0433\u043e \u0447\u0438\u0441\u043b\u0430 \u0442\u0435\u0445\u0432\u0435\u0434 \u0414\u0435\u043d\u0438\u0441?");
   assert.match(denisTechAnswer, /\u0414\u0430\u0442\u0430: \d{2}\.\d{2}\.2026[\s\S]*\u0422\u0435\u0445\u0432\u0435\u0434: \u0414\u0435\u043d\u0438\u0441/u);
   assert.doesNotMatch(denisTechAnswer, /01\.06\.2026/u);
   assert.match(await answer(runtime, "\u043a\u0430\u043a\u043e\u0433\u043e \u0447\u0438\u0441\u043b\u0430 \u0442\u0435\u0445\u0432\u0435\u0434 \u0410\u0440\u0442\u0435\u043c?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0410\u0440\u0442\u0435\u043c \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
-  assert.match(await answer(runtime, "\u0432 \u043a\u0430\u043a\u043e\u0439 \u0434\u0435\u043d\u044c \u0443 \u043d\u0430\u0441 \u043d\u0435\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430?"), /\u0422\u0435\u0445\u0432\u0435\u0434: \u043d\u0435\u0442/u);
+  const missingTechHostRows = snapshot.schedule.rows.slice(1).filter((row) => String(row[scheduleIdx.date] || "").trim() && !String(row[scheduleIdx.techHost] || "").trim());
+  const missingTechHostAnswer = await answer(runtime, "\u0432 \u043a\u0430\u043a\u043e\u0439 \u0434\u0435\u043d\u044c \u0443 \u043d\u0430\u0441 \u043d\u0435\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430?");
+  if (missingTechHostRows.length) {
+    assert.match(missingTechHostAnswer, /\u0422\u0435\u0445\u0432\u0435\u0434: \u043d\u0435\u0442/u);
+  } else {
+    assert.equal(missingTechHostAnswer, "", "The live schedule currently has a tech host in every dated row");
+  }
   assert.equal(await answer(runtime, "\u043a\u0430\u043a\u0430\u044f \u0442\u0435\u043c\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f 3 \u0438\u044e\u043d\u044f?"), "\u0412 \u044d\u0442\u043e\u0442 \u0434\u0435\u043d\u044c \u0432 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0438 \u043d\u0435\u0442 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f.");
   assert.match(await answer(runtime, "\u043a\u0430\u043a\u0438\u0435 \u043e\u0431\u044f\u0437\u0430\u043d\u043d\u043e\u0441\u0442\u0438 \u0443 \u0441\u043f\u0438\u043a\u0435\u0440\u0445\u0430\u043d\u0442\u0435\u0440\u0430?"), /\u0421\u043f\u0438\u043a\u0435\u0440\u0445\u0430\u043d\u0442\u0435\u0440 \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442/u);
   const sundayRow = snapshot.schedule.rows.slice(1).find((row) => /\u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u044c\u0435/iu.test(String(row[scheduleIdx.day] || "")) && String(row[scheduleIdx.leader] || "").trim());
@@ -183,7 +159,6 @@ async function testKnowledgeAnswers() {
   const sundayLeader = String(sundayRow[scheduleIdx.leader] || "").trim();
   const sundayLeaderPattern = sundayLeader.split(/\s+/u).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
   assert.match(await answer(runtimeForDate(isoFromRuDate(sundayDate)), "\u043a\u0442\u043e \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u0432 \u0432\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0438\u0435?"), new RegExp(`${sundayDate.replaceAll(".", "\\.")}[\\s\\S]*\\u0412\\u0435\\u0434\\u0443\\u0449\\u0438\\u0439: ${sundayLeaderPattern}`, "u"));
-  assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u0438\u0442?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u042e\u043b\u044f \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c/u);
   assert.match(await answer(runtime, "\u043a\u043e\u0433\u0434\u0430 \u0440\u043e\u0442\u0430\u0446\u0438\u044f \u0443 \u0412\u0430\u0441\u0438?"), /\u043d\u0435 \u043d\u0430\u0448\u0451\u043b \u0412\u0430\u0441\u0438/u);
   assert.match(await answer(runtime, "\u0433\u0434\u0435 \u0438\u043d\u0444\u043e\u043a\u0430\u043d\u0430\u043b?"), /https:\/\/telegram\.me\/\+n40PjinXX_pjNTcy/u);
   assert.match(await answer(runtime, "\u0447\u0435\u043c \u0437\u0430\u043d\u0438\u043c\u0430\u0435\u0442\u0441\u044f \u0441\u0435\u043a\u0440\u0435\u0442\u0430\u0440\u044c?"), /\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u044b/u);
@@ -240,6 +215,8 @@ async function testMeetingScheduleAnswers() {
 
 function testWorkerStaticRules() {
   const worker = fs.readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
+  const wranglerConfig = JSON.parse(fs.readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8"));
+  const servicePersonMap = JSON.parse(wranglerConfig.vars.SERVICE_PERSON_MAP_JSON);
   const messageHandlers = fs.readFileSync(new URL("./message_handlers.js", import.meta.url), "utf8");
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
@@ -248,10 +225,15 @@ function testWorkerStaticRules() {
   const zoomMeetingTexts = fs.readFileSync(new URL("./zoom_meeting_texts.js", import.meta.url), "utf8");
   const queueEngine = fs.readFileSync(new URL("./core/queue-engine.js", import.meta.url), "utf8");
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
+  assert.match(worker, /var DAILY_22_ANNOUNCEMENT_ID = 4191;/u, "the daily 22:00 announcement should use TECHVED message 4191");
+  assert.match(worker, /runScheduledTaskOncePerDay\(env, "daily_22_00", 22, 0, \(\) => sendAnnouncementCopyToGroup\(env, DAILY_22_ANNOUNCEMENT_ID\), 120\)/u, "TECHVED message 4191 should refresh daily at 22:00 with a same-day catch-up window");
+  assert.match(worker, /sendAdminTodayServiceSummary\(env, today, clock\.dateKey, personMap\)/u, "daily service summary should be sent to the admin thread");
+  assert.match(worker, /service_admin_summary_sent:\$\{dateKey\}/u, "admin service summary should be deduplicated per day");
+  assert.match(worker, /!deletion\.ok && !deletion\.expected/u, "expected Telegram deletion limits should not alert the owner");
+  assert.match(telegramApi, /isExpectedDeleteMessageFailure\(error\)/u, "Telegram delete failures should be classified");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.username, "gorinayua", "Julia should resolve from the schedule name");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.telegram_user_id, "6479617191", "Julia should resolve to her Telegram user ID");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
-  assert.match(worker, /record_zoom_debug/u, "Zoom webhook diagnostics should record recent events");
-  assert.match(worker, /url\.pathname === "\/zoom\/debug"/u, "Zoom webhook diagnostics should be available through protected bridge route");
-  assert.match(worker, /zoomDebugEvents = normalized\.zoomDebugEvents[\s\S]*slice\(-25\)/u, "Zoom webhook diagnostics should be bounded");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
   assert.match(messageHandlers, /zoom\|\\u0437\\u0443\\u043c/u, "Zoom link detector should understand Zoom wording");
   assert.match(messageHandlers, /\\u043f\\u0440\\u0438\\u043d\\u0435\\u0441\\u0438/u, "Zoom link detector should understand 'bring link' wording");
@@ -299,17 +281,9 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /isMeetingPanelCommand\(text, \{ allowBare: !isChatGroup\(chatId, threadId\) \}\)/u, "Group chat should require 'panel meeting' to open meeting panel");
   assert.match(worker, /function getTodayTopicSourceMessageId\(\)[\s\S]*TODAY_TOPIC_MESSAGES\.find/u, "Today's topic button should be selected from the new topic-message map");
   assert.match(worker, /function getTodayTopicZoomMessages\(\)[\s\S]*getZoomMeetingMessages\(key\)/u, "Zoom topic messages should use the weekday theme text");
-  assert.match(worker, /function isManualZoomPart\(text\)/u, "Zoom meeting messages should detect manually split parts");
-  assert.match(worker, /isManualZoomPart\(plain\) \? \[plain\] : splitZoomText\(plain\)/u, "Manually split Zoom parts should not be split again");
+  assert.match(worker, /const combined = parts\.map\(\(part\) => plainZoomText\(part\)\)\.filter\(Boolean\)\.join\("\\n"\);[\s\S]*return splitZoomText\(combined\)/u, "Zoom meeting messages should be packed into the minimum number of messages");
   assert.match(callbackHandlers, /if \(key === "today_topic"\)[\s\S]*copyTechMessageToGroup\(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId\)/u, "Today's topic button should copy the source message from TECHVED");
-  assert.match(callbackHandlers, /getTodayTopicZoomMessages\(\)/u, "Telegram topic button should enqueue the current Zoom theme text");
   assert.match(callbackHandlers, /\\u0421\\u0435\\u0433\\u043E\\u0434\\u043D\\u044F \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F \\u043D\\u0435\\u0442/u, "No-topic days should say today's meeting is absent");
-  assert.match(worker, /"\\u0442\\u0435\\u043C\\u044B \\u0441\\u043E\\u0431\\u0440\\u0430\\u043D\\u0438\\u044F": "today_topic"/u, "Zoom should understand 'meeting topics'");
-  assert.match(worker, /ZOOM_APP_ALLOWED_COMMANDS[\s\S]*"\\u0442\\u0435\\u043c\\u044b"/u, "Zoom app manual input should allow short 'topics' command");
-  assert.match(worker, /"\\u0440\\u0430\\u0441\\u043F\\u0438\\u0441\\u0430\\u043D\\u0438\\u0435": "meeting_schedule"/u, "Zoom should understand schedule command");
-  assert.match(worker, /sendYozhikToGroup\(env\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Yozhik command should publish the actual Yozhik text");
-  assert.match(worker, /sendBillToGroup\(env, zoomBillNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Zoom Bill command should publish the actual Bill text");
-  assert.match(messageHandlers, /sendBillToGroup\(env, billNumber\)[\s\S]*splitZoomText\(messageText\)/u, "Telegram Bill panel flow should mirror the Bill text to Zoom");
   assert.doesNotMatch(worker + zoomMeetingTexts, /\\u0442\\u0435\\u043A\\u0441\\u0442 \\u0434\\u043B\\u044F Zoom \\u043D\\u0443\\u0436\\u043D\\u043E \\u043F\\u0435\\u0440\\u0435\\u043D\\u0435\\u0441\\u0442\\u0438/u, "Zoom meeting texts should not contain placeholder copy");
   for (const key of ["minute_silence", "prayer", "preambula", "newcomer", "steps12", "traditions12", "meeting_rules", "chat_cleanliness", "seventh_tradition", "tea_rules", "speaker_questions", "free_services", "telemost_link", "meeting_schedule", "theme_monday", "theme_tuesday", "theme_thursday", "theme_friday", "theme_sunday"]) {
     assert.match(zoomMeetingTexts, new RegExp(`"${key}"`, "u"), `Zoom meeting text should include ${key}`);
@@ -416,42 +390,73 @@ function testWorkerStaticRules() {
   assert.match(messageHandlers, /privateKnowledgeQuestion/u, "private chats should query knowledge docs before light talk");
 }
 
+function testExpectedDeleteMessageFailures() {
+  assert.equal(isExpectedDeleteMessageFailure(new Error('deleteMessage failed: {"description":"Bad Request: message can\'t be deleted"}')), true);
+  assert.equal(isExpectedDeleteMessageFailure(new Error('deleteMessage failed: {"description":"Bad Request: message to delete not found"}')), true);
+  assert.equal(isExpectedDeleteMessageFailure(new Error('deleteMessage failed: {"description":"Forbidden: bot is not an administrator"}')), false);
+}
+
+async function testSuccessfulTelegramCopySurvivesMarkerFailure() {
+  const env = {
+    ANNOUNCEMENT_STATE: {
+      getByName() {
+        return {
+          async fetch() {
+            return Response.json({ ok: false, error: "overloaded" }, { status: 503 });
+          }
+        };
+      }
+    }
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(
+      await saveAnnouncementMessageIdAfterCopy(env, "daily-test", 12345),
+      false,
+      "A failed auxiliary marker write must not turn an already successful Telegram copy into a failed send"
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
+
 function testZoomOnlyStaticRules() {
   const worker = fs.readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   const queueEngine = fs.readFileSync(new URL("./core/queue-engine.js", import.meta.url), "utf8");
-  assert.match(worker, /url\.pathname === "\/zoom-only\/webhook"/u, "Zoom-only webhook endpoint should exist");
-  assert.match(worker, /url\.pathname === "\/zoom-only\/outbox"/u, "Zoom-only outbox endpoint should exist");
-  assert.match(worker, /url\.pathname === "\/zoom-only\/status"/u, "Zoom-only status endpoint should exist");
-  assert.match(worker, /url\.pathname === "\/zoom-only\/reset"/u, "Zoom-only reset endpoint should exist");
-  assert.match(worker, /url\.pathname === "\/zoom-only\/app\/action"/u, "Zoom-only app action endpoint should exist");
-  assert.match(worker, /action === "clear_zoom_only_state"/u, "Zoom-only polluted state should be resettable");
-  assert.match(worker, /zoomOnlyQueueState: createEmptyQueueState\(\)/u, "Zoom-only queue should live in separate announcement state");
-  assert.match(worker, /zoomOnlyOutbox: \[\]/u, "Zoom-only outbox should be separate from legacy Zoom outbox");
-  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*callZoomOnlyQueueState/u, "Zoom-only messages should use the separate queue state");
-  assert.match(worker, /async function handleZoomOnlyMessage[\s\S]*publishZoomOnlyMeetingCommand/u, "Zoom-only meeting commands should use Zoom-only publisher");
-  assert.match(worker, /async function publishZoomOnlyMeetingCommand[\s\S]*buildYozhikText[\s\S]*buildBillText/u, "Zoom-only Yozhik and Bill should build text without Telegram sends");
-  assert.match(worker, /const zoomOnlyMode = \$\{zoomOnly \? "true" : "false"\}/u, "Zoom-only app should render an explicit client-side mode flag");
-  assert.match(worker, /if \(!zoomOnlyMode\) \{\s*for \(const item of data\.messages \|\| \[\]\)/u, "Zoom-only app should not send messages directly through Zoom App SDK");
-  assert.match(worker, /function buildZoomOnlyPayloadFromAppCommand[\s\S]*isZoomOnlyAppControl: true/u, "Zoom-only app should be a trusted control surface because Zoom SDK may hide user role");
-  assert.match(worker, /Boolean\(payload\?\.isZoomOnlyAppControl\) \|\| isZoomAdminPayload/u, "Zoom-only app commands should pass admin checks without relying on unsupported Zoom SDK user context");
-  assert.match(worker, /payload\?\.source === "zoom_web_client"/u, "Zoom-only web client bridge commands should be trusted because the bridge is already secret-protected");
-  assert.match(worker, /normalizedName\.replace\(\/\\s\*\\\(\[\^\)\]\*\\\)\\s\*\$\/u/u, "Zoom admin names should tolerate Zoom role labels in parentheses");
-  assert.match(worker, /normalizedWithoutEllipsis\.length >= 6 && adminName\.startsWith\(normalizedWithoutEllipsis\)/u, "Zoom admin names should tolerate truncated participant labels");
-  assert.match(queueEngine, /action === "auto_open"[\s\S]*response: \{ ok: true, state \}/u, "Zoom-only queue should be able to auto-open without publishing an empty queue first");
-  assert.match(worker, /getQueueSpeechCodeNote\(text\)[\s\S]*callZoomOnlyQueueState\(env, "auto_open", \{ mode: "bk" \}\)/u, "Zoom-only participant 111/222/333/444 should auto-open BK queue when needed");
-  assert.match(worker, /parseZoomManualQueueCommand\(command\)/u, "Zoom app manual input should allow queue admin commands");
-  const zoomOnlyHandlerBlock = worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "";
-  const zoomOnlyGameBlock = zoomOnlyHandlerBlock.match(/const gameNumber = parseGameCommand(?:Core)?\(text\);[\s\S]*?let queueState = queueInfo\.state/su)?.[0] || "";
-  assert.match(zoomOnlyGameBlock, /await enqueueZoomOnlyMessages\(env, splitZoomText\(`\\u0412\\u043E\\u043F\\u0440\\u043E\\u0441 \$\{gameNumber\}:\\n\\n\$\{question\}`\)\);\s*return \{ ok: true, handled: true \};/u, "Zoom-only game command should answer and stop before queue parsing");
-  assert.doesNotMatch(zoomOnlyGameBlock, /queueInfo\.state\?\.isOpen|queueInfo\.state\?\.mode !== "bill"|\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043E\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043E\\u043B\\u044C\\u043A\\u043E/u, "Zoom-only game command should not require an open Bill queue");
-  const legacyZoomHandlerBlock = worker.match(/async function handleZoomBridgeMessage[\s\S]*?__name\(handleZoomBridgeMessage/su)?.[0] || "";
-  const legacyZoomGameBlock = legacyZoomHandlerBlock.match(/const gameNumber = parseGameCommand(?:Core)?\(text\);[\s\S]*?const entry = parseQueueEntry(?:Core)?\(message, queueInfo\.state/su)?.[0] || "";
-  assert.match(legacyZoomGameBlock, /await enqueueZoomMessages\(env, splitZoomText\(questionText\)\);\s*return \{ ok: true, handled: true \};/u, "Legacy Zoom game command should answer and stop before queue parsing");
-  assert.doesNotMatch(legacyZoomGameBlock, /queueInfo\.state\?\.isOpen|queueInfo\.state\?\.mode !== "bill"|\\u0418\\u0433\\u0440\\u0430 \\u0440\\u0430\\u0431\\u043E\\u0442\\u0430\\u0435\\u0442 \\u0442\\u043E\\u043B\\u044C\\u043A\\u043E/u, "Legacy Zoom game command should not require an open Bill queue");
-  assert.doesNotMatch(worker.match(/async function handleZoomOnlyMessage[\s\S]*?__name\(handleZoomOnlyMessage/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only message handler must not call Telegram send/copy helpers");
-  assert.doesNotMatch(worker.match(/async function publishZoomOnlyMeetingCommand[\s\S]*?__name\(publishZoomOnlyMeetingCommand/su)?.[0] || "", /sendMessage\(|copyTechMessageToGroup|sendAnnouncementCopyToGroup|sendBillToGroup|sendYozhikToGroup/u, "Zoom-only publisher must not call Telegram send/copy helpers");
-  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*\\u0431\\u0438\\u043B\\u043B[\s\S]*return "bill"/u, "Zoom command should open Bill queue explicitly");
-  assert.match(worker, /function getZoomOpenQueueMode\(text\)[\s\S]*return "bk"[\s\S]*return "rs"/u, "Zoom command should open BK and RS queues explicitly");
+  const stateClients = fs.readFileSync(new URL("./state_clients.js", import.meta.url), "utf8");
+  const wrangler = fs.readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8");
+  const fetchRouter = worker.match(/var worker_default = \{[\s\S]*?async scheduled/su)?.[0] || "";
+
+  assert.match(worker, /var ZoomMeetingStateDurableObject = class/u, "Current Zoom board and outbox should have a dedicated Durable Object");
+  assert.match(worker, /var ZoomSharedTimerStateDurableObject = class/u, "The frequently synchronized Zoom timer should have its own Durable Object");
+  assert.match(stateClients, /bindingName: "ZOOM_MEETING_STATE"[\s\S]*legacyExportAction: "export_zoom_meeting_state"/u, "Meeting state should migrate automatically from the legacy announcement object");
+  assert.match(stateClients, /bindingName: "ZOOM_SHARED_TIMER_STATE"[\s\S]*legacyExportAction: "export_zoom_shared_timer_state"/u, "Timer state should migrate automatically from the legacy announcement object");
+  assert.match(worker, /action === "export_zoom_meeting_state"/u, "Legacy meeting state should remain readable during the compatibility migration");
+  assert.match(worker, /action === "export_zoom_shared_timer_state"/u, "Legacy timer state should remain readable during the compatibility migration");
+  assert.match(worker, /callZoomMeetingState\(env, "meeting_board_action"/u, "The active free-form queue should use the dedicated meeting object");
+  assert.match(stateClients, /getByName\(instanceName\)/u, "Zoom state clients must support isolated Durable Object instances");
+  assert.match(worker, /callZoomSharedTimerState\(env, "timer_action"/u, "Timer actions should bypass the announcement singleton");
+  assert.match(worker, /callZoomMeetingState\(env, "pull_messages"/u, "The live sender should pull from the dedicated meeting outbox");
+  assert.match(worker, /ignored: "queue_paused"/u, "Retired Zoom chat queue endpoints should remain harmless compatibility stubs");
+  assert.match(worker, /return htmlResponse\(buildZoomMeetingBoardPanelHtml\(\)\)/u, "The current tech-host panel must not depend on a laboratory mode");
+  assert.doesNotMatch(worker, /meeting_board_replay|onParticipantChange/u, "Participant joins must not republish the meeting board");
+  assert.doesNotMatch(worker, /ZOOM_QUEUE_ENABLED|function isZoomQueueEnabled/u, "The retired Zoom queue switch must not survive in Worker source");
+  assert.doesNotMatch(worker, /buildZoomAppHtml|buildZoomV2PanelHtml|buildZoomLibraryPanelHtml|ZOOM_APP_ALLOWED_COMMANDS|ZOOM_V2_PANEL_QUEUE_ACTIONS/u, "Retired Zoom panels and queue controls must be physically removed");
+  assert.doesNotMatch(worker, /handleZoomBridgeMessage|handleZoomOnlyMessage|parseZoomManualQueueCommand|callZoomOnlyQueueState|buildZoomPayloadFromChatEvent/u, "Retired Zoom chat-ingest queue implementation must be physically removed");
+  assert.doesNotMatch(queueEngine, /buildZoomOnlyQueueText|action === "auto_open"/u, "The shared Telegram queue engine must not retain retired Zoom-only branches");
+  assert.doesNotMatch(wrangler, /ZOOM_QUEUE_ENABLED|ZOOM_ADMIN_NAMES/u, "Retired Zoom queue configuration must be removed");
+  assert.doesNotMatch(fetchRouter, /\/zoom-only\/reset|\/zoom\/outbox|\/zoom\/webhook|\/zoom\/debug|\/zoom\/app\/action/u, "Retired Zoom queue and reset routes must not be exposed");
+  assert.doesNotMatch(fetchRouter, /url\.pathname === "\/zoom\/app"/u, "The retired Worker-hosted Zoom app must not be exposed");
+  assert.doesNotMatch(worker.match(/async scheduled[\s\S]*?\n  \}\n\};/su)?.[0] || "", /queue_clear_23_55|isZoomQueueEnabled/u, "The retired Zoom queue must not run scheduled work");
+  assert.match(wrangler, /"ZOOM_MEETING_STATE"[\s\S]*"ZoomMeetingStateDurableObject"/u, "Wrangler should bind the meeting state object");
+  assert.match(wrangler, /"ZOOM_SHARED_TIMER_STATE"[\s\S]*"ZoomSharedTimerStateDurableObject"/u, "Wrangler should bind the timer state object");
+  assert.match(worker, /url\.pathname\.startsWith\("\/zoom-only\/team-chat\/"\)[\s\S]*team_chat_test_retired/u, "Retired Team Chat routes should fail closed with an explicit compatibility response");
+  assert.doesNotMatch(worker, /zoom_team_chat|callZoomTeamChatState|sendMessageToChat|teamChatTest/u, "The failed Team Chat laboratory must be physically removed from runtime code");
+  assert.doesNotMatch(wrangler, /ZOOM_TEAM_CHAT_STATE|ZOOM_TEAM_CHAT_TEST|ZOOM_BOT_REPLACEMENT/u, "Retired Team Chat bindings and flags must not survive in active configuration");
+  assert.match(wrangler, /"tag": "v7"[\s\S]*"deleted_classes"[\s\S]*"ZoomTeamChatStateDurableObject"/u, "The retired Team Chat Durable Object needs an explicit deletion migration");
+  assert.match(wrangler, /"tag": "v5"[\s\S]*"ZoomMeetingStateDurableObject"[\s\S]*"ZoomSharedTimerStateDurableObject"/u, "Both new SQLite Durable Objects need an explicit migration");
 }
 
 function testQueueBehavior() {
@@ -810,6 +815,63 @@ async function testServiceHandlerAllowsTechPanelCommandsThrough() {
   assert.equal(result, null, "Service handler should not crash or consume a meeting-panel command");
 }
 
+async function testBareFixWorksInMainGroup() {
+  const groupChatId = -1003547823625;
+  const text = "\u0424\u0438\u043a\u0441 Zoom: \u041d\u0430\u0444\u0430\u043d\u044e \u0431\u044b \u043d\u0430\u0443\u0447\u0438\u0442\u044c \u0432 \u0437\u0443\u043c\u0435 \u0443\u0434\u0430\u043b\u044f\u0442\u044c \u0441\u0432\u043e\u0438 \u043e\u0447\u0435\u0440\u0435\u0434\u0438";
+  const digests = [];
+  const sent = [];
+  const confirmation = "\u0424\u0438\u043a\u0441 \u043f\u0440\u0438\u043d\u044f\u0442";
+  const message = {
+    chat: { id: groupChatId, type: "supergroup" },
+    from: { id: 42, first_name: "Denis" },
+    message_id: 5,
+    text
+  };
+
+  const result = await handleServiceMessages({}, message, text, groupChatId, null, "supergroup", {
+    isIdCommand: () => false,
+    sendMessage: async (...args) => {
+      sent.push(args);
+      return { ok: true };
+    },
+    isPrivateChat: () => false,
+    isChatGroup: (chatId, threadId) => chatId === groupChatId && threadId === null,
+    isTechThread: () => false,
+    isUserAdmin: async () => false,
+    isTimerPanelCommand: () => false,
+    CHAT_GROUP_ID: groupChatId,
+    INFO_CHAT_ID: -1003835668674,
+    callPersonalDayState: async () => ({}),
+    buildPersonalDayUserSnapshot: () => ({}),
+    getPrivateRoles: async () => ({ isAdmin: false }),
+    setMyCommands: async () => {},
+    TIMER_PANEL_TEXT: "",
+    TECH_THREAD_ID: 440,
+    buildTimerKeyboard: () => ({}),
+    callTelegram: async () => ({ ok: true }),
+    isPrepThread: () => false,
+    hasFixMarker: (value) => /^\u0444\u0438\u043a\u0441(?:\s|$)/iu.test(String(value || "").trim()),
+    getAuthorLabel: () => "Denis",
+    sendAdminDigest: async (...args) => digests.push(args),
+    FIX_CONFIRMATION: confirmation,
+    hasHelpMarker: () => false,
+    HELP_CONFIRMATION: "",
+    hasServiceRequest: () => false,
+    normalizeLightText: (value) => String(value || "").toLowerCase(),
+    parseNafanyaQuestion: () => null,
+    SERVICE_CONFIRMATION: "",
+    sendManualServiceReminder: async () => {},
+    resetManualReplacementRequest: async () => {},
+    sendManualCoordinatorServiceSummary: async () => ({})
+  });
+
+  assert.equal(result.status, 200, "Bare fix in the main group should be consumed");
+  assert.equal(digests.length, 1, "Bare fix should be forwarded to the admin digest");
+  assert.deepEqual(digests[0].slice(1), ["\u0424\u0418\u041a\u0421\u0418\u0420\u0423\u042e", "Denis", text, "#\u0444\u0438\u043a\u0441\u0438\u0440\u0443\u044e"]);
+  assert.equal(sent.length, 1, "Bare fix should receive one confirmation");
+  assert.deepEqual(sent[0].slice(1, 6), [groupChatId, confirmation, null, message.message_id]);
+}
+
 async function testVacancyReplacementRequest() {
   const sent = [];
   const request = {
@@ -966,7 +1028,7 @@ await testOnlyTelegramGroupAdminsCanOfferFromAdminThread();
 await testSelectedReplacementRejectsLateOffersClearly();
 await testZoomWebhookHelpers();
 await testRootResponseHasZoomRequiredSecurityHeaders();
-await testZoomAppHomePage();
+await testRootHomePageUsesBotStatus();
 await testZoomOAuthReturnEndpoint();
 testQueueBehavior();
 await testGameQuestionsWorkWithoutOpenQueue();
@@ -974,11 +1036,16 @@ await testGameQuestionsStillAddToOpenBillQueue();
 await testBotMessagesAreIgnored();
 testZoomOnlyStaticRules();
 await testBillPanelWorksInMainGroup();
-await testKnowledgeAnswers();
-await testMeetingScheduleAnswers();
+if (!process.argv.includes("--skip-live-knowledge")) {
+  await testKnowledgeAnswers();
+  await testMeetingScheduleAnswers();
+}
 testWorkerStaticRules();
+testExpectedDeleteMessageFailures();
+await testSuccessfulTelegramCopySurvivesMarkerFailure();
 await testAnonymousAdminTechPanels();
 await testRegularAdminClosedTechPanel();
 await testServiceHandlerAllowsTechPanelCommandsThrough();
+await testBareFixWorksInMainGroup();
 
 console.log("Nafanya regression tests passed.");

@@ -6,7 +6,6 @@ export class WorkerOutboxClient {
     this.config = config;
     this.fetch = fetchImpl;
     this.outboxPath = "/zoom-only/outbox";
-    this.chatIngestPath = "/zoom-only/chat-ingest";
   }
 
   async postOutbox(payload = {}) {
@@ -16,7 +15,10 @@ export class WorkerOutboxClient {
         "content-type": "application/json",
         "x-nafanya-zoom-secret": this.config.zoomBridgeSecret
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        ...(this.config.outboxMeetingId ? { meetingId: this.config.outboxMeetingId } : {})
+      })
     }, "outbox");
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) {
@@ -36,31 +38,6 @@ export class WorkerOutboxClient {
     const ackIds = ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
     if (!ackIds.length) return { ok: true, remaining: null };
     return this.postOutbox({ ackIds, limit: this.config.outboxLimit });
-  }
-
-  async ingestChatMessage(message = {}) {
-    const response = await this.requestWorker(`${this.config.workerBaseUrl}${this.chatIngestPath}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nafanya-zoom-secret": this.config.zoomBridgeSecret
-      },
-      body: JSON.stringify({
-        authorName: message.authorName,
-        text: message.text,
-        timestamp: message.timestamp,
-        sourceFingerprint: message.canonicalSourceMessageId || message.sourceFingerprint,
-        observedAt: message.observedAt
-      })
-    }, "chat ingest");
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) {
-      throw new WorkerRequestError(data.error || `Worker chat ingest request failed with HTTP ${response.status}`, {
-        reason: classifyWorkerHttpStatus(response.status),
-        httpStatus: response.status
-      });
-    }
-    return data;
   }
 
   async requestWorker(url, init, label) {

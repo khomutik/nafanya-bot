@@ -105,9 +105,9 @@ function testBillMode() {
 
 function testBillZoomChatAllowsNewSourceRepeats() {
   let state = open("bill");
-  state = addParsed(state, "\u0412\u044b", "111", "Zoom");
+  state = addParsed(state, "\u041c\u0430\u043d\u044f \u0425.", "111", "Zoom");
   const repeated = act(state, "add", {
-    entry: parseQueueEntry(message("\u0412\u044b", "111", "Zoom"), state, { source: "Zoom" }),
+    entry: parseQueueEntry(message("\u041c\u0430\u043d\u044f \u0425.", "111", "Zoom"), state, { source: "Zoom" }),
     allowDuplicateBillSpeechEntries: true,
     allowDuplicateEntries: true
   });

@@ -5,27 +5,44 @@ import { FEW_SHOTS, detectNafanyaMode } from "./bot_dialogue.js";
 import { classifyModeration, getModerationDeleteText, getModerationWarningText } from "./bot_moderation.js";
 import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK_TEXTS, QUEUE_CLOSED_LABEL, QUEUE_OPEN_LABEL, QUEUE_PANEL_TEXT, SERVICE_CONFIRMATION, TIMER_CALLBACK_TEXTS, TIMER_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard, buildQueuePublicKeyboard, buildRootStatusText, buildTimerKeyboard, getQueueInstruction, getQueueModeTitle } from "./bot_panels.js";
 import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
-import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState } from "./state_clients.js";
+import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState, callZoomMeetingState, callZoomSharedTimerState } from "./state_clients.js";
 import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
 import {
+  ZOOM_LIBRARY_COLLECTIONS,
+  ZOOM_LIBRARY_IMPORT_MAX_BYTES,
+  buildLibraryZoomMessages,
+  getLibraryEntry,
+  getLibraryStatus,
+  mergeLibraryCollections,
+  readZoomLibrary,
+  saveZoomLibrary,
+  validateLibraryImport
+} from "./zoom_library.js";
+import {
+  buildMeetingBoardText,
+  buildSpeakerQuestionsText,
+  createEmptyMeetingBoardState,
+  createEmptySpeakerQuestionsState,
+  isMeetingBoardDay,
+  normalizeMeetingBoardState,
+  normalizeSpeakerQuestionsState,
+  sanitizeBoardText,
+  splitBoardZoomMessages
+} from "./zoom_meeting_board.js";
+import {
   buildQueueText as buildQueueTextCore,
-  buildZoomOnlyQueueText as buildZoomOnlyQueueTextCore,
-  cleanQueueDisplayName,
   compact,
   createEmptyQueueState,
   getBillQuestionNumber as getBillQuestionNumberCore,
   getQueue111Note as getQueue111NoteCore,
-  getQueueSpeechCodeNote,
   makeManualQueueEntry as makeManualQueueEntryCore,
-  normalizeQueueText,
   parseGameCommand as parseGameCommandCore,
   parseQueueEntry as parseQueueEntryCore,
-  runQueueStateAction as runQueueStateActionCore,
-  stripTelegramHandles
+  runQueueStateAction as runQueueStateActionCore
 } from "./core/queue-engine.js";
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
@@ -349,6 +366,7 @@ var FREE_SERVICES_ANNOUNCEMENT_ID = 1935;
 var MORNING_ANNOUNCEMENT_ID = 2374;
 var EVENING_ANNOUNCEMENT_ID = 2385;
 var DAILY_15_ANNOUNCEMENT_ID = 3053;
+var DAILY_22_ANNOUNCEMENT_ID = 4191;
 var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
 var WEEKDAY_TECH_ANNOUNCEMENTS = [
   { key: "monday", weekday: 1, sourceMessageId: 2893 },
@@ -457,11 +475,6 @@ var TECH_MESSAGES = {
   telemost_link: 2597,
   meeting_schedule: 3053
 };
-function getZoomMeetingKeyBySourceMessageId(sourceMessageId) {
-  const match = Object.entries(TECH_MESSAGES).find(([, messageId]) => Number(messageId) === Number(sourceMessageId));
-  return match ? match[0] : null;
-}
-__name(getZoomMeetingKeyBySourceMessageId, "getZoomMeetingKeyBySourceMessageId");
 var YOZHIK_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/yozhik.json";
 var BILL_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/bill.json";
 var SPEAKER_QUESTIONS_JSON_URL = "https://raw.githubusercontent.com/khomutik/pochti-normalnye-bot-data/main/speaker_questions.json";
@@ -641,19 +654,6 @@ function parseBillInput(text) {
   return Number(match[1]);
 }
 __name(parseBillInput, "parseBillInput");
-function getZoomPayloadDisplayName(payload) {
-  const user = payload?.user || payload?.from || {};
-  return cleanQueueDisplayName(user.displayName || user.display_name || user.senderName || user.sender_name || user.name || user.nickname || payload?.displayName || payload?.display_name || payload?.senderName || payload?.sender_name || payload?.author || "\u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A Zoom");
-}
-__name(getZoomPayloadDisplayName, "getZoomPayloadDisplayName");
-function getZoomOpenQueueMode(text) {
-  const normalized = normalizeZoomCommand(text);
-  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+(?:\u0431\u0438\u043B\u043B|\u0431\u0438\u043B\u043B\u0430)$/u.test(normalized)) return "bill";
-  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0431\u043A$/u.test(normalized)) return "bk";
-  if (/^\u043E\u0442\u043A\u0440\u044B\u0442\u044C\s+\u0440\u0430\u0431\u043E\u0447\u043A\u0430$/u.test(normalized)) return "rs";
-  return null;
-}
-__name(getZoomOpenQueueMode, "getZoomOpenQueueMode");
 function stripHtmlTags(text) {
   return String(text || "").replace(/<[^>]+>/g, "");
 }
@@ -662,16 +662,6 @@ function cleanZoomText(text) {
   return stripHtmlTags(text).replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{4,}/g, "\n\n\n").trim();
 }
 __name(cleanZoomText, "cleanZoomText");
-function looksLikeZoomOnlyBotEcho(text) {
-  const value = cleanZoomText(text);
-  if (!value) return false;
-  if (/^\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+/iu.test(value)) return true;
-  if (/\u041F\u0438\u0448\u0438\u0442\u0435\s+\u0432\s+\u0447\u0430\u0442\s+"?111"?/iu.test(value)) return true;
-  if (/(^|\s)\u041E\u0427\u0415\u0420\u0415\u0414\u042C\s+(?:\u041E\u0422\u041A\u0420\u042B\u0422\u0410|\u0417\u0410\u041A\u0420\u042B\u0422\u0410)(\s|$)/iu.test(value)) return true;
-  if (/^\u041F\u043E\u043A\u0430\s+\u043F\u0443\u0441\u0442\u043E\.?$/iu.test(value)) return true;
-  return false;
-}
-__name(looksLikeZoomOnlyBotEcho, "looksLikeZoomOnlyBotEcho");
 function splitZoomText(text, limit = ZOOM_MESSAGE_SAFE_LIMIT) {
   const clean = cleanZoomText(text);
   if (!clean) return [];
@@ -686,7 +676,7 @@ function splitZoomText(text, limit = ZOOM_MESSAGE_SAFE_LIMIT) {
     rest = rest.slice(cut).trim();
   }
   if (rest) chunks.push(rest);
-  return chunks.length > 1 ? chunks.map((chunk, index) => `\u0427\u0430\u0441\u0442\u044C ${index + 1}/${chunks.length}\n${chunk}`) : chunks;
+  return chunks;
 }
 __name(splitZoomText, "splitZoomText");
 function sleep(ms) {
@@ -697,21 +687,108 @@ function getCurrentTimestamp() {
   return Date.now() + Math.floor(Math.random() * 1e3);
 }
 __name(getCurrentTimestamp, "getCurrentTimestamp");
+var ZOOM_SHARED_TIMER_DEFAULT_MS = 5 * 60 * 1e3;
+var ZOOM_SHARED_TIMER_MAX_MS = 180 * 60 * 1e3;
+var ZOOM_SHARED_TIMER_EXECUTOR_LEASE_MS = 30 * 1e3;
+function clampZoomSharedTimerMs(value, fallback = ZOOM_SHARED_TIMER_DEFAULT_MS) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(ZOOM_SHARED_TIMER_MAX_MS, Math.floor(number))) : fallback;
+}
+__name(clampZoomSharedTimerMs, "clampZoomSharedTimerMs");
+function createEmptyZoomSharedTimerState() {
+  return {
+    status: "idle",
+    running: false,
+    baseMs: ZOOM_SHARED_TIMER_DEFAULT_MS,
+    remainingMs: ZOOM_SHARED_TIMER_DEFAULT_MS,
+    endAt: 0,
+    revision: 0,
+    updatedAt: 0,
+    finishedAt: 0,
+    executor: null,
+    processedRequestIds: []
+  };
+}
+__name(createEmptyZoomSharedTimerState, "createEmptyZoomSharedTimerState");
+function normalizeZoomSharedTimerState(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const baseMs = Math.max(60 * 1e3, clampZoomSharedTimerMs(source.baseMs));
+  const status = ["idle", "running", "paused", "finished"].includes(source.status) ? source.status : "idle";
+  const executor = source.executor && typeof source.executor === "object" && String(source.executor.instanceId || "").trim()
+    ? { instanceId: String(source.executor.instanceId).slice(0, 128), leaseUntil: Math.max(0, Number(source.executor.leaseUntil) || 0) }
+    : null;
+  return {
+    status,
+    running: status === "running" && Boolean(source.running),
+    baseMs,
+    remainingMs: clampZoomSharedTimerMs(source.remainingMs, baseMs),
+    endAt: Math.max(0, Number(source.endAt) || 0),
+    revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    updatedAt: Math.max(0, Number(source.updatedAt) || 0),
+    finishedAt: Math.max(0, Number(source.finishedAt) || 0),
+    executor,
+    processedRequestIds: Array.isArray(source.processedRequestIds) ? source.processedRequestIds.map((item) => String(item || "").trim()).filter(Boolean).slice(-100) : []
+  };
+}
+__name(normalizeZoomSharedTimerState, "normalizeZoomSharedTimerState");
+function createEmptyZoomMeetingRuntimeState() {
+  return {
+    initialized: false,
+    zoomOnlyOutbox: [],
+    zoomOnlyOutboxNextId: 1,
+    zoomOnlyPanelLastAction: null,
+    zoomMeetingBoard: createEmptyMeetingBoardState(),
+    zoomSpeakerQuestions: createEmptySpeakerQuestionsState(),
+    zoomPanelActiveMode: null
+  };
+}
+__name(createEmptyZoomMeetingRuntimeState, "createEmptyZoomMeetingRuntimeState");
+function normalizeZoomOutboxItem(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const id = Math.max(0, Math.floor(Number(source.id) || 0));
+  const createdAt = Math.max(0, Number(source.createdAt) || 0);
+  const text = String(source.text || "").trim();
+  return id && text ? { id, text, createdAt } : null;
+}
+__name(normalizeZoomOutboxItem, "normalizeZoomOutboxItem");
+function normalizeZoomMeetingRuntimeState(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const normalized = {
+    ...createEmptyZoomMeetingRuntimeState(),
+    initialized: source.initialized === true,
+    zoomOnlyOutbox: Array.isArray(source.zoomOnlyOutbox) ? source.zoomOnlyOutbox.map(normalizeZoomOutboxItem).filter(Boolean) : [],
+    zoomOnlyOutboxNextId: Number(source.zoomOnlyOutboxNextId) || 1,
+    zoomOnlyPanelLastAction: source.zoomOnlyPanelLastAction && typeof source.zoomOnlyPanelLastAction === "object" ? source.zoomOnlyPanelLastAction : null,
+    zoomMeetingBoard: normalizeMeetingBoardState(source.zoomMeetingBoard),
+    zoomSpeakerQuestions: normalizeSpeakerQuestionsState(source.zoomSpeakerQuestions),
+    zoomPanelActiveMode: source.zoomPanelActiveMode === "meeting" || source.zoomPanelActiveMode === "speaker" ? source.zoomPanelActiveMode : null
+  };
+  const maxOutboxId = normalized.zoomOnlyOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
+  if (!Number.isInteger(normalized.zoomOnlyOutboxNextId) || normalized.zoomOnlyOutboxNextId <= maxOutboxId) {
+    normalized.zoomOnlyOutboxNextId = maxOutboxId + 1;
+  }
+  return normalized;
+}
+__name(normalizeZoomMeetingRuntimeState, "normalizeZoomMeetingRuntimeState");
+function createEmptyZoomSharedTimerRuntimeState() {
+  return { initialized: false, timer: createEmptyZoomSharedTimerState() };
+}
+__name(createEmptyZoomSharedTimerRuntimeState, "createEmptyZoomSharedTimerRuntimeState");
+function normalizeZoomSharedTimerRuntimeState(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    initialized: source.initialized === true,
+    timer: normalizeZoomSharedTimerState(source.timer)
+  };
+}
+__name(normalizeZoomSharedTimerRuntimeState, "normalizeZoomSharedTimerRuntimeState");
 function createEmptyAnnouncementState() {
   return {
     messageIds: {},
     personalSubscriptions: {},
     adminDmDrafts: {},
     adminDmUsers: {},
-    replacementRequests: {},
-    zoomOutbox: [],
-    zoomOutboxNextId: 1,
-    zoomDebugEvents: [],
-    zoomOnlyQueueState: createEmptyQueueState(),
-    zoomOnlyOutbox: [],
-    zoomOnlyOutboxNextId: 1,
-    zoomOnlyChatIngestFingerprints: [],
-    zoomOnlyPanelLastAction: null
+    replacementRequests: {}
   };
 }
 __name(createEmptyAnnouncementState, "createEmptyAnnouncementState");
@@ -732,40 +809,6 @@ function normalizeAnnouncementState(announcementState) {
   if (!normalized.replacementRequests || typeof normalized.replacementRequests !== "object") {
     normalized.replacementRequests = {};
   }
-  if (!Array.isArray(normalized.zoomOutbox)) {
-    normalized.zoomOutbox = [];
-  }
-  normalized.zoomOutbox = normalized.zoomOutbox.filter((item) => item && typeof item === "object");
-  if (!Array.isArray(normalized.zoomDebugEvents)) {
-    normalized.zoomDebugEvents = [];
-  }
-  normalized.zoomDebugEvents = normalized.zoomDebugEvents.filter((item) => item && typeof item === "object").slice(-25);
-  if (!normalized.zoomOnlyQueueState || typeof normalized.zoomOnlyQueueState !== "object") {
-    normalized.zoomOnlyQueueState = createEmptyQueueState();
-  }
-  normalized.zoomOnlyQueueState = {
-    ...createEmptyQueueState(),
-    ...normalized.zoomOnlyQueueState,
-    entries: Array.isArray(normalized.zoomOnlyQueueState.entries) ? normalized.zoomOnlyQueueState.entries : [],
-    history: Array.isArray(normalized.zoomOnlyQueueState.history) ? normalized.zoomOnlyQueueState.history : []
-  };
-  if (!Array.isArray(normalized.zoomOnlyOutbox)) {
-    normalized.zoomOnlyOutbox = [];
-  }
-  normalized.zoomOnlyOutbox = normalized.zoomOnlyOutbox.filter((item) => item && typeof item === "object");
-  if (!Array.isArray(normalized.zoomOnlyChatIngestFingerprints)) {
-    normalized.zoomOnlyChatIngestFingerprints = [];
-  }
-  normalized.zoomOnlyChatIngestFingerprints = normalized.zoomOnlyChatIngestFingerprints.map((item) => String(item || "").trim()).filter(Boolean).slice(-300);
-  if (!normalized.zoomOnlyPanelLastAction || typeof normalized.zoomOnlyPanelLastAction !== "object") {
-    normalized.zoomOnlyPanelLastAction = null;
-  }
-  const maxExistingId = normalized.zoomOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
-  const nextId = Number(normalized.zoomOutboxNextId);
-  normalized.zoomOutboxNextId = Number.isInteger(nextId) && nextId > maxExistingId ? nextId : maxExistingId + 1;
-  const maxZoomOnlyId = normalized.zoomOnlyOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
-  const nextZoomOnlyId = Number(normalized.zoomOnlyOutboxNextId);
-  normalized.zoomOnlyOutboxNextId = Number.isInteger(nextZoomOnlyId) && nextZoomOnlyId > maxZoomOnlyId ? nextZoomOnlyId : maxZoomOnlyId + 1;
   return normalized;
 }
 __name(normalizeAnnouncementState, "normalizeAnnouncementState");
@@ -1076,6 +1119,400 @@ var LightTalkStateDurableObject = class {
     await this.state.storage.deleteAlarm();
   }
 };
+var ZoomMeetingStateDurableObject = class {
+  static {
+    __name(this, "ZoomMeetingStateDurableObject");
+  }
+  constructor(state) {
+    this.state = state;
+  }
+  async loadState() {
+    return normalizeZoomMeetingRuntimeState(await this.state.storage.get("zoom-meeting-state"));
+  }
+  async saveState(runtimeState) {
+    await this.state.storage.put("zoom-meeting-state", normalizeZoomMeetingRuntimeState(runtimeState));
+  }
+  appendMessages(runtimeState, messages) {
+    const createdAt = Date.now();
+    const queued = (Array.isArray(messages) ? messages : [])
+      .map((message) => String(message || "").trim())
+      .filter(Boolean)
+      .map((text) => {
+        const item = { id: runtimeState.zoomOnlyOutboxNextId, text, createdAt };
+        runtimeState.zoomOnlyOutboxNextId += 1;
+        return item;
+      });
+    if (queued.length) {
+      runtimeState.zoomOnlyOutbox.push(...queued);
+      runtimeState.zoomOnlyOutbox = runtimeState.zoomOnlyOutbox.slice(-300);
+    }
+    return queued;
+  }
+  deliverBoardMessages(runtimeState, messages) {
+    return { queued: this.appendMessages(runtimeState, messages), deliveryMessages: [] };
+  }
+  rememberRequest(target, requestId) {
+    const id = String(requestId || "").trim();
+    if (!id) return false;
+    if (target.processedRequestIds.includes(id)) return true;
+    target.processedRequestIds.push(id);
+    target.processedRequestIds = target.processedRequestIds.slice(-100);
+    return false;
+  }
+  prepareMeetingBoard(runtimeState, payload) {
+    const sessionDate = String(payload.sessionDate || "").trim();
+    const dayKey = String(payload.dayKey || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(sessionDate) || !isMeetingBoardDay(dayKey)) {
+      throw new Error("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0434\u0435\u043d\u044c \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f.");
+    }
+    let board = normalizeMeetingBoardState(runtimeState.zoomMeetingBoard);
+    if (board.sessionDate !== sessionDate || board.dayKey !== dayKey) {
+      board = { ...createEmptyMeetingBoardState(), sessionDate, dayKey };
+    }
+    runtimeState.zoomMeetingBoard = board;
+    return board;
+  }
+  async runMeetingBoardAction(runtimeState, payload) {
+    const boardAction = String(payload.boardAction || "publish").trim();
+    if (boardAction === "clear_all") {
+      const storedBoard = normalizeMeetingBoardState(runtimeState.zoomMeetingBoard);
+      const previousMessages = storedBoard.lastMessages;
+      const dayKey = isMeetingBoardDay(storedBoard.dayKey) ? storedBoard.dayKey : String(payload.dayKey || "").trim();
+      const board = this.prepareMeetingBoard(runtimeState, { ...payload, dayKey });
+      const sessionDate = String(payload.sessionDate || "").trim();
+      let speaker = normalizeSpeakerQuestionsState(runtimeState.zoomSpeakerQuestions);
+      if (speaker.sessionDate !== sessionDate) speaker = { ...createEmptySpeakerQuestionsState(), sessionDate };
+      const previousSpeakerMessages = speaker.lastMessages;
+      runtimeState.zoomSpeakerQuestions = speaker;
+      if (this.rememberRequest(board, payload.requestId)) {
+        return { ok: true, duplicate: true, state: board, speakerQuestions: speaker, activeMode: runtimeState.zoomPanelActiveMode, queued: [] };
+      }
+      const now = Date.now();
+      board.entries = [];
+      board.additionalTopics = [];
+      board.version += 1;
+      board.updatedAt = now;
+      board.lastMessages = splitBoardZoomMessages(buildMeetingBoardText(board, ZOOM_MEETING_MESSAGE_TEXTS));
+      speaker.entries = [];
+      speaker.version += 1;
+      speaker.updatedAt = now;
+      speaker.lastMessages = splitBoardZoomMessages(buildSpeakerQuestionsText(speaker));
+      runtimeState.zoomPanelActiveMode = "meeting";
+      const boardDelivery = this.deliverBoardMessages(runtimeState, board.lastMessages, payload, {
+        key: "meeting_board",
+        version: board.version,
+        previousMessages
+      });
+      const speakerDelivery = this.deliverBoardMessages(runtimeState, speaker.lastMessages, payload, {
+        key: "speaker_questions",
+        version: speaker.version,
+        previousMessages: previousSpeakerMessages
+      });
+      const queued = [...boardDelivery.queued, ...speakerDelivery.queued];
+      const deliveryMessages = [...boardDelivery.deliveryMessages, ...speakerDelivery.deliveryMessages];
+      await this.saveState(runtimeState);
+      return { ok: true, duplicate: false, state: board, speakerQuestions: speaker, activeMode: "meeting", queued, deliveryMessages };
+    }
+    const previousMessages = normalizeMeetingBoardState(runtimeState.zoomMeetingBoard).lastMessages;
+    const board = this.prepareMeetingBoard(runtimeState, payload);
+    if (this.rememberRequest(board, payload.requestId)) {
+      return { ok: true, duplicate: true, state: board, activeMode: runtimeState.zoomPanelActiveMode, queued: [] };
+    }
+    const now = Date.now();
+    const id = String(payload.id || "").trim();
+    if (boardAction === "add_entry") {
+      const text = sanitizeBoardText(payload.text);
+      board.entries.push({ id: crypto.randomUUID(), text, status: "waiting", createdAt: now, updatedAt: now });
+    } else if (boardAction === "add_topic") {
+      const text = sanitizeBoardText(payload.text, { stripLeadingNumber: true });
+      if (board.additionalTopics.some((item) => item.text === text)) {
+        throw new Error("\u0422\u0430\u043a\u0430\u044f \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0442\u0435\u043c\u0430 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c.");
+      }
+      board.additionalTopics.push({ id: crypto.randomUUID(), text, createdAt: now, updatedAt: now });
+    } else if (["mark_spoken", "restore_waiting", "defer_entry", "remove_entry"].includes(boardAction)) {
+      const index = board.entries.findIndex((item) => item.id === id);
+      if (index < 0) {
+        throw new Error("\u0417\u0430\u043f\u0438\u0441\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u0438 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0430 \u0434\u0440\u0443\u0433\u0438\u043c \u0442\u0435\u0445\u0432\u0435\u0434\u043e\u043c. \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u0435 \u0441\u043f\u0438\u0441\u043e\u043a.");
+      }
+      if (boardAction === "remove_entry") {
+        board.entries.splice(index, 1);
+      } else if (boardAction === "defer_entry") {
+        if (board.entries[index].status === "spoken") {
+          throw new Error("\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u0432\u0448\u0435\u0433\u043e\u0441\u044f \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430 \u043d\u0435\u043b\u044c\u0437\u044f \u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u0438\u0436\u0435.");
+        }
+        if (index >= board.entries.length - 1) {
+          throw new Error("\u042d\u0442\u0430 \u0437\u0430\u043f\u0438\u0441\u044c \u0443\u0436\u0435 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u0438.");
+        }
+        [board.entries[index], board.entries[index + 1]] = [board.entries[index + 1], { ...board.entries[index], updatedAt: now }];
+      } else {
+        board.entries[index] = { ...board.entries[index], status: boardAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
+      }
+    } else if (boardAction === "remove_topic") {
+      const index = board.additionalTopics.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error("\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0442\u0435\u043c\u0430 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0430.");
+      board.additionalTopics.splice(index, 1);
+    } else if (boardAction !== "publish") {
+      throw new Error("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438.");
+    }
+    board.version += 1;
+    board.updatedAt = now;
+    board.lastMessages = splitBoardZoomMessages(buildMeetingBoardText(board, ZOOM_MEETING_MESSAGE_TEXTS));
+    runtimeState.zoomPanelActiveMode = "meeting";
+    const { queued, deliveryMessages } = this.deliverBoardMessages(runtimeState, board.lastMessages, payload, {
+      key: "meeting_board",
+      version: board.version,
+      previousMessages
+    });
+    await this.saveState(runtimeState);
+    return { ok: true, duplicate: false, state: board, activeMode: "meeting", queued, deliveryMessages };
+  }
+  async runSpeakerQuestionsAction(runtimeState, payload) {
+    const sessionDate = String(payload.sessionDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(sessionDate)) {
+      throw new Error("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u043e\u0439.");
+    }
+    let speaker = normalizeSpeakerQuestionsState(runtimeState.zoomSpeakerQuestions);
+    const previousMessages = speaker.lastMessages;
+    if (speaker.sessionDate !== sessionDate) speaker = { ...createEmptySpeakerQuestionsState(), sessionDate };
+    runtimeState.zoomSpeakerQuestions = speaker;
+    const speakerAction = String(payload.speakerAction || "publish").trim();
+    if (this.rememberRequest(speaker, payload.requestId)) {
+      return { ok: true, duplicate: true, state: speaker, activeMode: runtimeState.zoomPanelActiveMode, queued: [] };
+    }
+    const now = Date.now();
+    if (speakerAction === "add") {
+      const text = sanitizeBoardText(payload.text);
+      if (speaker.entries.some((item) => item.text === text)) {
+        throw new Error("\u0422\u0430\u043a\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441 \u0438\u043b\u0438 \u0437\u0430\u044f\u0432\u043a\u0430 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c.");
+      }
+      speaker.entries.push({ id: crypto.randomUUID(), text, createdAt: now, updatedAt: now });
+    } else if (speakerAction === "remove") {
+      const id = String(payload.id || "").trim();
+      const index = speaker.entries.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error("\u0417\u0430\u043f\u0438\u0441\u044c \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u043e\u0439 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0430.");
+      speaker.entries.splice(index, 1);
+    } else if (speakerAction === "clear") {
+      speaker.entries = [];
+    } else if (speakerAction !== "publish") {
+      throw new Error("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u043e\u0439.");
+    }
+    speaker.version += 1;
+    speaker.updatedAt = now;
+    speaker.lastMessages = splitBoardZoomMessages(buildSpeakerQuestionsText(speaker));
+    runtimeState.zoomPanelActiveMode = "speaker";
+    const { queued, deliveryMessages } = this.deliverBoardMessages(runtimeState, speaker.lastMessages, payload, {
+      key: "speaker_questions",
+      version: speaker.version,
+      previousMessages
+    });
+    await this.saveState(runtimeState);
+    return { ok: true, duplicate: false, state: speaker, activeMode: "speaker", queued, deliveryMessages };
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let runtimeState = await this.loadState();
+    try {
+      if (action === "get_migration_status") {
+        return Response.json({ ok: true, initialized: runtimeState.initialized });
+      }
+      if (action === "initialize_from_legacy") {
+        if (!runtimeState.initialized) {
+          runtimeState = normalizeZoomMeetingRuntimeState({ ...(payload.state || {}), initialized: true });
+          await this.saveState(runtimeState);
+        }
+        return Response.json({ ok: true, initialized: true });
+      }
+      if (!runtimeState.initialized) {
+        return Response.json({ ok: false, reason: "not_initialized", error: "zoom_runtime_not_initialized" }, { status: 409 });
+      }
+      if (action === "enqueue_messages") {
+        const queued = this.appendMessages(runtimeState, payload.messages);
+        if (queued.length) await this.saveState(runtimeState);
+        return Response.json({ ok: true, queued });
+      }
+      if (action === "get_outbox_marker") {
+        return Response.json({ ok: true, nextId: runtimeState.zoomOnlyOutboxNextId });
+      }
+      if (action === "pull_messages") {
+        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
+        const minId = Number(payload.minId) || 0;
+        const messages = runtimeState.zoomOnlyOutbox.filter((item) => !minId || Number(item.id) >= minId);
+        return Response.json({ ok: true, messages: messages.slice(0, limit) });
+      }
+      if (action === "ack_messages") {
+        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
+        if (ids.size) {
+          runtimeState.zoomOnlyOutbox = runtimeState.zoomOnlyOutbox.filter((item) => !ids.has(Number(item.id)));
+          await this.saveState(runtimeState);
+        }
+        return Response.json({ ok: true, remaining: runtimeState.zoomOnlyOutbox.length });
+      }
+      if (action === "meeting_board_action") return Response.json(await this.runMeetingBoardAction(runtimeState, payload));
+      if (action === "speaker_questions_action") return Response.json(await this.runSpeakerQuestionsAction(runtimeState, payload));
+      if (action === "record_panel_action") {
+        const key = String(payload.key || payload.command || "").trim();
+        runtimeState.zoomOnlyPanelLastAction = {
+          key,
+          label: String(payload.label || key).trim(),
+          ok: payload.ok !== false,
+          createdAt: Date.now()
+        };
+        await this.saveState(runtimeState);
+        return Response.json({ ok: true, lastAction: runtimeState.zoomOnlyPanelLastAction });
+      }
+      if (action === "status") {
+        return Response.json({
+          ok: true,
+          queue: { isOpen: false, mode: null, entriesCount: 0, entries: [], historyCount: 0 },
+          outboxSize: runtimeState.zoomOnlyOutbox.length,
+          nextOutboxId: runtimeState.zoomOnlyOutboxNextId,
+          sender: { connected: false, status: "waiting" },
+          lastPanelAction: runtimeState.zoomOnlyPanelLastAction,
+          meetingBoard: runtimeState.zoomMeetingBoard,
+          speakerQuestions: runtimeState.zoomSpeakerQuestions,
+          activeMode: runtimeState.zoomPanelActiveMode
+        });
+      }
+      return Response.json({ ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." }, { status: 400 });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+};
+var ZoomSharedTimerStateDurableObject = class {
+  static {
+    __name(this, "ZoomSharedTimerStateDurableObject");
+  }
+  constructor(state) {
+    this.state = state;
+  }
+  async loadState() {
+    return normalizeZoomSharedTimerRuntimeState(await this.state.storage.get("zoom-shared-timer-state"));
+  }
+  async saveState(runtimeState) {
+    await this.state.storage.put("zoom-shared-timer-state", normalizeZoomSharedTimerRuntimeState(runtimeState));
+  }
+  rememberRequest(timer, requestId) {
+    const id = String(requestId || "").trim();
+    if (!id) return false;
+    if (timer.processedRequestIds.includes(id)) return true;
+    timer.processedRequestIds.push(id);
+    timer.processedRequestIds = timer.processedRequestIds.slice(-100);
+    return false;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const action = url.pathname.replace("/", "");
+    const payload = request.method === "POST" ? await request.json() : {};
+    let runtimeState = await this.loadState();
+    try {
+      if (action === "get_migration_status") return Response.json({ ok: true, initialized: runtimeState.initialized });
+      if (action === "initialize_from_legacy") {
+        if (!runtimeState.initialized) {
+          runtimeState = { initialized: true, timer: normalizeZoomSharedTimerState(payload.state) };
+          await this.saveState(runtimeState);
+        }
+        return Response.json({ ok: true, initialized: true });
+      }
+      if (!runtimeState.initialized) {
+        return Response.json({ ok: false, reason: "not_initialized", error: "zoom_timer_not_initialized" }, { status: 409 });
+      }
+      if (action !== "timer_action") {
+        return Response.json({ ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 Zoom-\u0442\u0430\u0439\u043c\u0435\u0440\u0430." }, { status: 400 });
+      }
+      const now = Date.now();
+      const timerAction = String(payload.timerAction || "sync").trim();
+      const instanceId = String(payload.instanceId || "").trim().slice(0, 128);
+      const product = String(payload.product || "unknown").trim().toLowerCase();
+      const timer = normalizeZoomSharedTimerState(runtimeState.timer);
+      let changed = false;
+      if (timer.running && timer.endAt > 0 && timer.endAt <= now) {
+        timer.status = "finished";
+        timer.running = false;
+        timer.remainingMs = 0;
+        timer.endAt = 0;
+        timer.finishedAt = now;
+        timer.updatedAt = now;
+        timer.revision += 1;
+        changed = true;
+      }
+      if (product === "desktop" && payload.indicatorSupported === true && instanceId) {
+        const leaseExpired = !timer.executor || timer.executor.leaseUntil <= now;
+        const leaseNeedsRenewal = timer.executor?.instanceId === instanceId && timer.executor.leaseUntil <= now + 10e3;
+        if (leaseExpired || leaseNeedsRenewal) {
+          timer.executor = { instanceId, leaseUntil: now + ZOOM_SHARED_TIMER_EXECUTOR_LEASE_MS };
+          changed = true;
+        }
+      }
+      const duplicate = timerAction !== "sync" && this.rememberRequest(timer, payload.requestId);
+      if (!duplicate) {
+        if (timerAction === "configure") {
+          if (!timer.running) {
+            timer.baseMs = Math.max(60 * 1e3, clampZoomSharedTimerMs(payload.baseMs, timer.baseMs));
+            timer.remainingMs = timer.baseMs;
+            timer.status = "idle";
+            timer.endAt = 0;
+            timer.finishedAt = 0;
+            timer.updatedAt = now;
+            timer.revision += 1;
+            changed = true;
+          }
+        } else if (timerAction === "start") {
+          timer.baseMs = Math.max(60 * 1e3, clampZoomSharedTimerMs(payload.baseMs, timer.baseMs));
+          const requestedRemaining = clampZoomSharedTimerMs(payload.remainingMs, timer.remainingMs);
+          timer.remainingMs = requestedRemaining > 0 ? requestedRemaining : timer.baseMs;
+          timer.endAt = now + timer.remainingMs;
+          timer.status = "running";
+          timer.running = true;
+          timer.finishedAt = 0;
+          timer.updatedAt = now;
+          timer.revision += 1;
+          changed = true;
+        } else if (timerAction === "pause") {
+          if (timer.running) {
+            timer.remainingMs = Math.max(0, timer.endAt - now);
+            timer.endAt = 0;
+            timer.status = "paused";
+            timer.running = false;
+            timer.updatedAt = now;
+            timer.revision += 1;
+            changed = true;
+          }
+        } else if (timerAction === "extend") {
+          const deltaMs = Math.max(60 * 1e3, Math.min(10 * 60 * 1e3, Math.floor(Number(payload.deltaMs) || 0)));
+          const remaining = timer.running ? Math.max(0, timer.endAt - now) : timer.remainingMs;
+          timer.remainingMs = clampZoomSharedTimerMs(remaining + deltaMs, remaining);
+          if (timer.running) timer.endAt = now + timer.remainingMs;
+          timer.finishedAt = 0;
+          timer.updatedAt = now;
+          timer.revision += 1;
+          changed = true;
+        } else if (timerAction === "reset") {
+          timer.baseMs = Math.max(60 * 1e3, clampZoomSharedTimerMs(payload.baseMs, timer.baseMs));
+          timer.remainingMs = timer.baseMs;
+          timer.endAt = 0;
+          timer.status = "idle";
+          timer.running = false;
+          timer.finishedAt = 0;
+          timer.updatedAt = now;
+          timer.revision += 1;
+          changed = true;
+        } else if (timerAction !== "sync") {
+          throw new Error("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043e\u0431\u0449\u0435\u0433\u043e \u0442\u0430\u0439\u043c\u0435\u0440\u0430.");
+        }
+      }
+      const executorActive = Boolean(timer.executor && timer.executor.leaseUntil > now);
+      const isExecutor = Boolean(executorActive && instanceId && timer.executor.instanceId === instanceId);
+      runtimeState.timer = timer;
+      if (changed) await this.saveState(runtimeState);
+      return Response.json({ ok: true, duplicate, state: timer, serverNow: now, executorActive, isExecutor });
+    } catch (error) {
+      return Response.json({ ok: false, error: error.message }, { status: 400 });
+    }
+  }
+};
 var AnnouncementStateDurableObject = class {
   static {
     __name(this, "AnnouncementStateDurableObject");
@@ -1095,6 +1532,23 @@ var AnnouncementStateDurableObject = class {
     const payload = request.method === "POST" ? await request.json() : {};
     const announcementState = await this.loadState();
     try {
+      if (action === "export_zoom_meeting_state") {
+        return Response.json({
+          ok: true,
+          state: normalizeZoomMeetingRuntimeState({
+            initialized: true,
+            zoomOnlyOutbox: announcementState.zoomOnlyOutbox,
+            zoomOnlyOutboxNextId: announcementState.zoomOnlyOutboxNextId,
+            zoomOnlyPanelLastAction: announcementState.zoomOnlyPanelLastAction,
+            zoomMeetingBoard: announcementState.zoomMeetingBoard,
+            zoomSpeakerQuestions: announcementState.zoomSpeakerQuestions,
+            zoomPanelActiveMode: announcementState.zoomPanelActiveMode
+          })
+        });
+      }
+      if (action === "export_zoom_shared_timer_state") {
+        return Response.json({ ok: true, state: normalizeZoomSharedTimerState(announcementState.zoomSharedTimer) });
+      }
       if (action === "get") {
         const key = String(payload.key || "").trim();
         return Response.json({
@@ -1116,247 +1570,6 @@ var AnnouncementStateDurableObject = class {
         }
         await this.saveState(announcementState);
         return Response.json({ ok: true, messageId: announcementState.messageIds[key] ?? null });
-      }
-      if (action === "enqueue_zoom_messages") {
-        const messages = Array.isArray(payload.messages) ? payload.messages : [];
-        const createdAt = Date.now();
-        const queued = messages
-          .map((message) => String(message || "").trim())
-          .filter(Boolean)
-          .map((text) => {
-            const item = {
-              id: announcementState.zoomOutboxNextId,
-              text,
-              createdAt
-            };
-            announcementState.zoomOutboxNextId += 1;
-            return item;
-          });
-        if (queued.length) {
-          announcementState.zoomOutbox.push(...queued);
-          if (announcementState.zoomOutbox.length > 200) {
-            announcementState.zoomOutbox = announcementState.zoomOutbox.slice(-200);
-          }
-          await this.saveState(announcementState);
-        }
-        return Response.json({ ok: true, queued });
-      }
-      if (action === "get_zoom_outbox_marker") {
-        return Response.json({
-          ok: true,
-          nextId: announcementState.zoomOutboxNextId
-        });
-      }
-      if (action === "pull_zoom_messages") {
-        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
-        const minId = Number(payload.minId) || 0;
-        const messages = announcementState.zoomOutbox.filter((item) => !minId || Number(item.id) >= minId);
-        return Response.json({
-          ok: true,
-          messages: messages.slice(0, limit)
-        });
-      }
-      if (action === "ack_zoom_messages") {
-        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
-        if (ids.size) {
-          announcementState.zoomOutbox = announcementState.zoomOutbox.filter((item) => !ids.has(Number(item.id)));
-          await this.saveState(announcementState);
-        }
-        return Response.json({ ok: true, remaining: announcementState.zoomOutbox.length });
-      }
-      if (action === "record_zoom_debug") {
-        const event = payload.event && typeof payload.event === "object" ? payload.event : {};
-        announcementState.zoomDebugEvents.push({
-          ...event,
-          recordedAt: Date.now()
-        });
-        announcementState.zoomDebugEvents = announcementState.zoomDebugEvents.slice(-25);
-        await this.saveState(announcementState);
-        return Response.json({ ok: true, count: announcementState.zoomDebugEvents.length });
-      }
-      if (action === "pull_zoom_debug") {
-        return Response.json({ ok: true, events: announcementState.zoomDebugEvents.slice(-25) });
-      }
-      if (action === "clear_zoom_debug") {
-        announcementState.zoomDebugEvents = [];
-        await this.saveState(announcementState);
-        return Response.json({ ok: true });
-      }
-      if (action === "enqueue_zoom_only_messages") {
-        const messages = Array.isArray(payload.messages) ? payload.messages : [];
-        const createdAt = Date.now();
-        const queued = messages
-          .map((message) => String(message || "").trim())
-          .filter(Boolean)
-          .map((text) => {
-            const item = {
-              id: announcementState.zoomOnlyOutboxNextId,
-              text,
-              createdAt
-            };
-            announcementState.zoomOnlyOutboxNextId += 1;
-            return item;
-          });
-        if (queued.length) {
-          announcementState.zoomOnlyOutbox.push(...queued);
-          if (announcementState.zoomOnlyOutbox.length > 300) {
-            announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.slice(-300);
-          }
-          await this.saveState(announcementState);
-        }
-        return Response.json({ ok: true, queued });
-      }
-      if (action === "get_zoom_only_outbox_marker") {
-        return Response.json({
-          ok: true,
-          nextId: announcementState.zoomOnlyOutboxNextId
-        });
-      }
-      if (action === "pull_zoom_only_messages") {
-        const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
-        const minId = Number(payload.minId) || 0;
-        const messages = announcementState.zoomOnlyOutbox.filter((item) => !minId || Number(item.id) >= minId);
-        return Response.json({
-          ok: true,
-          messages: messages.slice(0, limit)
-        });
-      }
-      if (action === "ack_zoom_only_messages") {
-        const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
-        if (ids.size) {
-          announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.filter((item) => !ids.has(Number(item.id)));
-          await this.saveState(announcementState);
-        }
-        return Response.json({ ok: true, remaining: announcementState.zoomOnlyOutbox.length });
-      }
-      if (action === "zoom_only_queue") {
-        const queueResult = runQueueStateActionCore(announcementState.zoomOnlyQueueState, payload.queueAction || "get", payload.queuePayload || {}, buildZoomOnlyQueueTextCore);
-        announcementState.zoomOnlyQueueState = queueResult.state;
-        await this.saveState(announcementState);
-        return Response.json(queueResult.response);
-      }
-      if (action === "zoom_only_chat_ingest_code") {
-        const text = String(payload.text || "").trim();
-        const authorName = String(payload.authorName || "").trim();
-        const sourceFingerprint = String(payload.sourceFingerprint || "").trim();
-        const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
-        const codeText = text.match(/^(?:111|222|333|444)$/u)?.[0] || null;
-        const gameMatch = normalizeQueueText(text).match(/^\u0438\u0433\u0440\u0430\s+(\d{1,3})$/u);
-        const gameNumber = gameMatch ? Number(gameMatch[1]) : null;
-        if (!codeText && gameNumber === null) {
-          return Response.json({ ok: true, handled: false, ignored: "unsupported_text" });
-        }
-        if (!sourceFingerprint) {
-          return Response.json({ ok: false, handled: false, error: "sourceFingerprint is required" }, { status: 400 });
-        }
-        if (!authorName) {
-          return Response.json({ ok: true, handled: false, ignored: "empty_author" });
-        }
-        if (!queue.isOpen || !queue.mode) {
-          return Response.json({ ok: true, handled: false, ignored: "queue_closed", queue });
-        }
-        if (gameNumber !== null && queue.mode !== "bill") {
-          return Response.json({ ok: true, handled: false, ignored: "unsupported_mode", queue });
-        }
-        if (codeText && !["rs", "bk", "bill"].includes(queue.mode)) {
-          return Response.json({ ok: true, handled: false, ignored: "unsupported_mode", queue });
-        }
-        if (announcementState.zoomOnlyChatIngestFingerprints.includes(sourceFingerprint)) {
-          return Response.json({ ok: true, handled: true, duplicate: true, ignored: "fingerprint_duplicate", queue });
-        }
-        announcementState.zoomOnlyChatIngestFingerprints.push(sourceFingerprint);
-        announcementState.zoomOnlyChatIngestFingerprints = announcementState.zoomOnlyChatIngestFingerprints.slice(-300);
-        const zoomMessage = {
-          text,
-          message_id: sourceFingerprint,
-          chat: { id: "zoom-only-chat" },
-          from: { first_name: authorName }
-        };
-        const entry = gameNumber !== null
-          ? makeManualQueueEntryCore(authorName, "first", `\u0438\u0433\u0440\u0430 ${gameNumber}`, text, { source: "Zoom chat" })
-          : parseQueueEntryCore(zoomMessage, queue, { source: "Zoom chat" });
-        if (!entry) {
-          return Response.json({ ok: true, handled: false, ignored: "unsupported_text", queue });
-        }
-        const queueResult = runQueueStateActionCore(queue, "add", { entry, allowDuplicateEntries: true, allowDuplicateBillSpeechEntries: true }, buildZoomOnlyQueueTextCore);
-        announcementState.zoomOnlyQueueState = queueResult.state;
-        const queued = [];
-        const appendZoomOnlyOutboxMessages = __name((messages) => {
-          const createdAt = Date.now();
-          for (const message of messages) {
-            queued.push({
-              id: announcementState.zoomOnlyOutboxNextId,
-              text: message,
-              createdAt
-            });
-            announcementState.zoomOnlyOutboxNextId += 1;
-          }
-          announcementState.zoomOnlyOutbox.push(...queued);
-          if (announcementState.zoomOnlyOutbox.length > 300) {
-            announcementState.zoomOnlyOutbox = announcementState.zoomOnlyOutbox.slice(-300);
-          }
-        }, "appendZoomOnlyOutboxMessages");
-        const prependMessages = Array.isArray(payload.prependMessages) ? payload.prependMessages.map((message) => String(message || "").trim()).filter(Boolean) : [];
-        if (!queueResult.response?.duplicate && prependMessages.length) {
-          appendZoomOnlyOutboxMessages(prependMessages.flatMap((message) => splitZoomText(message)));
-        }
-        if (queueResult.response?.publishQueue && !queueResult.response?.duplicate && queueResult.response?.queueText) {
-          appendZoomOnlyOutboxMessages(splitZoomText(queueResult.response.queueText));
-        }
-        await this.saveState(announcementState);
-        return Response.json({
-          ok: true,
-          handled: true,
-          duplicate: Boolean(queueResult.response?.duplicate),
-          gameNumber,
-          queue: announcementState.zoomOnlyQueueState,
-          queued
-        });
-      }
-      if (action === "record_zoom_only_panel_action") {
-        const key = String(payload.key || payload.command || "").trim();
-        announcementState.zoomOnlyPanelLastAction = {
-          key,
-          label: String(payload.label || key).trim(),
-          ok: payload.ok !== false,
-          createdAt: Date.now()
-        };
-        await this.saveState(announcementState);
-        return Response.json({ ok: true, lastAction: announcementState.zoomOnlyPanelLastAction });
-      }
-      if (action === "clear_zoom_only_state") {
-        announcementState.zoomOnlyQueueState = createEmptyQueueState();
-        announcementState.zoomOnlyOutbox = [];
-        announcementState.zoomOnlyOutboxNextId = 1;
-        announcementState.zoomOnlyChatIngestFingerprints = [];
-        announcementState.zoomOnlyPanelLastAction = null;
-        await this.saveState(announcementState);
-        return Response.json({ ok: true });
-      }
-      if (action === "zoom_only_status") {
-        const queue = announcementState.zoomOnlyQueueState || createEmptyQueueState();
-        return Response.json({
-          ok: true,
-          queue: {
-            isOpen: Boolean(queue.isOpen),
-            mode: queue.mode || "bk",
-            entriesCount: Array.isArray(queue.entries) ? queue.entries.length : 0,
-            entries: (Array.isArray(queue.entries) ? queue.entries : []).map((entry) => ({
-              author: String(entry.author || ""),
-              label: String(entry.label || ""),
-              status: String(entry.status || "pending"),
-              isActive: Boolean(entry.isActive)
-            })),
-            historyCount: Array.isArray(queue.history) ? queue.history.length : 0
-          },
-          outboxSize: announcementState.zoomOnlyOutbox.length,
-          nextOutboxId: announcementState.zoomOnlyOutboxNextId,
-          sender: {
-            connected: false,
-            status: "waiting"
-          },
-          lastPanelAction: announcementState.zoomOnlyPanelLastAction
-        });
       }
       if (action === "get_personal_subscription") {
         const userId = String(payload.userId || "").trim();
@@ -1669,39 +1882,23 @@ function getAuthorLabel(message) {
   return "\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C";
 }
 __name(getAuthorLabel, "getAuthorLabel");
-async function enqueueZoomMessages(env, messages) {
-  const cleanMessages = (Array.isArray(messages) ? messages : [messages]).map((message) => String(message || "").trim()).filter(Boolean);
-  if (!cleanMessages.length) return null;
-  return callAnnouncementState(env, "enqueue_zoom_messages", { messages: cleanMessages });
-}
-__name(enqueueZoomMessages, "enqueueZoomMessages");
 async function enqueueZoomOnlyMessages(env, messages) {
   const cleanMessages = (Array.isArray(messages) ? messages : [messages]).map((message) => String(message || "").trim()).filter(Boolean);
   if (!cleanMessages.length) return null;
-  return callAnnouncementState(env, "enqueue_zoom_only_messages", { messages: cleanMessages });
+  return callZoomMeetingState(env, "enqueue_messages", { messages: cleanMessages });
 }
 __name(enqueueZoomOnlyMessages, "enqueueZoomOnlyMessages");
 function plainZoomText(text) {
   return String(text || "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/<br\s*\/?>/giu, "\n").replace(/<\/p>/giu, "\n\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 }
 __name(plainZoomText, "plainZoomText");
-function isManualZoomPart(text) {
-  return /^\s*\u0427\u0430\u0441\u0442\u044C\s+\d+\/\d+:/iu.test(String(text || ""));
-}
-__name(isManualZoomPart, "isManualZoomPart");
 function getZoomMeetingMessages(key) {
   const configured = ZOOM_MEETING_MESSAGE_TEXTS[key];
   const parts = Array.isArray(configured) ? configured : [configured];
-  return parts.flatMap((part) => {
-    const plain = plainZoomText(part);
-    return isManualZoomPart(plain) ? [plain] : splitZoomText(plain);
-  }).filter(Boolean);
+  const combined = parts.map((part) => plainZoomText(part)).filter(Boolean).join("\n");
+  return splitZoomText(combined);
 }
 __name(getZoomMeetingMessages, "getZoomMeetingMessages");
-async function callZoomOnlyQueueState(env, queueAction, queuePayload = {}) {
-  return callAnnouncementState(env, "zoom_only_queue", { queueAction, queuePayload });
-}
-__name(callZoomOnlyQueueState, "callZoomOnlyQueueState");
 async function applyQueueResponse(env, result) {
   if (result.publishQueue) {
     let deletedPreviousMessage = true;
@@ -1735,21 +1932,13 @@ async function applyQueueResponse(env, result) {
     await callQueueState(env, "set_message_id", {
       messageId
     });
-    await enqueueZoomMessages(env, splitZoomText(result.queueText)).catch((error) => notifyOwnerTechError(env, {
-      module: "Zoom",
-      operation: "queue outbox",
-      error,
-      details: { source: "queue" },
-      hint: "\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0432 Telegram \u0443\u0436\u0435 \u043E\u043F\u0443\u0431\u043B\u0438\u043A\u043E\u0432\u0430\u043D\u0430, \u043D\u043E Zoom-outbox \u043D\u0435 \u043F\u0440\u0438\u043D\u044F\u043B \u0442\u0435\u043A\u0441\u0442."
-    }));
   }
   if (result.closeMessage) {
     await sendMessage(env, CHAT_GROUP_ID, result.closeMessage, null, null, null, null, true);
-    await enqueueZoomMessages(env, splitZoomText(result.closeMessage)).catch(() => null);
   }
   if (result.cleared && result.previousMessageId) {
     const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, result.previousMessageId);
-    if (!deletion.ok) {
+    if (!deletion.ok && !deletion.expected) {
       await notifyOwnerTechError(env, {
         module: "\u043e\u0447\u0435\u0440\u0435\u0434\u044c",
         operation: "\u043e\u0447\u0438\u0441\u0442\u043a\u0430: \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0442\u0430\u0440\u043e\u0433\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f",
@@ -1880,6 +2069,15 @@ function getMoscowDateKey() {
   }).format(/* @__PURE__ */ new Date());
 }
 __name(getMoscowDateKey, "getMoscowDateKey");
+function getMoscowSessionDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(/* @__PURE__ */ new Date());
+}
+__name(getMoscowSessionDate, "getMoscowSessionDate");
 function getMoscowHumanDate() {
   return new Intl.DateTimeFormat("ru-RU", {
     timeZone: "Europe/Moscow",
@@ -2211,6 +2409,22 @@ async function sendCoordinatorTodayServiceSummary(env, today, dateKey, personMap
   await callAnnouncementState(env, "set_message_id", { key, messageId: Date.now() });
 }
 __name(sendCoordinatorTodayServiceSummary, "sendCoordinatorTodayServiceSummary");
+async function sendAdminTodayServiceSummary(env, today, dateKey, personMap) {
+  const key = `service_admin_summary_sent:${dateKey}`;
+  const previous = await callAnnouncementState(env, "get", { key }).catch(() => ({ messageId: null }));
+  if (previous?.messageId) return;
+  const text = [
+    "\uD83D\uDCCB \u041A\u0442\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043B\u0443\u0436\u0438\u0442",
+    "",
+    buildCoordinatorServiceSummary(today, dateKey, personMap)
+  ].join("\n");
+  const sent = await sendAdminThreadMessage(env, text, true);
+  if (!sent?.ok) {
+    throw new Error("admin service summary delivery failed");
+  }
+  await callAnnouncementState(env, "set_message_id", { key, messageId: Date.now() });
+}
+__name(sendAdminTodayServiceSummary, "sendAdminTodayServiceSummary");
 function serviceReminderSentKey(dateKey, roleKey, personName) {
   return `service_reminder_sent:${dateKey}:${SERVICE_REMINDER_ROLES[roleKey]?.label || roleKey}:${personName}`;
 }
@@ -2312,6 +2526,7 @@ async function sendTodayServiceReminders(env) {
   const { clock, today, personMap } = context;
   await Promise.all([
     sendCoordinatorTodayServiceSummary(env, today, clock.dateKey, personMap),
+    sendAdminTodayServiceSummary(env, today, clock.dateKey, personMap),
     sendOneServiceReminder(env, clock.dateKey, "leader", compact(today.row[today.idx.leader] || ""), personMap),
     sendOneServiceReminder(env, clock.dateKey, "tech", compact(today.row[today.idx.tech] || ""), personMap)
   ]);
@@ -2564,6 +2779,28 @@ async function listAdminDmRecipients(env) {
   return checks.filter(Boolean);
 }
 __name(listAdminDmRecipients, "listAdminDmRecipients");
+async function saveAnnouncementMessageIdAfterCopy(env, key, messageId) {
+  if (!key) return true;
+  try {
+    await callAnnouncementState(env, "set_message_id", { key, messageId });
+    return true;
+  } catch (error) {
+    console.error("announcement marker save failed after successful Telegram copy", {
+      key,
+      messageId,
+      error: shortError(error)
+    });
+    await notifyOwnerTechError(env, {
+      module: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
+      operation: "\u0437\u0430\u043f\u0438\u0441\u044c message_id \u043f\u043e\u0441\u043b\u0435 \u0443\u0441\u043f\u0435\u0448\u043d\u043e\u0433\u043e copyMessage",
+      error,
+      details: { key, message_id: messageId },
+      hint: "Telegram-\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0443\u0436\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e. \u041f\u0440\u043e\u0432\u0435\u0440\u044c Durable Object \u043c\u0430\u0440\u043a\u0435\u0440\u043e\u0432; \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u0442\u044c \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u0435 \u043d\u0435 \u043d\u0443\u0436\u043d\u043e."
+    });
+    return false;
+  }
+}
+__name(saveAnnouncementMessageIdAfterCopy, "saveAnnouncementMessageIdAfterCopy");
 async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
   const key = getAnnouncementKey(sourceMessageId);
   const allKeys = [key, ...getLegacyAnnouncementKeys(sourceMessageId)].filter(Boolean);
@@ -2587,19 +2824,14 @@ async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
     throw error;
   }
   const nextMessageId = copied?.result?.message_id ?? null;
-  if (key) {
-    await callAnnouncementState(env, "set_message_id", {
-      key,
-      messageId: nextMessageId
-    });
-  }
+  await saveAnnouncementMessageIdAfterCopy(env, key, nextMessageId);
   for (const item of previousItems) {
     if (item.key !== key) {
       await callAnnouncementState(env, "set_message_id", { key: item.key, messageId: null }).catch(() => null);
     }
     if (item.messageId && item.messageId !== nextMessageId) {
       const deletion = await deleteMessageResult(env, CHAT_GROUP_ID, item.messageId);
-      if (!deletion.ok) {
+      if (!deletion.ok && !deletion.expected) {
         await notifyOwnerTechError(env, {
           module: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435",
           operation: "\u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0442\u0430\u0440\u043e\u0433\u043e \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u044f",
@@ -2609,16 +2841,6 @@ async function sendAnnouncementCopyToGroup(env, sourceMessageId) {
         });
       }
     }
-  }
-  const zoomKey = getZoomMeetingKeyBySourceMessageId(sourceMessageId);
-  if (zoomKey) {
-    await enqueueZoomMessages(env, getZoomMeetingMessages(zoomKey)).catch((error) => notifyOwnerTechError(env, {
-      module: "Zoom",
-      operation: "meeting outbox",
-      error,
-      details: { source_message_id: sourceMessageId, zoom_key: zoomKey },
-      hint: "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0432 Telegram \u0443\u0448\u043B\u043E, \u043D\u043E \u0432 Zoom-outbox \u043D\u0435 \u043F\u043E\u043F\u0430\u043B\u043E."
-    }));
   }
   return copied;
 }
@@ -2706,539 +2928,36 @@ function zoomPanelUnauthorizedResponse() {
   return Response.json({ ok: false, error: "\u041d\u0443\u0436\u0435\u043d \u0442\u043e\u043a\u0435\u043d \u043f\u0443\u043b\u044c\u0442\u0430 Zoom." }, { status: 401 });
 }
 __name(zoomPanelUnauthorizedResponse, "zoomPanelUnauthorizedResponse");
-function buildZoomMessage(payload) {
-  const name = getZoomPayloadDisplayName(payload);
-  return {
-    text: String(payload?.text || payload?.message || "").trim(),
-    message_id: payload?.messageId || payload?.id || getCurrentTimestamp(),
-    chat: { id: "zoom", type: "zoom" },
-    from: { first_name: name }
-  };
-}
-__name(buildZoomMessage, "buildZoomMessage");
-function isZoomAdminPayload(payload) {
-  const user = payload?.user || payload?.from || {};
-  const role = String(user.role || payload?.role || "").toLowerCase();
-  return Boolean(user.isHost || user.isCoHost || payload?.isHost || payload?.isCoHost || ["host", "cohost", "co-host", "organizer", "coorganizer"].includes(role));
-}
-__name(isZoomAdminPayload, "isZoomAdminPayload");
-function getZoomAdminNames(env) {
-  return String(env?.ZOOM_ADMIN_NAMES || "").split(/[,;\n]/u).map((name) => normalizeZoomCommand(name)).filter(Boolean);
-}
-__name(getZoomAdminNames, "getZoomAdminNames");
-function isZoomAdminName(env, name) {
-  const normalizedName = normalizeZoomCommand(name);
-  if (!normalizedName) return false;
-  const normalizedWithoutParentheses = normalizedName.replace(/\s*\([^)]*\)\s*$/u, "").trim();
-  const normalizedWithoutEllipsis = normalizedWithoutParentheses.replace(/(?:\.\.\.|…)\s*$/u, "").trim();
-  const adminNames = getZoomAdminNames(env);
-  return adminNames.some((adminName) => {
-    if (adminName === normalizedName || adminName === normalizedWithoutParentheses || adminName === normalizedWithoutEllipsis) {
-      return true;
-    }
-    return normalizedWithoutEllipsis.length >= 6 && adminName.startsWith(normalizedWithoutEllipsis);
-  });
-}
-__name(isZoomAdminName, "isZoomAdminName");
-function normalizeZoomCommand(text) {
-  return normalizeQueueText(text).replace(/[.!?,:;]+$/u, "").replace(/\s+/g, " ").trim();
-}
-__name(normalizeZoomCommand, "normalizeZoomCommand");
-function parseZoomManualQueueCommand(text) {
-  const normalized = normalizeZoomCommand(text);
-  const removeMatch = normalized.match(/^(?:\u0443\u0434\u0430\u043B\u0438\u0442\u044C|\u0443\u0434\u0430\u043B\u0438|\u0443\u0431\u0440\u0430\u0442\u044C|\u0443\u0431\u0435\u0440\u0438)(?:\s+(\d{1,3}))?$/u);
-  if (removeMatch) return { action: "remove", index: removeMatch[1] ? Number(removeMatch[1]) : null };
-  const addMatch = normalized.match(/^(?:\u0434\u043E\u0431\u0430\u0432\u044C|\u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C)\s+(.+)$/u);
-  if (!addMatch) return null;
-  const body = addMatch[1].trim();
-  const gameMatch = body.match(/^(?:\u0438\u0433\u0440\u0430|\u0438\u0440\u0433\u0430|\u0432\u043E\u043F\u0440\u043E\u0441)\s+(\d{1,3})\s+(.+)$/u);
-  if (gameMatch) return { action: "add_game", number: Number(gameMatch[1]), author: stripTelegramHandles(gameMatch[2]) };
-  const codeMatch = body.match(/^(111|222|333|444)\s+(.+)$/u);
-  if (codeMatch) return { action: "add_code", code: codeMatch[1], author: stripTelegramHandles(codeMatch[2]) };
-  return { action: "invalid_add" };
-}
-__name(parseZoomManualQueueCommand, "parseZoomManualQueueCommand");
-async function publishMeetingFromZoomCommand(env, key) {
-  if (key === "yozhik") {
-    const messageText = await sendYozhikToGroup(env);
-    await enqueueZoomMessages(env, splitZoomText(messageText));
-    return { ok: true, handled: true };
-  }
-  if (key === "bill_prompt") {
-    await enqueueZoomMessages(env, ["\u0411\u0438\u043B\u043B: \u0432\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u043E\u0442 1 \u0434\u043E 332."]);
-    await sendMessage(env, CHAT_GROUP_ID, "\u0412\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u0411\u0438\u043B\u043B\u0430.", null, null, null, null, true);
-    return { ok: true, handled: true };
-  }
-  if (key === "today_topic") {
-    const sourceMessageId = getTodayTopicSourceMessageId();
-    if (!sourceMessageId) {
-      await enqueueZoomMessages(env, ["\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043D\u0435\u0442."]);
-      return { ok: true, handled: true };
-    }
-    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
-    await enqueueZoomMessages(env, getTodayTopicZoomMessages());
-    return { ok: true, handled: true };
-  }
-  const sourceMessageId = TECH_MESSAGES[key];
-  if (!sourceMessageId) return { ok: false, handled: false, error: "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435." };
-  if (sourceMessageId === INFO_CHANNEL_ANNOUNCEMENT_ID || sourceMessageId === FREE_SERVICES_ANNOUNCEMENT_ID) {
-    await sendAnnouncementCopyToGroup(env, sourceMessageId);
-  } else {
-    await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId, true);
-    await enqueueZoomMessages(env, getZoomMeetingMessages(key));
-  }
-  return { ok: true, handled: true };
-}
-__name(publishMeetingFromZoomCommand, "publishMeetingFromZoomCommand");
-async function handleZoomBridgeMessage(env, payload) {
-  const message = buildZoomMessage(payload);
-  const text = message.text;
-  if (!text) return { ok: true, handled: false };
-  const queueInfo = await callQueueState(env, "get");
-  const isAdmin = isZoomAdminPayload(payload);
-  const normalized = normalizeZoomCommand(text);
-  const openMode = getZoomOpenQueueMode(text);
-  if (openMode) {
-    if (!isAdmin) {
-      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    const result = await callQueueState(env, "open", { mode: openMode });
-    await applyQueueResponse(env, result);
-    return { ok: true, handled: true };
-  }
-  const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
-  if (meetingKey) {
-    if (!isAdmin) {
-      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    return publishMeetingFromZoomCommand(env, meetingKey);
-  }
-  const zoomBillNumber = parseBillInput(text);
-  if (zoomBillNumber !== null && /^\/?\u0431\u0438\u043B\u043B\s+\d{1,3}$/iu.test(text.trim())) {
-    if (!isAdmin) {
-      await enqueueZoomMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    const messageText = await sendBillToGroup(env, zoomBillNumber);
-    await enqueueZoomMessages(env, splitZoomText(messageText));
-    return { ok: true, handled: true };
-  }
-  if (isAdmin) {
-    const manual = parseZoomManualQueueCommand(text);
-    if (manual) {
-      if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
-        await enqueueZoomMessages(env, ["\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0441\u0435\u0439\u0447\u0430\u0441 \u0437\u0430\u043A\u0440\u044B\u0442\u0430."]);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "remove") {
-        const result = manual.index ? await callQueueState(env, "remove_by_number", { index: manual.index }) : await callQueueState(env, "remove");
-        await applyQueueResponse(env, result);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "add_code" && manual.author) {
-        const label = queueInfo.state.mode === "bill" ? manual.code : "111";
-        const entry = makeManualQueueEntryCore(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
-        const result = await callQueueState(env, "add", { entry });
-        await applyQueueResponse(env, result);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "add_game" && manual.author) {
-        if (queueInfo.state.mode !== "bill") {
-          await enqueueZoomMessages(env, ["\u0418\u0433\u0440\u0443 \u043C\u043E\u0436\u043D\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0411\u0438\u043B\u043B."]);
-          return { ok: true, handled: true };
-        }
-        const speakerQuestions = await getSpeakerQuestions();
-        const question = speakerQuestions.get(manual.number);
-        if (!question) {
-          await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
-          return { ok: true, handled: true };
-        }
-        const entry = makeManualQueueEntryCore(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
-        const result = await callQueueState(env, "add", { entry });
-        await applyQueueResponse(env, result);
-        const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`;
-        await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
-        await enqueueZoomMessages(env, splitZoomText(questionText));
-        return { ok: true, handled: true };
-      }
-      await enqueueZoomMessages(env, ["\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u043D\u0435 \u043F\u043E\u043D\u044F\u0442\u043D\u0430."]);
-      return { ok: true, handled: true };
-    }
-    if (normalized === "\u0432\u044B\u0441\u043A\u0430\u0437\u0430\u043B\u0441\u044F") {
-      const result = await callQueueState(env, "done");
-      await applyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
-    if (normalized === "\u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442") {
-      const result = await callQueueState(env, "skip");
-      await applyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
-    if (normalized === "\u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C") {
-      const result = await callQueueState(env, "undo");
-      await applyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
-    if (normalized === "\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
-      const result = await callQueueState(env, "close");
-      await applyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
-  }
-  if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
-    await enqueueZoomMessages(env, splitZoomText(buildQueueTextCore(queueInfo.state || createEmptyQueueState())));
-    return { ok: true, handled: true };
-  }
-  const gameNumber = parseGameCommandCore(text);
-  if (gameNumber !== null) {
-    const speakerQuestions = await getSpeakerQuestions();
-    const question = speakerQuestions.get(gameNumber);
-    if (question) {
-      const questionText = `\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`;
-      await sendMessage(env, CHAT_GROUP_ID, questionText, null, null, null, null, true);
-      await enqueueZoomMessages(env, splitZoomText(questionText));
-      return { ok: true, handled: true };
-    } else {
-      await enqueueZoomMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
-      return { ok: true, handled: true };
-    }
-  }
-  const entry = parseQueueEntryCore(message, queueInfo.state, { source: "Zoom" });
-  if (entry) {
-    const result = await callQueueState(env, "add", { entry });
-    await applyQueueResponse(env, result);
-    return { ok: true, handled: true };
-  }
-  return { ok: true, handled: false };
-}
-__name(handleZoomBridgeMessage, "handleZoomBridgeMessage");
-async function applyZoomOnlyQueueResponse(env, result) {
-  if (result.publishQueue && result.queueText) {
-    await enqueueZoomOnlyMessages(env, splitZoomText(result.queueText));
-  }
-  if (result.closeMessage) {
-    await enqueueZoomOnlyMessages(env, splitZoomText(result.closeMessage));
-  }
-}
-__name(applyZoomOnlyQueueResponse, "applyZoomOnlyQueueResponse");
-async function publishZoomOnlyMeetingCommand(env, key) {
-  if (key === "yozhik") {
-    const messageText = await buildYozhikText();
-    await enqueueZoomOnlyMessages(env, splitZoomText(messageText));
-    return { ok: true, handled: true };
-  }
-  if (key === "bill_prompt") {
-    await enqueueZoomOnlyMessages(env, ["\u0411\u0438\u043B\u043B: \u0432\u0432\u0435\u0434\u0438 \u043D\u043E\u043C\u0435\u0440 \u043E\u0442\u0440\u044B\u0432\u043A\u0430 \u043E\u0442 1 \u0434\u043E 332."]);
-    return { ok: true, handled: true };
-  }
-  if (key === "today_topic") {
-    const messages = getTodayTopicSourceMessageId() ? getTodayTopicZoomMessages() : ["\u0421\u0435\u0433\u043E\u0434\u043D\u044F \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u043D\u0435\u0442."];
-    await enqueueZoomOnlyMessages(env, messages);
-    return { ok: true, handled: true };
-  }
-  if (!ZOOM_MEETING_MESSAGE_TEXTS[key]) {
-    return { ok: false, handled: false, error: "\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u044D\u0442\u043E Zoom-\u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435." };
-  }
-  await enqueueZoomOnlyMessages(env, getZoomMeetingMessages(key));
-  return { ok: true, handled: true };
-}
-__name(publishZoomOnlyMeetingCommand, "publishZoomOnlyMeetingCommand");
-async function handleZoomOnlyMessage(env, payload) {
-  const displayName = getZoomPayloadDisplayName(payload);
-  if (normalizeZoomCommand(displayName) === normalizeZoomCommand(ZOOM_BOT_NAME)) {
-    return { ok: true, handled: false, ignored: "self" };
-  }
-  if (looksLikeZoomOnlyBotEcho(displayName) || looksLikeZoomOnlyBotEcho(payload?.sender) || looksLikeZoomOnlyBotEcho(payload?.senderName)) {
-    return { ok: true, handled: false, ignored: "self_echo" };
-  }
-  const message = buildZoomMessage(payload);
-  const text = message.text;
-  if (!text) return { ok: true, handled: false };
-  if (looksLikeZoomOnlyBotEcho(text)) {
-    return { ok: true, handled: false, ignored: "self_echo" };
-  }
-  const queueInfo = await callZoomOnlyQueueState(env, "get");
-  const isAdmin = Boolean(payload?.isZoomOnlyAppControl) || isZoomAdminPayload(payload) || isZoomAdminName(env, displayName) || payload?.source === "zoom_web_client";
-  const normalized = normalizeZoomCommand(text);
-  const openMode = getZoomOpenQueueMode(text);
-  if (openMode) {
-    if (!isAdmin) {
-      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    const result = await callZoomOnlyQueueState(env, "open", { mode: openMode });
-    await applyZoomOnlyQueueResponse(env, result);
-    return { ok: true, handled: true };
-  }
-  const meetingKey = ZOOM_MEETING_COMMANDS[normalized] || null;
-  if (meetingKey) {
-    if (!isAdmin) {
-      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    return publishZoomOnlyMeetingCommand(env, meetingKey);
-  }
-  const zoomBillNumber = parseBillInput(text);
-  if (zoomBillNumber !== null && /^\/?\u0431\u0438\u043B\u043B\s+\d{1,3}$/iu.test(text.trim())) {
-    if (!isAdmin) {
-      await enqueueZoomOnlyMessages(env, ["\u042D\u0442\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u0430 \u0438 \u0441\u043E\u043E\u0440\u0433\u0430\u043D\u0438\u0437\u0430\u0442\u043E\u0440\u043E\u0432."]);
-      return { ok: true, handled: true, denied: true };
-    }
-    await enqueueZoomOnlyMessages(env, splitZoomText(await buildBillText(zoomBillNumber)));
-    return { ok: true, handled: true };
-  }
-  if (isAdmin) {
-    const manual = parseZoomManualQueueCommand(text);
-    if (manual) {
-      if (!queueInfo.state?.isOpen || !queueInfo.state?.mode) {
-        await enqueueZoomOnlyMessages(env, ["\u041E\u0447\u0435\u0440\u0435\u0434\u044C \u0441\u0435\u0439\u0447\u0430\u0441 \u0437\u0430\u043A\u0440\u044B\u0442\u0430."]);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "remove") {
-        const result = manual.index ? await callZoomOnlyQueueState(env, "remove_by_number", { index: manual.index }) : await callZoomOnlyQueueState(env, "remove");
-        await applyZoomOnlyQueueResponse(env, result);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "add_code" && manual.author) {
-        const label = queueInfo.state.mode === "bill" ? manual.code : "111";
-        const entry = makeManualQueueEntryCore(manual.author, queueInfo.state.mode === "bill" ? (manual.code === "111" ? "first" : manual.code) : queueInfo.state.mode, label, text, { source: "Zoom" });
-        const result = await callZoomOnlyQueueState(env, "add", { entry });
-        await applyZoomOnlyQueueResponse(env, result);
-        return { ok: true, handled: true };
-      }
-      if (manual.action === "add_game" && manual.author) {
-        if (queueInfo.state.mode !== "bill") {
-          await enqueueZoomOnlyMessages(env, ["\u0418\u0433\u0440\u0443 \u043C\u043E\u0436\u043D\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043E\u0447\u0435\u0440\u0435\u0434\u0438 \u0411\u0438\u043B\u043B."]);
-          return { ok: true, handled: true };
-        }
-        const question = (await getSpeakerQuestions()).get(manual.number);
-        if (!question) {
-          await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${manual.number}.`]);
-          return { ok: true, handled: true };
-        }
-        const entry = makeManualQueueEntryCore(manual.author, "first", `\u0438\u0433\u0440\u0430 ${manual.number}`, text, { source: "Zoom" });
-        const result = await callZoomOnlyQueueState(env, "add", { entry });
-        await applyZoomOnlyQueueResponse(env, result);
-        await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${manual.number}:\n\n${question}`));
-        return { ok: true, handled: true };
-      }
-      await enqueueZoomOnlyMessages(env, ["\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u043D\u0435 \u043F\u043E\u043D\u044F\u0442\u043D\u0430."]);
-      return { ok: true, handled: true };
-    }
-    const adminActions = {
-      "\u0432\u044B\u0441\u043A\u0430\u0437\u0430\u043B\u0441\u044F": "done",
-      "\u043F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442": "skip",
-      "\u043E\u0442\u043C\u0435\u043D\u0438\u0442\u044C": "undo",
-      "\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u043E\u0447\u0435\u0440\u0435\u0434\u044C": "close"
-    };
-    if (adminActions[normalized]) {
-      const result = await callZoomOnlyQueueState(env, adminActions[normalized]);
-      await applyZoomOnlyQueueResponse(env, result);
-      return { ok: true, handled: true };
-    }
-  }
-  if (normalized === "\u043E\u0447\u0435\u0440\u0435\u0434\u044C") {
-    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueTextCore(queueInfo.state || createEmptyQueueState())));
-    return { ok: true, handled: true };
-  }
-  const gameNumber = parseGameCommandCore(text);
-  if (gameNumber !== null) {
-    const question = (await getSpeakerQuestions()).get(gameNumber);
-    if (!question) {
-      await enqueueZoomOnlyMessages(env, [`\u041D\u0435 \u043D\u0430\u0448\u0451\u043B \u0432\u043E\u043F\u0440\u043E\u0441 ${gameNumber}.`]);
-      return { ok: true, handled: true };
-    }
-    await enqueueZoomOnlyMessages(env, splitZoomText(`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`));
-    return { ok: true, handled: true };
-  }
-  let queueState = queueInfo.state || createEmptyQueueState();
-  if ((!queueState.isOpen || !queueState.mode) && getQueueSpeechCodeNote(text)) {
-    const opened = await callZoomOnlyQueueState(env, "auto_open", { mode: "bk" });
-    queueState = opened.state || queueState;
-  }
-  const entry = parseQueueEntryCore(message, queueState, { source: "Zoom" });
-  if (entry) {
-    const result = await callZoomOnlyQueueState(env, "add", { entry });
-    await applyZoomOnlyQueueResponse(env, result);
-    return { ok: true, handled: true };
-  }
-  return { ok: true, handled: false };
-}
-__name(handleZoomOnlyMessage, "handleZoomOnlyMessage");
-async function handleZoomBridgeRequest(request, env) {
-  if (!isZoomBridgeAuthorized(request, env)) {
-    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
-  const url = new URL(request.url);
-  if (request.method === "POST" && url.pathname === "/zoom/webhook") {
-    const payload = await request.json();
-    return Response.json(await handleZoomBridgeMessage(env, payload));
-  }
-  if (request.method === "POST" && url.pathname === "/zoom/outbox") {
-    const payload = await request.json().catch(() => ({}));
-    if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
-      await callAnnouncementState(env, "ack_zoom_messages", { ids: payload.ackIds });
-    }
-    const result = await callAnnouncementState(env, "pull_zoom_messages", { limit: payload.limit || 20 });
-    return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
-  }
-  if (request.method === "POST" && url.pathname === "/zoom/debug") {
-    const payload = await request.json().catch(() => ({}));
-    if (payload.clear) {
-      await callAnnouncementState(env, "clear_zoom_debug");
-    }
-    const result = await callAnnouncementState(env, "pull_zoom_debug");
-    return Response.json({ ok: true, events: result.events || [] });
-  }
-  return textResponse("Not found", 404);
-}
-__name(handleZoomBridgeRequest, "handleZoomBridgeRequest");
 async function handleZoomOnlyBridgeRequest(request, env) {
   const url = new URL(request.url);
   if (url.pathname === "/zoom-only/status" && isZoomPanelAuthorized(request, env)) {
-    const result = await callAnnouncementState(env, "zoom_only_status");
+    const result = await callZoomMeetingState(env, "status");
     return Response.json(result);
   }
   if (!isZoomBridgeAuthorized(request, env)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   if (request.method === "POST" && url.pathname === "/zoom-only/webhook") {
-    const payload = await request.json();
-    return Response.json(await handleZoomOnlyMessage(env, payload));
+    return Response.json({ ok: true, handled: false, ignored: "queue_paused" });
   }
   if (request.method === "POST" && url.pathname === "/zoom-only/chat-ingest") {
-    const payload = await request.json().catch(() => ({}));
-    return Response.json(await handleZoomOnlyChatIngest(env, payload));
+    return Response.json({ ok: true, handled: false, ignored: "queue_paused" });
   }
   if (request.method === "POST" && url.pathname === "/zoom-only/outbox") {
     const payload = await request.json().catch(() => ({}));
     if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
-      await callAnnouncementState(env, "ack_zoom_only_messages", { ids: payload.ackIds });
+      await callZoomMeetingState(env, "ack_messages", { ids: payload.ackIds });
     }
-    const result = await callAnnouncementState(env, "pull_zoom_only_messages", { limit: payload.limit || 20 });
+    const result = await callZoomMeetingState(env, "pull_messages", { limit: payload.limit || 20 });
     return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
   }
   if (url.pathname === "/zoom-only/status") {
-    const result = await callAnnouncementState(env, "zoom_only_status");
-    return Response.json(result);
-  }
-  if (request.method === "POST" && url.pathname === "/zoom-only/reset") {
-    const result = await callAnnouncementState(env, "clear_zoom_only_state");
+    const result = await callZoomMeetingState(env, "status");
     return Response.json(result);
   }
   return textResponse("Not found", 404);
 }
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
-async function handleZoomOnlyChatIngest(env, payload) {
-  const text = String(payload?.text || "").trim();
-  const codeText = text.match(/^(?:111|222|333|444)$/u)?.[0] || null;
-  const normalized = normalizeZoomCommand(text);
-  const gameMatch = normalized.match(/^\u0438\u0433\u0440\u0430\s+(\d{1,3})$/iu);
-  const gameNumber = gameMatch ? Number(gameMatch[1]) : null;
-  if (!codeText && gameNumber === null) {
-    return { ok: true, handled: false, ignored: "unsupported_text" };
-  }
-  if (gameNumber !== null && (gameNumber < 1 || gameNumber > 500)) {
-    return { ok: true, handled: false, ignored: "invalid_game_number" };
-  }
-  const authorName = stripTelegramHandles(String(payload?.authorName || payload?.displayName || "").trim());
-  if (!authorName) {
-    return { ok: true, handled: false, ignored: "empty_author" };
-  }
-  const normalizedAuthorName = normalizeZoomCommand(authorName);
-  if (normalizedAuthorName === normalizeZoomCommand(ZOOM_BOT_NAME) || /^\u043D\u0430\u0444\u0430\u043D\u044F(?:\s|$)/iu.test(normalizedAuthorName) || looksLikeZoomOnlyBotEcho(authorName)) {
-    return { ok: true, handled: false, ignored: "self" };
-  }
-  const sourceFingerprint = String(payload?.sourceFingerprint || "").trim();
-  if (!sourceFingerprint) {
-    return { ok: false, handled: false, error: "sourceFingerprint is required" };
-  }
-  let prependMessages = [];
-  if (gameNumber !== null) {
-    const question = (await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map())).get(gameNumber);
-    if (question) {
-      prependMessages = [`\u0412\u043E\u043F\u0440\u043E\u0441 ${gameNumber}:\n\n${question}`];
-    } else {
-      console.warn("zoom only bill game question not found", { gameNumber });
-    }
-  }
-  return callAnnouncementState(env, "zoom_only_chat_ingest_code", {
-    authorName,
-    text: gameNumber !== null ? `\u0438\u0433\u0440\u0430 ${gameNumber}` : text,
-    timestamp: String(payload?.timestamp || "").trim(),
-    sourceFingerprint,
-    observedAt: String(payload?.observedAt || "").trim(),
-    prependMessages
-  });
-}
-__name(handleZoomOnlyChatIngest, "handleZoomOnlyChatIngest");
-function isZoomAppControlCommand(command) {
-  const normalized = normalizeZoomCommand(command);
-  if (ZOOM_APP_ALLOWED_COMMANDS.has(normalized)) return true;
-  if (/^\/?\u0431\u0438\u043b\u043b\s+\d{1,3}$/iu.test(normalized)) return true;
-  if (/^(?:111|222|333|444)$/u.test(normalized)) return true;
-  if (/^\u0438\u0433\u0440\u0430\s+\d{1,3}$/iu.test(normalized)) return true;
-  if (parseZoomManualQueueCommand(command)) return true;
-  return false;
-}
-__name(isZoomAppControlCommand, "isZoomAppControlCommand");
-function buildZoomPayloadFromAppCommand(env, command, userContext = {}) {
-  const role = String(userContext.role || "").toLowerCase();
-  const displayName = stripTelegramHandles(userContext.screenName || userContext.displayName || userContext.name || "Zoom App");
-  const nameIsAdmin = isZoomAdminName(env, displayName);
-  return {
-    id: `zoom-app-${Date.now()}`,
-    text: command,
-    user: {
-      displayName,
-      role,
-      isHost: role === "host",
-      isCoHost: role === "cohost" || role === "co-host" || nameIsAdmin
-    },
-    source: "zoom_app"
-  };
-}
-__name(buildZoomPayloadFromAppCommand, "buildZoomPayloadFromAppCommand");
-function buildZoomOnlyPayloadFromAppCommand(env, command, userContext = {}) {
-  const payload = buildZoomPayloadFromAppCommand(env, command, userContext);
-  return {
-    ...payload,
-    isZoomOnlyAppControl: true,
-    user: {
-      ...payload.user,
-      role: payload.user?.role || "zoom-app",
-      isHost: true,
-      isCoHost: true
-    }
-  };
-}
-__name(buildZoomOnlyPayloadFromAppCommand, "buildZoomOnlyPayloadFromAppCommand");
-async function handleZoomAppActionRequest(request, env) {
-  if (request.method !== "POST") {
-    return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
-  }
-  const payload = await request.json().catch(() => ({}));
-  const command = String(payload.command || "").trim();
-  if (!command || !isZoomAppControlCommand(command)) {
-    return Response.json({ ok: false, error: "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043b\u044f Zoom-\u043f\u0443\u043b\u044c\u0442\u0430 \u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0430." }, { status: 400 });
-  }
-  const marker = await callAnnouncementState(env, "get_zoom_outbox_marker").catch(() => ({ nextId: 1 }));
-  const result = await handleZoomBridgeMessage(env, buildZoomPayloadFromAppCommand(env, command, payload.userContext || {}));
-  const outbox = await callAnnouncementState(env, "pull_zoom_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
-  if (messages.length) {
-    await callAnnouncementState(env, "ack_zoom_messages", { ids: messages.map((message) => message.id) }).catch(() => null);
-  }
-  return Response.json({
-    ok: true,
-    handled: Boolean(result?.handled),
-    denied: Boolean(result?.denied),
-    messages: messages.map((message) => ({ id: message.id, text: String(message.text || "") })).filter((message) => message.text)
-  });
-}
-__name(handleZoomAppActionRequest, "handleZoomAppActionRequest");
 async function handleZoomOnlyAppActionRequest(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
@@ -3247,89 +2966,170 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     return zoomPanelUnauthorizedResponse();
   }
   const payload = await request.json().catch(() => ({}));
+  const meetingBoardActions = {
+    meeting_board_publish: "publish",
+    meeting_board_add_entry: "add_entry",
+    meeting_board_add_topic: "add_topic",
+    meeting_board_mark_spoken: "mark_spoken",
+    meeting_board_restore_waiting: "restore_waiting",
+    meeting_board_defer_entry: "defer_entry",
+    meeting_board_remove_entry: "remove_entry",
+    meeting_board_remove_topic: "remove_topic",
+    meeting_board_clear_all: "clear_all"
+  };
+  const speakerActions = {
+    speaker_questions_publish: "publish",
+    speaker_questions_add: "add",
+    speaker_questions_remove: "remove",
+    speaker_questions_clear: "clear"
+  };
+  if (meetingBoardActions[payload.action]) {
+    try {
+      const result = await callZoomMeetingState(env, "meeting_board_action", {
+        ...payload,
+        boardAction: meetingBoardActions[payload.action],
+        sessionDate: getMoscowSessionDate()
+      });
+      const message = result.duplicate
+        ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e."
+          : "\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0435 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u0447\u0430\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438.";
+      return Response.json({ ...result, message });
+    } catch (error) {
+      return Response.json({ ok: false, error: String(error?.message || error).slice(0, 300) }, { status: 400 });
+    }
+  }
+  if (speakerActions[payload.action]) {
+    try {
+      const result = await callZoomMeetingState(env, "speaker_questions_action", {
+        ...payload,
+        speakerAction: speakerActions[payload.action],
+        sessionDate: getMoscowSessionDate()
+      });
+      return Response.json({
+        ...result,
+        message: result.duplicate
+          ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e."
+          : "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u044b \u0432 \u0447\u0430\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438."
+      });
+    } catch (error) {
+      return Response.json({ ok: false, error: String(error?.message || error).slice(0, 300) }, { status: 400 });
+    }
+  }
+  if (payload.action === "zoom_timer_action") {
+    try {
+      const result = await callZoomSharedTimerState(env, "timer_action", {
+        ...payload,
+        timerAction: String(payload.timerAction || "sync").trim()
+      });
+      return Response.json(result);
+    } catch (error) {
+      return Response.json({ ok: false, error: String(error?.message || error).slice(0, 300) }, { status: 400 });
+    }
+  }
+  const isQueueAction = payload.type === "queue" || payload.queueAction || payload.action === "add_test_participant" || payload.type === "add_test_participant" || payload.action === "add_manual_queue_entry" || payload.type === "add_manual_queue_entry";
+  if (isQueueAction) {
+    return Response.json({ ok: false, error: "\u041e\u0447\u0435\u0440\u0435\u0434\u0438 Zoom \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u043f\u0440\u0438\u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u044b.", reason: "queue_paused" }, { status: 409 });
+  }
+  const oneShotOptions = {};
   if (payload.action === "test_message" || payload.type === "test_message") {
-    return Response.json(await handleZoomV2PanelTestMessageAction(env));
-  }
-  if (payload.action === "add_test_participant" || payload.type === "add_test_participant") {
-    return Response.json(await handleZoomV2PanelAddTestParticipantAction(env));
-  }
-  if (payload.action === "add_manual_queue_entry" || payload.type === "add_manual_queue_entry") {
-    return Response.json(await handleZoomV2PanelAddManualQueueEntryAction(env, payload.rawInput ?? payload.name ?? ""));
+    return Response.json(await handleZoomV2PanelTestMessageAction(env, oneShotOptions));
   }
   if (payload.action === "yozhik" || payload.type === "yozhik") {
-    return Response.json(await handleZoomV2PanelYozhikAction(env));
+    return Response.json(await handleZoomV2PanelYozhikAction(env, oneShotOptions));
+  }
+  if (payload.action === "book_excerpt" || payload.type === "book_excerpt") {
+    return Response.json(await handleZoomV2PanelLibraryEntryAction(env, String(payload.collectionId || "").trim(), payload.number, oneShotOptions));
+  }
+  if (payload.action === "daily_reflection" || payload.type === "daily_reflection") {
+    return Response.json(await handleZoomV2PanelDailyReflectionAction(env, oneShotOptions));
   }
   if (payload.action === "bill_excerpt" || payload.type === "bill_excerpt") {
-    return Response.json(await handleZoomV2PanelBillExcerptAction(env, payload.number));
+    return Response.json(await handleZoomV2PanelBillExcerptAction(env, payload.number, oneShotOptions));
   }
   if (payload.action === "game_question" || payload.type === "game_question") {
-    return Response.json(await handleZoomV2PanelGameQuestionAction(env, payload.number));
+    if (env?.ZOOM_LIBRARY) return Response.json(await handleZoomV2PanelLibraryEntryAction(env, "game_questions", payload.number, oneShotOptions));
+    return Response.json(await handleZoomV2PanelGameQuestionAction(env, payload.number, oneShotOptions));
   }
   if (payload.type === "message" || payload.key) {
-    return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim()));
+    return Response.json(await handleZoomV2PanelMessageAction(env, String(payload.key || "").trim(), oneShotOptions));
   }
-  if (payload.type === "queue" || payload.queueAction) {
-    return Response.json(await handleZoomV2PanelQueueAction(env, String(payload.queueAction || "").trim(), payload.queuePayload || {}));
-  }
-  const command = String(payload.command || "").trim();
-  if (!command || !isZoomAppControlCommand(command)) {
-    return Response.json({ ok: false, error: "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043B\u044F Zoom-only \u043F\u0443\u043B\u044C\u0442\u0430 \u043D\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u0430." }, { status: 400 });
-  }
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  const result = await handleZoomOnlyMessage(env, buildZoomOnlyPayloadFromAppCommand(env, command, payload.userContext || {}));
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  const messages = Array.isArray(outbox.messages) ? outbox.messages : [];
-  return Response.json({
-    ok: true,
-    handled: Boolean(result?.handled),
-    denied: Boolean(result?.denied),
-    messages: messages.map((message) => ({ id: message.id, text: String(message.text || "") })).filter((message) => message.text)
-  });
+  return Response.json({ ok: false, error: "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043b\u044f Zoom-\u043f\u0443\u043b\u044c\u0442\u0430 \u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0430." }, { status: 400 });
 }
 __name(handleZoomOnlyAppActionRequest, "handleZoomOnlyAppActionRequest");
-async function handleZoomV2PanelTestMessageAction(env) {
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  await enqueueZoomOnlyMessages(env, [ZOOM_V2_SAFE_TEST_MESSAGE]);
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "test_message", label: "\u0422\u0435\u0441\u0442", ok: true }).catch(() => null);
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  const queued = (Array.isArray(outbox.messages) ? outbox.messages : []).filter((message) => String(message.text || "") === ZOOM_V2_SAFE_TEST_MESSAGE);
-  return {
-    ok: true,
-    message: "\u0422\u0435\u0441\u0442\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 Zoom outbox",
+async function handleZoomV2PanelTestMessageAction(env, options = {}) {
+  return enqueueZoomV2GeneratedAction(env, {
     key: "test_message",
-    queued
-  };
+    label: "\u0422\u0435\u0441\u0442\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435",
+    messages: [ZOOM_V2_SAFE_TEST_MESSAGE],
+    ...options
+  });
 }
 __name(handleZoomV2PanelTestMessageAction, "handleZoomV2PanelTestMessageAction");
-async function enqueueZoomV2GeneratedAction(env, { key, label, messages }) {
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  await enqueueZoomOnlyMessages(env, messages.flatMap((message) => splitZoomText(message)));
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label, ok: true }).catch(() => null);
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
+async function enqueueZoomV2GeneratedAction(env, { key, label, messages, alreadyLimited = false }) {
+  const preparedMessages = (alreadyLimited ? messages : messages.flatMap((message) => splitZoomText(message)))
+    .map((message) => String(message || "").trim())
+    .filter(Boolean);
+  const marker = await callZoomMeetingState(env, "get_outbox_marker").catch(() => ({ nextId: 1 }));
+  await enqueueZoomOnlyMessages(env, preparedMessages);
+  await callZoomMeetingState(env, "record_panel_action", { key, label, ok: true }).catch(() => null);
+  const outbox = await callZoomMeetingState(env, "pull_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
   return { ok: true, key, message: `${label} добавлен в Zoom outbox`, queued: Array.isArray(outbox.messages) ? outbox.messages : [] };
 }
 __name(enqueueZoomV2GeneratedAction, "enqueueZoomV2GeneratedAction");
-async function handleZoomV2PanelYozhikAction(env) {
+async function handleZoomV2PanelLibraryEntryAction(env, collectionId, rawKey, options = {}) {
+  const definition = ZOOM_LIBRARY_COLLECTIONS[collectionId];
+  if (!definition || collectionId === "daily_reflections") {
+    return { ok: false, key: "book_excerpt", error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043a\u043d\u0438\u0433\u0430." };
+  }
+  const number = Number(rawKey);
+  if (!Number.isInteger(number) || number < 1 || number > 9999) {
+    return { ok: false, key: collectionId, error: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u043e\u0442\u0440\u044b\u0432\u043a\u0430." };
+  }
   try {
-    return await enqueueZoomV2GeneratedAction(env, { key: "yozhik", label: "Ёжик", messages: [await buildYozhikText()] });
+    const library = await readZoomLibrary(env);
+    const entry = getLibraryEntry(library, collectionId, number);
+    if (!entry) return { ok: false, key: collectionId, error: `${definition.label}: \u043e\u0442\u0440\u044b\u0432\u043e\u043a \u2116${number} \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d.` };
+    const messages = buildLibraryZoomMessages(collectionId, number, entry.text);
+    return await enqueueZoomV2GeneratedAction(env, { key: `${collectionId}:${number}`, label: `${definition.label}, \u2116${number}`, messages, alreadyLimited: true, ...options });
+  } catch (error) {
+    return { ok: false, key: collectionId, error: String(error?.message || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u043e\u0442\u0440\u044b\u0432\u043e\u043a.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelLibraryEntryAction, "handleZoomV2PanelLibraryEntryAction");
+async function handleZoomV2PanelDailyReflectionAction(env, options = {}) {
+  const dateKey = getMoscowDateKey();
+  try {
+    const library = await readZoomLibrary(env);
+    const entry = getLibraryEntry(library, "daily_reflections", dateKey);
+    if (!entry) return { ok: false, key: "daily_reflections", error: `\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0435 \u0440\u0430\u0437\u043c\u044b\u0448\u043b\u0435\u043d\u0438\u044f \u043d\u0430 ${dateKey} \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u044b.` };
+    const messages = buildLibraryZoomMessages("daily_reflections", dateKey, entry.text);
+    return await enqueueZoomV2GeneratedAction(env, { key: `daily_reflections:${dateKey}`, label: `\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0435 \u0440\u0430\u0437\u043c\u044b\u0448\u043b\u0435\u043d\u0438\u044f, ${dateKey}`, messages, alreadyLimited: true, ...options });
+  } catch (error) {
+    return { ok: false, key: "daily_reflections", error: String(error?.message || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0435 \u0440\u0430\u0437\u043c\u044b\u0448\u043b\u0435\u043d\u0438\u044f.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelDailyReflectionAction, "handleZoomV2PanelDailyReflectionAction");
+async function handleZoomV2PanelYozhikAction(env, options = {}) {
+  try {
+    return await enqueueZoomV2GeneratedAction(env, { key: "yozhik", label: "\u0401\u0436\u0438\u043a", messages: [await buildYozhikText()], ...options });
   } catch (error) {
     return { ok: false, key: "yozhik", error: String(error?.message || "Не удалось подготовить Ёжика.").slice(0, 300) };
   }
 }
 __name(handleZoomV2PanelYozhikAction, "handleZoomV2PanelYozhikAction");
-async function handleZoomV2PanelBillExcerptAction(env, rawNumber) {
+async function handleZoomV2PanelBillExcerptAction(env, rawNumber, options = {}) {
   const number = Number(rawNumber);
   if (!Number.isInteger(number) || number < 1 || number > 332) {
     return { ok: false, key: "bill_excerpt", error: "Номер отрывка Билла должен быть от 1 до 332." };
   }
   try {
-    return await enqueueZoomV2GeneratedAction(env, { key: "bill_excerpt", label: `Отрывок Билла №${number}`, messages: [await buildBillText(number)] });
+    return await enqueueZoomV2GeneratedAction(env, { key: "bill_excerpt", label: `\u041e\u0442\u0440\u044b\u0432\u043e\u043a \u0411\u0438\u043b\u043b\u0430 \u2116${number}`, messages: [await buildBillText(number)], ...options });
   } catch (error) {
     return { ok: false, key: "bill_excerpt", error: String(error?.message || "Не удалось подготовить отрывок Билла.").slice(0, 300) };
   }
 }
 __name(handleZoomV2PanelBillExcerptAction, "handleZoomV2PanelBillExcerptAction");
-async function handleZoomV2PanelGameQuestionAction(env, rawNumber) {
+async function handleZoomV2PanelGameQuestionAction(env, rawNumber, options = {}) {
   const number = Number(rawNumber);
   if (!Number.isInteger(number) || number < 1 || number > 500) {
     return { ok: false, key: "game_question", error: "Номер вопроса игры должен быть от 1 до 500." };
@@ -3337,91 +3137,12 @@ async function handleZoomV2PanelGameQuestionAction(env, rawNumber) {
   try {
     const question = (await getSpeakerQuestions()).get(number);
     if (!question) return { ok: false, key: "game_question", error: `Не нашёл вопрос ${number}.` };
-    return await enqueueZoomV2GeneratedAction(env, { key: "game_question", label: `Игра, вопрос ${number}`, messages: [`Вопрос ${number}:\n\n${question}`] });
+    return await enqueueZoomV2GeneratedAction(env, { key: "game_question", label: `\u0418\u0433\u0440\u0430, \u0432\u043e\u043f\u0440\u043e\u0441 ${number}`, messages: [`\u0412\u043e\u043f\u0440\u043e\u0441 ${number}:\n\n${question}`], ...options });
   } catch (error) {
     return { ok: false, key: "game_question", error: String(error?.message || "Не удалось подготовить вопрос игры.").slice(0, 300) };
   }
 }
 __name(handleZoomV2PanelGameQuestionAction, "handleZoomV2PanelGameQuestionAction");
-async function handleZoomV2PanelAddTestParticipantAction(env) {
-  const queueInfo = await callZoomOnlyQueueState(env, "get");
-  const state = queueInfo.state || createEmptyQueueState();
-  if (!state.isOpen) {
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_test_participant", label: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a", ok: false }).catch(() => null);
-    return {
-      ok: false,
-      error: "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Zoom-only \u043e\u0447\u0435\u0440\u0435\u0434\u044c.",
-      key: "add_test_participant",
-      queue: state
-    };
-  }
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  const label = state.mode === "bill" ? "111" : "111";
-  const block = state.mode === "bill" ? "first" : state.mode;
-  const entry = makeManualQueueEntryCore(ZOOM_V2_TEST_PARTICIPANT_NAME, block, label, "add_test_participant", { source: "Zoom-only test" });
-  const result = await callZoomOnlyQueueState(env, "add", { entry });
-  await applyZoomOnlyQueueResponse(env, result);
-  const updatedQueue = await callZoomOnlyQueueState(env, "get").catch(() => ({ state: result?.state || null }));
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_test_participant", label: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a", ok: true }).catch(() => null);
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  return {
-    ok: true,
-    message: "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d \u0432 Zoom-only \u043e\u0447\u0435\u0440\u0435\u0434\u044c",
-    key: "add_test_participant",
-    queue: updatedQueue?.state || null,
-    queued: Array.isArray(outbox.messages) ? outbox.messages : []
-  };
-}
-__name(handleZoomV2PanelAddTestParticipantAction, "handleZoomV2PanelAddTestParticipantAction");
-function parseZoomV2ManualQueueInput(rawInput) {
-  const raw = String(rawInput || "").replace(/\u0000/gu, "").replace(/\s+/gu, " ").trim();
-  if (!raw) return { ok: false, error: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430" };
-  if (/[<>]/u.test(raw)) return { ok: false, error: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430" };
-  const numericTokens = [...raw.matchAll(/(?:^|[\s!.,?:;#-]+)(\d{1,4})(?=$|[\s!.,?:;#-]+)/gu)].map((match) => match[1]);
-  if (numericTokens.some((token) => !/^(?:111|222|333|444)$/u.test(token))) {
-    return { ok: false, error: "\u041a\u043e\u0434 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c 111, 222, 333 \u0438\u043b\u0438 444" };
-  }
-  const codeMatches = [...raw.matchAll(/(?:^|[\s!.,?:;#-]+)(111|222|333|444)(?=$|[\s!.,?:;#-]+)/gu)];
-  const lastCode = codeMatches.at(-1);
-  const code = lastCode?.[1] || "111";
-  const namePart = lastCode ? raw.slice(0, lastCode.index + lastCode[0].indexOf(code)).trim() : raw;
-  const name = cleanQueueDisplayName(namePart).replace(/[!.,?:;#-]+$/gu, "").trim();
-  if (!/^(?:111|222|333|444)$/u.test(code)) return { ok: false, error: "\u041a\u043e\u0434 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c 111, 222, 333 \u0438\u043b\u0438 444" };
-  if (!name || /^(?:111|222|333|444)$/u.test(name)) return { ok: false, error: "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430" };
-  if (name.length > 80) return { ok: false, error: "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u0434\u043b\u0438\u043d\u043d\u043e\u0435 \u0438\u043c\u044f" };
-  return { ok: true, name, code, raw };
-}
-__name(parseZoomV2ManualQueueInput, "parseZoomV2ManualQueueInput");
-async function handleZoomV2PanelAddManualQueueEntryAction(env, rawInput) {
-  const queueInfo = await callZoomOnlyQueueState(env, "get");
-  const state = queueInfo.state || createEmptyQueueState();
-  const parsed = parseZoomV2ManualQueueInput(rawInput);
-  if (!parsed.ok) {
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_manual_queue_entry", label: "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432\u0440\u0443\u0447\u043d\u0443\u044e", ok: false }).catch(() => null);
-    return { ok: false, error: parsed.error, key: "add_manual_queue_entry", queue: state };
-  }
-  if (!state.isOpen || !state.mode) {
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_manual_queue_entry", label: "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432\u0440\u0443\u0447\u043d\u0443\u044e", ok: false }).catch(() => null);
-    return { ok: false, error: "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u044c", key: "add_manual_queue_entry", queue: state };
-  }
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  const label = state.mode === "bill" ? parsed.code : "111";
-  const block = state.mode === "bill" ? parsed.code === "111" ? "first" : parsed.code : state.mode;
-  const entry = makeManualQueueEntryCore(parsed.name, block, label, parsed.raw, { source: "Zoom panel manual" });
-  const result = await callZoomOnlyQueueState(env, "add", { entry, allowDuplicateEntries: true });
-  await applyZoomOnlyQueueResponse(env, result);
-  const updatedQueue = await callZoomOnlyQueueState(env, "get").catch(() => ({ state: result?.state || null }));
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: "add_manual_queue_entry", label: "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432\u0440\u0443\u0447\u043d\u0443\u044e", ok: true }).catch(() => null);
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  return {
-    ok: true,
-    message: `\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e: ${parsed.name}`,
-    key: "add_manual_queue_entry",
-    queue: updatedQueue?.state || null,
-    queued: Array.isArray(outbox.messages) ? outbox.messages : []
-  };
-}
-__name(handleZoomV2PanelAddManualQueueEntryAction, "handleZoomV2PanelAddManualQueueEntryAction");
 function getZoomV2PanelMessageAction(key) {
   return ZOOM_V2_PANEL_MESSAGE_ACTIONS.find((action) => action.key === key) || (ZOOM_MEETING_MESSAGE_TEXTS[key] ? { key, label: key } : null);
 }
@@ -3436,85 +3157,22 @@ function getZoomV2PanelMessages(action) {
   return getZoomMeetingMessages(zoomKey);
 }
 __name(getZoomV2PanelMessages, "getZoomV2PanelMessages");
-async function handleZoomV2PanelMessageAction(env, key) {
+async function handleZoomV2PanelMessageAction(env, key, options = {}) {
   const action = getZoomV2PanelMessageAction(key);
   const messages = getZoomV2PanelMessages(action);
   if (!action || !messages?.length) {
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: key, ok: false }).catch(() => null);
+    await callZoomMeetingState(env, "record_panel_action", { key, label: key, ok: false }, options.meetingStateOptions || {}).catch(() => null);
     return { ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043a\u043d\u043e\u043f\u043a\u0430 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." };
   }
-  const marker = await callAnnouncementState(env, "get_zoom_only_outbox_marker").catch(() => ({ nextId: 1 }));
-  await enqueueZoomOnlyMessages(env, messages);
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key: action.key, label: action.label, ok: true }).catch(() => null);
-  const outbox = await callAnnouncementState(env, "pull_zoom_only_messages", { minId: marker.nextId || 1, limit: 50 }).catch(() => ({ messages: [] }));
-  return {
-    ok: true,
-    message: `${action.label} \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438 Zoom`,
+  return enqueueZoomV2GeneratedAction(env, {
     key: action.key,
-    queued: Array.isArray(outbox.messages) ? outbox.messages : []
-  };
+    label: action.label,
+    messages,
+    alreadyLimited: true,
+    ...options
+  });
 }
 __name(handleZoomV2PanelMessageAction, "handleZoomV2PanelMessageAction");
-async function handleZoomV2PanelQueueAction(env, key, queuePayload = {}) {
-  const action = ZOOM_V2_PANEL_QUEUE_ACTIONS.find((item) => item.key === key) || null;
-  if (!action) {
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: key, ok: false }).catch(() => null);
-    return { ok: false, error: "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438 Zoom-\u043f\u0443\u043b\u044c\u0442\u0430." };
-  }
-  try {
-  const queueModeByAction = {
-    open_bill: "bill",
-    open_bk: "bk",
-    open_rs: "rs"
-  };
-  let result;
-  if (queueModeByAction[key]) {
-    result = await callZoomOnlyQueueState(env, "open", { mode: queueModeByAction[key] });
-    await applyZoomOnlyQueueResponse(env, result);
-  } else if (key === "show_queue") {
-    result = await callZoomOnlyQueueState(env, "get");
-    await enqueueZoomOnlyMessages(env, splitZoomText(buildZoomOnlyQueueTextCore(result.state || createEmptyQueueState())));
-  } else if (key === "close_queue") {
-    result = await callZoomOnlyQueueState(env, "close");
-    await applyZoomOnlyQueueResponse(env, result);
-  } else if (["done", "skip", "undo"].includes(key)) {
-    result = await callZoomOnlyQueueState(env, key);
-    await applyZoomOnlyQueueResponse(env, result);
-  } else if (key === "remove_by_number") {
-    const index = Number(queuePayload.index);
-    if (!Number.isInteger(index) || index < 1 || index > 999) {
-      return { ok: false, error: "Укажите номер участника в очереди от 1 до 999." };
-    }
-    result = await callZoomOnlyQueueState(env, "remove_by_number", { index });
-    await applyZoomOnlyQueueResponse(env, result);
-  }
-  await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: action.label, ok: true }).catch(() => null);
-  return {
-    ok: true,
-    message: `${action.label}: \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 Zoom-only`,
-    key,
-    queue: result?.state || null
-  };
-  } catch (error) {
-    const message = String(error?.message || "Действие очереди не выполнено.").slice(0, 300);
-    await callAnnouncementState(env, "record_zoom_only_panel_action", { key, label: action.label, ok: false }).catch(() => null);
-    return { ok: false, error: message, key };
-  }
-}
-__name(handleZoomV2PanelQueueAction, "handleZoomV2PanelQueueAction");
-function zoomDebugTextPreview(text) {
-  const clean = String(text || "").replace(/\s+/g, " ").trim();
-  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
-}
-__name(zoomDebugTextPreview, "zoomDebugTextPreview");
-async function recordZoomDebugEvent(env, event) {
-  try {
-    await callAnnouncementState(env, "record_zoom_debug", { event });
-  } catch (error) {
-    console.warn("zoom debug record failed", error?.message || String(error));
-  }
-}
-__name(recordZoomDebugEvent, "recordZoomDebugEvent");
 function bytesToHex(bytes) {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -3559,72 +3217,17 @@ async function buildZoomValidationResponse(env, payload) {
   });
 }
 __name(buildZoomValidationResponse, "buildZoomValidationResponse");
-function buildZoomPayloadFromChatEvent(env, payload) {
-  const object = payload?.payload?.object || {};
-  const chatMessage = object.chat_message || {};
-  const senderName = stripTelegramHandles(chatMessage.sender_name || "\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a Zoom");
-  const senderType = String(chatMessage.sender_type || "").toLowerCase();
-  return {
-    id: chatMessage.message_id || `${payload?.event_ts || Date.now()}`,
-    text: chatMessage.message_content || "",
-    user: {
-      displayName: senderName,
-      role: senderType,
-      isHost: senderType === "host",
-      isCoHost: isZoomAdminName(env, senderName)
-    },
-    zoomEvent: payload?.event || "",
-    meetingId: object.id || null,
-    meetingUuid: object.uuid || null,
-    recipientType: chatMessage.recipient_type || "",
-    recipientContext: chatMessage.recipient_context || "",
-    senderContext: chatMessage.sender_context || ""
-  };
-}
-__name(buildZoomPayloadFromChatEvent, "buildZoomPayloadFromChatEvent");
 async function handleZoomWebhookEvent(request, env) {
   const rawBody = await request.text();
   const payload = JSON.parse(rawBody || "{}");
   if (payload.event === "endpoint.url_validation") {
-    await recordZoomDebugEvent(env, { kind: "validation", event: payload.event });
     return buildZoomValidationResponse(env, payload);
   }
   const authorized = await verifyZoomWebhookSignature(request, env, rawBody);
   if (!authorized) {
-    await recordZoomDebugEvent(env, { kind: "unauthorized", event: payload.event || "", hasSignature: Boolean(request.headers.get("x-zm-signature")) });
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  if (!ZOOM_CHAT_MESSAGE_EVENTS.has(String(payload.event || ""))) {
-    await recordZoomDebugEvent(env, { kind: "ignored_event", event: payload.event || "" });
-    return Response.json({ ok: true, handled: false });
-  }
-  const zoomPayload = buildZoomPayloadFromChatEvent(env, payload);
-  const text = String(zoomPayload.text || "").trim();
-  const recipientType = String(zoomPayload.recipientType || "").toLowerCase();
-  const recipientContext = String(zoomPayload.recipientContext || "").toLowerCase();
-  if (!text || recipientType !== "everyone" || recipientContext !== "meeting") {
-    await recordZoomDebugEvent(env, {
-      kind: "ignored_chat",
-      event: payload.event || "",
-      textPreview: zoomDebugTextPreview(text),
-      sender: zoomPayload.user?.displayName || "",
-      recipientType,
-      recipientContext
-    });
-    return Response.json({ ok: true, handled: false });
-  }
-  const result = await handleZoomBridgeMessage(env, zoomPayload);
-  await recordZoomDebugEvent(env, {
-    kind: "handled_chat",
-    event: payload.event || "",
-    textPreview: zoomDebugTextPreview(text),
-    sender: zoomPayload.user?.displayName || "",
-    recipientType,
-    recipientContext,
-    handled: Boolean(result?.handled),
-    denied: Boolean(result?.denied)
-  });
-  return Response.json(result);
+  return Response.json({ ok: true, handled: false, ignored: "queue_paused" });
 }
 __name(handleZoomWebhookEvent, "handleZoomWebhookEvent");
 function okResponse() {
@@ -3667,44 +3270,12 @@ function htmlResponse(html, status = 200) {
     status,
     headers: {
       ...ZOOM_APP_SECURITY_HEADERS,
-      "content-type": "text/html; charset=UTF-8"
+      "content-type": "text/html; charset=UTF-8",
+      "cache-control": "no-store"
     }
   });
 }
 __name(htmlResponse, "htmlResponse");
-var ZOOM_APP_ACTIONS = [
-  { command: "\u043c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", label: "\u041c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b", icon: "\u{1f92b}" },
-  { command: "\u043c\u043e\u043b\u0438\u0442\u0432\u0430", label: "\u041c\u043e\u043b\u0438\u0442\u0432\u0430", icon: "\u{1f64f}" },
-  { command: "\u043f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", label: "\u041f\u0440\u0435\u0430\u043c\u0431\u0443\u043b\u0430", icon: "\u{1f4dc}" },
-  { command: "\u043d\u043e\u0432\u0438\u0447\u043a\u0443", label: "\u041d\u043e\u0432\u0438\u0447\u043a\u0443", icon: "\u{1f44b}" },
-  { command: "12 \u0448\u0430\u0433\u043e\u0432", label: "12 \u0428\u0430\u0433\u043e\u0432", icon: "12" },
-  { command: "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439", label: "12 \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u0439", icon: "12" },
-  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f4d8}" },
-  { command: "\u0442\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", label: "\u0422\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", icon: "\u{1f5c2}\ufe0f" },
-  { command: "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435", icon: "\u{1f4c5}" },
-  { command: "\u0441\u043b\u0443\u0436\u0435\u043d\u0438\u044f", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f", icon: "\u{1f4cc}" },
-  { command: "\u0441\u0441\u044b\u043b\u043a\u0438", label: "\u0421\u0441\u044b\u043b\u043a\u0438", icon: "\u{1f517}" },
-  { command: "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f", label: "7-\u044f \u0422\u0440\u0430\u0434\u0438\u0446\u0438\u044f", icon: "\u{1f4b0}" },
-  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439", icon: "\u2615" },
-  { command: "\u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443", icon: "\u2753" },
-  { command: "\u0447\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430", icon: "\u203c\ufe0f" },
-  { command: "\u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0442\u0430", icon: "\u{1f4cc}" },
-  { command: "\u0435\u0436\u0438\u043a", label: "\u0401\u0436\u0438\u043a", icon: "\u{1f994}" },
-  { command: "\u0431\u0438\u043b\u043b", label: "\u0411\u0438\u043b\u043b", icon: "\u{1f4d9}" }
-];
-var ZOOM_APP_ALLOWED_COMMANDS = new Set([
-  ...ZOOM_APP_ACTIONS.map((action) => normalizeZoomCommand(action.command)),
-  "\u0432\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f",
-  "\u043f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",
-  "\u043e\u0442\u043c\u0435\u043d\u0438\u0442\u044c",
-  "\u0437\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c",
-  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u043a",
-  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u043b",
-  "\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0430",
-  "\u0442\u0435\u043c\u0430",
-  "\u0442\u0435\u043c\u044b",
-  "\u043e\u0447\u0435\u0440\u0435\u0434\u044c"
-]);
 var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
   { key: "minute_silence", label: "\u041c\u0438\u043d\u0443\u0442\u0430 \u0442\u0438\u0448\u0438\u043d\u044b" },
   { key: "prayer", label: "\u041c\u043e\u043b\u0438\u0442\u0432\u0430" },
@@ -3712,28 +3283,18 @@ var ZOOM_V2_PANEL_MESSAGE_ACTIONS = [
   { key: "newcomer", label: "\u041d\u043e\u0432\u0438\u0447\u043a\u0443" },
   { key: "steps12", label: "12 \u0448\u0430\u0433\u043e\u0432" },
   { key: "traditions12", label: "12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439" },
-  { key: "today_topic", label: "\u0422\u0435\u043c\u044b" },
+  { key: "meeting_rules", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f" },
+  { key: "today_topic", label: "\u0422\u0435\u043c\u044b \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f" },
   { key: "seventh_tradition", label: "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044f" },
-  { key: "free_services", label: "\u0421\u043b\u0443\u0436\u0435\u043d\u0438\u044f" },
+  { key: "scam_warning", label: "\u041e\u0441\u0442\u0435\u0440\u0435\u0433\u0430\u0439\u0442\u0435\u0441\u044c \u043c\u043e\u0448\u0435\u043d\u043d\u0438\u043a\u043e\u0432" },
   { key: "tea_rules", label: "\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0430\u0439\u043d\u043e\u0439" },
+  { key: "free_services", label: "\u0421\u0432\u043e\u0431\u043e\u0434\u043d\u044b\u0435 \u0441\u043b\u0443\u0436\u0435\u043d\u0438\u044f" },
   { key: "speaker_questions", label: "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443" },
   { key: "chat_cleanliness", label: "\u0427\u0438\u0441\u0442\u043e\u0442\u0430 \u0447\u0430\u0442\u0430" },
-  { key: "meeting_schedule", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435" },
-  { key: "telemost_link", label: "\u0421\u0441\u044b\u043b\u043a\u0438" }
+  { key: "meeting_schedule", label: "\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u0439" },
+  { key: "telemost_link", label: "\u041d\u0430\u0448\u0438 \u0441\u0441\u044b\u043b\u043a\u0438" }
 ];
 var ZOOM_V2_SAFE_TEST_MESSAGE = "\u0422\u0435\u0441\u0442 \u041d\u0430\u0444\u0430\u043d\u0438. \u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043c\u043e\u0436\u043d\u043e \u0438\u0433\u043d\u043e\u0440\u0438\u0440\u043e\u0432\u0430\u0442\u044c.";
-var ZOOM_V2_TEST_PARTICIPANT_NAME = "\u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a";
-var ZOOM_V2_PANEL_QUEUE_ACTIONS = [
-  { key: "open_bill", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u0438\u043b\u043b" },
-  { key: "open_bk", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0411\u041a" },
-  { key: "open_rs", label: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0431\u043e\u0447\u043a\u0443" },
-  { key: "done", label: "\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f" },
-  { key: "skip", label: "\u041f\u0440\u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c" },
-  { key: "undo", label: "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435" },
-  { key: "remove_by_number", label: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u2116" },
-  { key: "show_queue", label: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" },
-  { key: "close_queue", label: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c" }
-];
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -3748,468 +3309,97 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, "&#96;");
 }
 __name(escapeAttr, "escapeAttr");
-function buildZoomAppHtml({ actionPath = "/zoom/app/action", zoomOnly = false } = {}) {
-  const buttons = ZOOM_APP_ACTIONS.map((action) => `<button class="action" type="button" data-command="${escapeAttr(action.command)}"><span class="icon">${escapeHtml(action.icon)}</span><span>${escapeHtml(action.label)}</span></button>`).join("");
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nafanya Zoom Bridge</title>
-  <script src="https://appssdk.zoom.us/sdk.js"></script>
-  <style>
-    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f7f5f2; color: #211f1b; }
-    .shell { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-    .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-    h1 { margin: 0; font-size: 22px; line-height: 1.15; }
-    .badge { flex: 0 0 auto; border: 1px solid #d8d1c6; border-radius: 999px; padding: 6px 10px; font-size: 12px; background: #fff; color: #5f574d; }
-    .status { min-height: 40px; border-radius: 8px; padding: 10px 12px; background: #fff; border: 1px solid #ded8ce; color: #4b443d; font-size: 13px; }
-    .status.good { border-color: #9fc89e; background: #f2fbf1; }
-    .status.warn { border-color: #e3c16a; background: #fff8e5; }
-    .status.bad { border-color: #db8b83; background: #fff0ee; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .action { min-height: 52px; border: 1px solid #cfc7bb; border-radius: 8px; background: #fff; color: #241f1a; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; justify-content: flex-start; padding: 10px 12px; text-align: left; cursor: pointer; }
-    .action:active { transform: translateY(1px); }
-    .action[disabled] { opacity: 0.58; cursor: wait; }
-    .icon { flex: 0 0 26px; width: 26px; text-align: center; font-weight: 800; }
-    .manual { margin-top: auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-    .manual input { min-width: 0; border-radius: 8px; border: 1px solid #cfc7bb; padding: 10px 12px; font-size: 15px; background: #fff; color: #211f1b; }
-    .manual button { border-radius: 8px; border: 0; padding: 10px 14px; background: #214c8f; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
-    .log { max-height: 155px; overflow: auto; border-radius: 8px; background: #2a2622; color: #fff7eb; padding: 10px; font-size: 12px; white-space: pre-wrap; }
-    @media (max-width: 380px) { .grid { grid-template-columns: 1fr; } .shell { padding: 12px; } }
-  </style>
-</head>
-<body>
-  <main class="shell">
-    <section class="top">
-      <div>
-        <h1>Нафаня</h1>
-        <div>Пульт собрания</div>
-      </div>
-      <div class="badge" id="roleBadge">Zoom App</div>
-    </section>
-    <div class="status warn" id="status">Подключаю Zoom SDK...</div>
-    <section class="grid">${buttons}</section>
-    <form class="manual" id="manualForm">
-      <input id="manualInput" autocomplete="off" placeholder="билл 17, очередь, отменить">
-      <button type="submit">OK</button>
-    </form>
-    <pre class="log" id="log">Жду команду.</pre>
-  </main>
-  <script>
-    const statusEl = document.getElementById("status");
-    const logEl = document.getElementById("log");
-    const roleBadge = document.getElementById("roleBadge");
-    const manualInput = document.getElementById("manualInput");
-    const buttons = [...document.querySelectorAll(".action")];
-    const zoomOnlyMode = ${zoomOnly ? "true" : "false"};
-    let zoomReady = false;
-    let userContext = {};
-
-    function setStatus(text, kind = "warn") {
-      statusEl.textContent = text;
-      statusEl.className = "status " + kind;
-    }
-
-    function addLog(text) {
-      const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
-    }
-
-    function normalizeRole(role) {
-      return String(role || "").toLowerCase().replace(/[-_\\s]+/g, "");
-    }
-
-    function canControl() {
-      const role = normalizeRole(userContext.role);
-      return role === "host" || role === "cohost" || role === "co-host";
-    }
-
-    async function initZoom() {
-      if (!window.zoomSdk) {
-        setStatus("Открыто вне Zoom-клиента. Для отправки в чат Zoom открой пульт из кнопки Приложения в самой конференции.", "warn");
-        return;
-      }
-      try {
-        const config = await zoomSdk.config({
-          version: "0.16",
-          capabilities: ["getUserContext", "sendMessageToChat", "showNotification"],
-          popoutSize: { width: 420, height: 760 }
-        });
-        zoomReady = !config.unsupportedApis?.includes("sendMessageToChat");
-        userContext = await zoomSdk.getUserContext().catch(() => ({}));
-        const name = userContext.screenName || "Zoom";
-        const role = userContext.role || config.runningContext || "";
-        roleBadge.textContent = name + (role ? " / " + role : "");
-        if (config.runningContext !== "inMeeting") {
-          setStatus("Пульт открыт не внутри конференции. Для отправки в чат открой его из кнопки Приложения в самой конференции.", "warn");
-        } else if (zoomOnlyMode) {
-          setStatus("Готов. Нажми кнопку, серверный Zoom-мост напишет в чат конференции.", "good");
-        } else if (!zoomReady) {
-          setStatus("Пульт открыт внутри конференции. Сообщения отправит серверный Zoom-мост.", "warn");
-        } else {
-          setStatus("Готов. Нажми кнопку, Нафаня отправит текст в чат Zoom.", "good");
-        }
-        addLog("SDK: " + JSON.stringify({ runningContext: config.runningContext, unsupportedApis: config.unsupportedApis || [], user: userContext }));
-      } catch (error) {
-        setStatus("Zoom SDK не настроился: " + (error?.message || String(error)), "bad");
-        addLog("Ошибка SDK: " + JSON.stringify(error, Object.getOwnPropertyNames(error)));
-      }
-    }
-
-    async function sendToZoomChat(text) {
-      if (!zoomReady || !window.zoomSdk?.sendMessageToChat) {
-        addLog("Zoom chat пропущен: SDK не разрешил отправку.");
-        return false;
-      }
-      await zoomSdk.sendMessageToChat({ message: text });
-      return true;
-    }
-
-    async function runCommand(command) {
-      const clean = String(command || "").trim();
-      if (!clean) return;
-      buttons.forEach((button) => button.disabled = true);
-      setStatus("Выполняю: " + clean, "warn");
-      addLog("Команда: " + clean);
-      try {
-        const response = await fetch("${escapeAttr(actionPath)}", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ command: clean, userContext })
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.ok) {
-          throw new Error(data.error || ("HTTP " + response.status));
-        }
-        let sent = 0;
-        if (!zoomOnlyMode) {
-          for (const item of data.messages || []) {
-            if (await sendToZoomChat(item.text)) sent += 1;
-          }
-        }
-        if (data.denied) {
-          setStatus("Команда не выполнена: нужны права организатора или соорганизатора.", "bad");
-        } else if (zoomOnlyMode && (data.messages || []).length) {
-          setStatus("Команда принята. Серверный Нафаня напишет в чат Zoom.", "good");
-        } else if ((data.messages || []).length && sent === 0) {
-          setStatus("Команда ушла в Worker; серверный мост напишет в чат Zoom.", "warn");
-        } else {
-          setStatus("Готово. Сообщений в Zoom: " + sent + ".", "good");
-        }
-        addLog("Ответ: " + JSON.stringify({ handled: data.handled, messages: (data.messages || []).length, sent }));
-      } catch (error) {
-        setStatus("Ошибка: " + (error?.message || String(error)), "bad");
-        addLog("Ошибка команды: " + (error?.stack || error?.message || String(error)));
-      } finally {
-        buttons.forEach((button) => button.disabled = false);
-      }
-    }
-
-    buttons.forEach((button) => {
-      button.addEventListener("click", () => runCommand(button.dataset.command));
-    });
-    document.getElementById("manualForm").addEventListener("submit", (event) => {
-      event.preventDefault();
-      const value = manualInput.value;
-      manualInput.value = "";
-      runCommand(value);
-    });
-    initZoom();
-  </script>
-</body>
-</html>`;
-}
-__name(buildZoomAppHtml, "buildZoomAppHtml");
-function buildZoomV2PanelHtml({ actionPath = "/zoom-only/app/action", statusPath = "/zoom-only/status" } = {}) {
-  const messageButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.map((action) => `<button class="action meeting-action" type="button" data-type="message" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`).join("");
-  const testButton = `<button class="action test" type="button" data-type="test_message" data-key="test_message">\u0422\u0435\u0441\u0442</button>`;
-  const testParticipantButton = `<button class="action test" type="button" data-type="add_test_participant" data-key="add_test_participant">+ \u0422\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a</button>`;
-  const yozhikButton = `<button class="action publication-action" type="button" data-type="yozhik" data-key="yozhik">Ёжик на сегодня</button>`;
-  const queueActionByKey = new Map(ZOOM_V2_PANEL_QUEUE_ACTIONS.map((action) => [action.key, action]));
-  const quickQueueButtons = ["open_rs", "open_bk", "open_bill", "show_queue", "close_queue"].map((key) => {
-    const action = queueActionByKey.get(key);
-    return `<button class="action button-sm ${key === "close_queue" ? "queue-danger-action" : "queue-open-action"}" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`;
+function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", statusPath = "/zoom-only/status", libraryStatusPath = "/zoom-only/library/status", libraryImportPath = "/zoom-only/library/import" } = {}) {
+  const dayDefinitions = [
+    ["monday", "\u041f\u043e\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u0438\u043a", ["big_book"]],
+    ["tuesday", "\u0412\u0442\u043e\u0440\u043d\u0438\u043a", ["daily_reflections", "as_bill_sees_it", "game_questions"]],
+    ["thursday", "\u0427\u0435\u0442\u0432\u0435\u0440\u0433", ["living_sober"]],
+    ["friday", "\u041f\u044f\u0442\u043d\u0438\u0446\u0430", ["twelve_twelve"]],
+    ["sunday", "\u0412\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u044c\u0435", ["game_questions"]]
+  ];
+  const commonActions = ZOOM_V2_PANEL_MESSAGE_ACTIONS.filter((item) => item.key !== "speaker_questions");
+  const bookLabels = {
+    big_book: "\u0411\u043e\u043b\u044c\u0448\u0430\u044f \u043a\u043d\u0438\u0433\u0430",
+    twelve_twelve: "12 \u0448\u0430\u0433\u043e\u0432 \u0438 12 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u0439",
+    living_sober: "\u0416\u0438\u0442\u044c \u0442\u0440\u0435\u0437\u0432\u044b\u043c\u0438",
+    as_bill_sees_it: "\u041a\u0430\u043a \u044d\u0442\u043e \u0432\u0438\u0434\u0438\u0442 \u0411\u0438\u043b\u043b",
+    daily_reflections: "\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0435 \u0440\u0430\u0437\u043c\u044b\u0448\u043b\u0435\u043d\u0438\u044f",
+    game_questions: "500 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432"
+  };
+  const publicationRow = (dayKey, collectionId) => {
+    const label = bookLabels[collectionId];
+    if (collectionId === "daily_reflections") return `<div class="publication-row publication-${collectionId}"><label>${label}</label><button class="action wide" data-daily type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u0430 \u0441\u0435\u0433\u043e\u0434\u043d\u044f</button></div>`;
+    const max = collectionId === "game_questions" ? 500 : 9999;
+    const attr = collectionId === "game_questions" ? `data-game` : `data-book="${collectionId}"`;
+    return `<div class="publication-row publication-${collectionId}"><label for="number-${dayKey}-${collectionId}">${label}</label><input id="number-${dayKey}-${collectionId}" type="number" min="1" max="${max}" inputmode="numeric" placeholder="\u2116"><button class="action" ${attr} data-input="number-${dayKey}-${collectionId}" type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 Zoom</button></div>`;
+  };
+  const dayHtml = dayDefinitions.map(([dayKey, label, books]) => {
+    const buttons = commonActions.map((item) => item.key === "today_topic"
+      ? `<button class="action meeting-action topic-action" type="button" data-publish-day="${dayKey}">${escapeHtml(item.label)}</button>`
+      : `<button class="action meeting-action" type="button" data-message-key="${escapeAttr(item.key)}">${escapeHtml(item.label)}</button>`).join("");
+    return `<details class="day-panel" data-day="${dayKey}"><summary>${label}</summary><div class="day-body"><section><h2>\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f</h2><div class="grid">${buttons}</div></section><section class="publications"><h2>\u041b\u0438\u0442\u0435\u0440\u0430\u0442\u0443\u0440\u0430</h2>${books.map((book) => publicationRow(dayKey, book)).join("")}</section><section class="board-editor"><h2>\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0442\u0435\u043c\u044b</h2><div class="input-action"><input data-entry-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c"><button class="action primary" data-add-entry type="button">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c</button></div><div class="state-list" data-entry-list>\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.</div><div class="input-action"><input data-topic-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0434\u043e\u043f. \u0442\u0435\u043c\u0443"><button class="action" data-add-topic type="button">\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c</button></div><div class="state-list" data-topic-list>\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.</div></section></div></details>`;
   }).join("");
-  const queueControlButtons = ["done", "skip", "undo", "show_queue"].map((key) => {
-    const action = queueActionByKey.get(key);
-    return `<button class="action button-sm button-action queue-control-action" type="button" data-type="queue" data-key="${escapeAttr(action.key)}">${escapeHtml(action.label)}</button>`;
-  }).join("");
-  const closeQueueInlineButton = `<button class="action button-sm button-danger queue-danger-action" type="button" data-type="queue" data-key="close_queue">\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c</button>`;
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Пульт Нафани для Zoom</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f3f5f8; color: #171b33; }
-    main.panel-compact { max-width: 1120px; margin: 0 auto; padding: 8px; display: grid; gap: 7px; }
-    h1 { margin: 0; font-size: 20px; line-height: 1.08; }
-    h2 { margin: 0 0 6px; font-size: 15px; }
-    h3 { margin: 0; font-size: 12px; color: #4c5368; }
-    section { border: 1px solid #d8dfe8; border-radius: 8px; padding: 8px; }
-    .accordion-toggle { display: block; width: 100%; min-height: 24px; border: 0; background: transparent; padding: 0; margin: -2px 0 8px; color: inherit; font-size: 15px; font-weight: 850; line-height: 1.2; text-align: left; cursor: pointer; }
-    .accordion-toggle::before { content: "▾ "; color: #697086; }
-    .accordion-toggle[aria-expanded="false"] { margin-bottom: 0; }
-    .accordion-toggle[aria-expanded="false"]::before { content: "▸ "; }
-    .accordion-body[hidden] { display: none; }
-    .panel-status { position: sticky; top: 0; z-index: 3; background: rgba(238,248,240,.96); border-color: #bad8bf; backdrop-filter: blur(6px); }
-    .meeting-section { background: #f7f9fd; border-color: #cfd8e8; }
-    .publication-section { background: #fbf6ec; border-color: #e0cfae; }
-    .quick-queue-section, .queue-open-section { background: #eef7fb; border-color: #bdd8e4; }
-    .queue-control-section { background: #f4f0fb; border-color: #d6c8ea; }
-    .compact-status-bar { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; }
-    .metric-row { min-width: 0; color: #3f4659; font-size: 13px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .metric-row .label { color: #697086; font-weight: 800; }
-    .metric-row .value { color: #171b33; font-weight: 900; }
-    .metric-row .sep { color: #98a0b3; padding: 0 6px; }
-    .entries-metric[hidden] { display: none; }
-    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-    .meeting-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-    .publication-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-    .publication-card { background: rgba(255,255,255,.66); border: 1px solid rgba(151,121,70,.24); border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
-    .quick-queue-actions, .queue-modes { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-    .queue-toolbar { display: grid; gap: 6px; }
-    .queue-toolbar-row { display: grid; gap: 6px; align-items: center; }
-    .queue-toolbar-row.add-row { grid-template-columns: minmax(180px, 360px) minmax(82px, 118px) 1fr; }
-    .queue-toolbar-row.actions-row { grid-template-columns: repeat(4, minmax(94px, max-content)); }
-    .queue-toolbar-row.remove-row { grid-template-columns: minmax(76px, 104px) minmax(96px, 128px) minmax(130px, 170px) 1fr; }
-    .action { min-height: 34px; border: 1px solid #b9ad98; border-radius: 7px; background: #ffffff; color: #171b33; font-size: 13px; font-weight: 800; text-align: left; padding: 6px 8px; cursor: pointer; }
-    .button-sm { min-height: 34px; padding: 6px 9px; line-height: 1.15; }
-    .button-action { width: auto; justify-self: stretch; }
-    .button-danger { width: auto; justify-self: start; }
-    .meeting-action { background: #ffffff; border-color: #b7c2d4; }
-    .queue-open-action { background: #e8f6f0; border-color: #8ebca5; }
-    .queue-control-action { background: #eef4ff; border-color: #aebbd4; }
-    .queue-danger-action { background: #f8e8e8; border-color: #c98787; color: #762929; }
-    .action.test { background: #fff4df; border-color: #d9ad67; }
-    .action.publication-action { background: #fffaf0; border-color: #d2b67f; }
-    .action:disabled { opacity: .55; cursor: wait; }
-    .queue-workbench { display: grid; gap: 6px; align-items: start; }
-    .queue-closed-note { margin: 4px 0 0; color: #697086; font-size: 12px; }
-    .queue-closed-note[hidden], .queue-workbench[hidden] { display: none; }
-    .manual-help { color: #697086; font-size: 11px; margin: 0; align-self: center; }
-    .input-sm { min-height: 34px; border: 1px solid #b9ad98; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; color: #171b33; background: #fff; }
-    .number-action { display: grid; grid-template-columns: minmax(88px, 120px) minmax(130px, 1fr); gap: 6px; }
-    .queue-summary { margin: 0 0 5px; color: #4c5368; font-size: 13px; font-weight: 800; }
-    .log { min-height: 38px; max-height: 88px; overflow: auto; white-space: pre-wrap; border-radius: 8px; background: #171b33; color: #fff8e8; padding: 7px 9px; font-size: 12px; }
-    @media (max-width: 900px) { .meeting-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .quick-queue-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); } .compact-status-bar { grid-template-columns: 1fr; } .queue-toolbar-row.actions-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-    @media (max-width: 640px) { main.panel-compact { padding: 7px; } .publication-grid { grid-template-columns: 1fr; } .grid, .meeting-grid, .quick-queue-actions, .queue-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); } .queue-toolbar-row.add-row, .queue-toolbar-row.actions-row, .queue-toolbar-row.remove-row, .number-action { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-help { grid-column: 1 / -1; } h1 { font-size: 18px; } h2 { font-size: 14px; } .action { min-height: 38px; } }
-  </style>
-</head>
-<body>
-  <main class="panel-compact">
-    <section class="panel-status compact-status-bar">
-      <h1>Пульт Нафани в Zoom</h1>
-      <div class="metric-row">
-        <span class="label">Zoom:</span> <span class="value" id="senderStatus">ожидает</span><span class="sep">·</span>
-        <span class="label">Очередь:</span> <span class="value" id="queueStatus">загрузка</span><span class="sep">·</span>
-        <span class="label">Outbox:</span> <span class="value" id="outboxStatus">0</span><span class="entries-metric" id="entriesMetric"><span class="sep">·</span>
-        <span class="label">Заявки:</span> <span class="value" id="entriesStatus">0</span></span>
-      </div>
-    </section>
-    <section class="quick-queue-section">
-      <h2>Быстрое управление очередью</h2>
-      <div class="grid quick-queue-actions">${quickQueueButtons}</div>
-    </section>
-    <section class="queue-control-section accordion" data-accordion="currentQueue">
-      <button class="accordion-toggle" type="button" data-accordion-toggle="currentQueue" aria-expanded="true" aria-controls="accordion-currentQueue">Текущая очередь</button>
-      <div class="accordion-body" id="accordion-currentQueue">
-        <p class="queue-summary" id="queueSummary">Очередь загружается.</p>
-        <p class="queue-closed-note" id="closedQueueNote" hidden></p>
-        <div class="queue-workbench" id="queueWorkbench" hidden>
-          <h3>Управление текущей очередью</h3>
-          <div class="queue-toolbar">
-            <div class="queue-toolbar-row add-row">
-              <input class="input-sm" id="manualQueueInput" type="text" maxlength="120" placeholder="Саша 111" aria-label="Добавить в очередь вручную">
-              <button class="action button-sm button-action queue-control-action" id="manualQueueButton" type="button">Добавить</button>
-              <p class="manual-help">Без кода добавится как 111.</p>
-            </div>
-            <div class="queue-toolbar-row actions-row">${queueControlButtons}</div>
-            <div class="queue-toolbar-row remove-row">
-              <input class="input-sm" id="removeNumber" type="number" min="1" max="999" inputmode="numeric" placeholder="№" aria-label="Номер в очереди">
-              <button class="action button-sm button-action queue-control-action" id="removeButton" type="button">Удалить №</button>
-              ${closeQueueInlineButton}
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-    <section class="meeting-section accordion" data-accordion="meeting">
-      <button class="accordion-toggle" type="button" data-accordion-toggle="meeting" aria-expanded="false" aria-controls="accordion-meeting">Сообщения собрания</button>
-      <div class="accordion-body" id="accordion-meeting" hidden>
-        <div class="grid meeting-grid">${messageButtons}${testButton}${testParticipantButton}</div>
-      </div>
-    </section>
-    <section class="publication-section accordion" data-accordion="publications">
-      <button class="accordion-toggle" type="button" data-accordion-toggle="publications" aria-expanded="false" aria-controls="accordion-publications">Ежедневные публикации</button>
-      <div class="accordion-body" id="accordion-publications" hidden>
-        <div class="publication-grid">
-          <div class="publication-card">
-            <h3>Ёжик</h3>
-            ${yozhikButton}
-          </div>
-          <div class="publication-card">
-            <h3>Отрывок Билла</h3>
-            <div class="number-action">
-              <input id="billExcerptNumber" type="number" min="1" max="332" inputmode="numeric" placeholder="Отрывок 1–332" aria-label="Номер отрывка Билла">
-              <button class="action publication-action" id="billExcerptButton" type="button">Отправить отрывок Билла</button>
-            </div>
-          </div>
-          <div class="publication-card">
-            <h3>Вопрос игры</h3>
-            <div class="number-action">
-              <input id="gameQuestionNumber" type="number" min="1" max="500" inputmode="numeric" placeholder="Вопрос 1–500" aria-label="Номер вопроса игры">
-              <button class="action publication-action" id="gameQuestionButton" type="button">Отправить вопрос игры</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-    <pre class="log" id="log">Пульт загружен.</pre>
-  </main>
-  <script>
-    const token = new URLSearchParams(location.search).get("token") || "";
-    const actionPath = "${escapeAttr(actionPath)}";
-    const statusPath = "${escapeAttr(statusPath)}";
-    const logEl = document.getElementById("log");
-    const buttons = [...document.querySelectorAll(".action")];
-    const accordionKeyPrefix = "nafanyaZoomPanelAccordion:";
-
-    function addLog(text) {
-      const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      logEl.textContent = "[" + time + "] " + text + "\\n" + logEl.textContent;
-    }
-
-    function setAccordion(name, isOpen) {
-      const toggle = document.querySelector('[data-accordion-toggle="' + name + '"]');
-      const body = document.getElementById("accordion-" + name);
-      if (!toggle || !body) return;
-      toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
-      body.hidden = !isOpen;
-    }
-
-    document.querySelectorAll("[data-accordion-toggle]").forEach((toggle) => {
-      const name = toggle.dataset.accordionToggle;
-      const key = accordionKeyPrefix + name;
-      const saved = localStorage.getItem(key);
-      const defaultOpen = toggle.getAttribute("aria-expanded") === "true";
-      setAccordion(name, saved ? saved === "open" : defaultOpen);
-      toggle.addEventListener("click", () => {
-        const isOpen = toggle.getAttribute("aria-expanded") !== "true";
-        setAccordion(name, isOpen);
-        localStorage.setItem(key, isOpen ? "open" : "closed");
-      });
-    });
-
-    function headers() {
-      return { "content-type": "application/json", "x-nafanya-zoom-panel-token": token };
-    }
-
-    function queueName(queue) {
-      if (!queue?.isOpen) return "закрыта";
-      if (queue.mode === "bill") return "Билл";
-      if (queue.mode === "bk") return "БК";
-      if (queue.mode === "rs") return "рабочка";
-      return "открыта";
-    }
-
-    async function refreshStatus() {
-      const response = await fetch(statusPath, { headers: { "x-nafanya-zoom-panel-token": token } });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.ok) throw new Error(data.error || "status failed");
-      document.getElementById("senderStatus").textContent = data.sender?.connected ? "подключён" : "не подключён / ожидает";
-      document.getElementById("outboxStatus").textContent = String(data.outboxSize || 0);
-      document.getElementById("queueStatus").textContent = queueName(data.queue);
-      const entriesCount = Array.isArray(data.queue?.entries) ? data.queue.entries.length : 0;
-      const isQueueOpen = Boolean(data.queue?.isOpen);
-      document.getElementById("entriesStatus").textContent = String(entriesCount);
-      document.getElementById("entriesMetric").hidden = !isQueueOpen;
-      document.getElementById("queueWorkbench").hidden = !isQueueOpen;
-      const closedQueueNote = document.getElementById("closedQueueNote");
-      closedQueueNote.hidden = isQueueOpen || entriesCount === 0;
-      closedQueueNote.textContent = entriesCount > 0 ? "История закрытой очереди: " + entriesCount + ", очистится при следующем открытии." : "";
-      document.getElementById("queueSummary").textContent = isQueueOpen ? "Режим: " + queueName(data.queue) + ". Заявок: " + entriesCount + "." : "Очередь закрыта.";
-      return data;
-    }
-
-    async function runAction(type, key, queuePayload = {}) {
-      buttons.forEach((button) => button.disabled = true);
-      try {
-        const body = type === "queue" ? { type, queueAction: key, queuePayload } : type === "test_message" ? { action: "test_message" } : type === "add_test_participant" ? { action: "add_test_participant" } : type === "add_manual_queue_entry" ? { action: "add_manual_queue_entry", rawInput: queuePayload.rawInput } : type === "yozhik" ? { action: "yozhik" } : type === "bill_excerpt" ? { action: "bill_excerpt", number: queuePayload.number } : type === "game_question" ? { action: "game_question", number: queuePayload.number } : { type, key };
-        const response = await fetch(actionPath, { method: "POST", headers: headers(), body: JSON.stringify(body) });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.ok) throw new Error(data.error || "action failed");
-        addLog(data.message || "Готово");
-        await refreshStatus();
-        return data;
-      } catch (error) {
-        addLog("Ошибка: " + (error?.message || String(error)));
-        return null;
-      } finally {
-        buttons.forEach((button) => button.disabled = false);
-      }
-    }
-
-    buttons.filter((button) => !["removeButton", "billExcerptButton", "gameQuestionButton", "manualQueueButton"].includes(button.id)).forEach((button) => {
-      button.addEventListener("click", () => runAction(button.dataset.type, button.dataset.key));
-    });
-    document.getElementById("manualQueueButton").addEventListener("click", async () => {
-      const input = document.getElementById("manualQueueInput");
-      const rawInput = String(input.value || "").trim();
-      if (!rawInput) {
-        addLog("Ошибка: Введите имя участника");
-        input.focus();
-        return;
-      }
-      const result = await runAction("add_manual_queue_entry", "add_manual_queue_entry", { rawInput });
-      if (result?.ok) input.value = "";
-    });
-    document.getElementById("removeButton").addEventListener("click", () => {
-      const input = document.getElementById("removeNumber");
-      const index = Number(input.value);
-      if (!Number.isInteger(index) || index < 1 || index > 999) {
-        addLog("Ошибка: укажите номер участника от 1 до 999.");
-        input.focus();
-        return;
-      }
-      runAction("queue", "remove_by_number", { index });
-    });
-    function runNumberAction({ inputId, min, max, type, label }) {
-      const input = document.getElementById(inputId);
-      const number = Number(input.value);
-      if (!Number.isInteger(number) || number < min || number > max) {
-        addLog("Ошибка: " + label + " должен быть от " + min + " до " + max + ".");
-        input.focus();
-        return;
-      }
-      runAction(type, type, { number });
-    }
-    document.getElementById("billExcerptButton").addEventListener("click", () => runNumberAction({ inputId: "billExcerptNumber", min: 1, max: 332, type: "bill_excerpt", label: "номер отрывка" }));
-    document.getElementById("gameQuestionButton").addEventListener("click", () => runNumberAction({ inputId: "gameQuestionNumber", min: 1, max: 500, type: "game_question", label: "номер вопроса" }));
-    refreshStatus().catch((error) => addLog("Статус недоступен: " + (error?.message || String(error))));
-    setInterval(() => refreshStatus().catch(() => null), 3000);
-  </script>
-</body>
-</html>`;
+  const speakerButtons = ZOOM_V2_PANEL_MESSAGE_ACTIONS.filter((item) => !["today_topic", "speaker_questions", "meeting_rules"].includes(item.key)).map((item) => `<button class="action meeting-action" type="button" data-message-key="${escapeAttr(item.key)}">${escapeHtml(item.label)}</button>`).join("");
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\u041f\u0443\u043b\u044c\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430</title><style>
+  :root{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#111a40;background:#f3f5f8}*{box-sizing:border-box}body{margin:0}main{padding:7px;display:grid;gap:8px}.day-panel,.admin{border:1px solid #d4d9e2;border-radius:11px;background:#fbf7ea;box-shadow:0 3px 0 #9297a3;overflow:hidden}.day-panel>summary,.admin>summary{cursor:pointer;padding:12px 14px;font-size:19px;font-weight:900;list-style:none}.day-panel>summary:before,.admin>summary:before{content:"\u25b6";display:inline-block;margin-right:9px;font-size:13px;transition:transform .15s}.day-panel[open]>summary:before,.admin[open]>summary:before{transform:rotate(90deg)}.day-body{padding:0 8px 10px;display:grid;gap:9px}section{border:1px solid #d9dfe8;border-radius:9px;padding:9px;background:#fff}h2{font-size:15px;margin:0 0 8px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.action{min-height:40px;border:1px solid #8f9bae;border-radius:7px;background:#fff;color:#111a40;font:inherit;font-size:13px;font-weight:850;padding:7px 9px;cursor:pointer;box-shadow:0 3px 0 #7e899b,0 4px 8px rgba(23,27,51,.14);transition:transform .08s ease,box-shadow .08s ease,background .12s ease,color .12s ease}.action:active{transform:translateY(2px);box-shadow:0 1px 0 #7e899b}.action:disabled{opacity:.55;cursor:wait}.action.primary{background:#e9f7ed;border-color:#77a889}.action.danger{background:#9b3535;color:#fff;border-color:#792727}.action.spoken{background:#e8f7ec;border-color:#5f9e70}.action.is-sending{background:#315ebd;color:#fff;border-color:#244a9b;box-shadow:0 2px 0 #19366f}.action.is-success{background:#19734a;color:#fff;border-color:#115b39;box-shadow:0 3px 0 #0d452c,0 4px 8px rgba(17,91,57,.22);opacity:1}.action.is-error{background:#a83232;color:#fff;border-color:#812525;box-shadow:0 2px 0 #641b1b;opacity:1}.meeting-action{text-align:left}.publications{background:#fffaf0}.publication-row{display:grid;grid-template-columns:1fr 78px;gap:7px;align-items:center;padding:9px;margin-top:7px;border:1px solid;border-left-width:6px;border-radius:9px}.publication-row label{grid-column:1/-1;font-size:17px;font-weight:900}.publication-row input,.input-action input{min-width:0;width:100%;min-height:40px;border:1px solid #aeb5c0;border-radius:7px;padding:7px 9px;font:inherit;font-size:15px}.publication-row button{grid-column:1/-1}.publication-big_book{background:#eef4ff;border-color:#9db9e8}.publication-twelve_twelve{background:#f4efff;border-color:#b8a5df}.publication-living_sober{background:#edf8f0;border-color:#9bc6a6}.publication-as_bill_sees_it{background:#fff1e7;border-color:#e5b38e}.publication-daily_reflections{background:#fff8dc;border-color:#dec670}.publication-game_questions{background:#fff0f2;border-color:#dfa7b0}.input-action{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;margin-top:8px}.state-list{display:grid;gap:6px;margin:8px 0;color:#4d5568;font-size:13px}.state-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;align-items:center;padding:6px;border:1px solid #d9dfe8;border-radius:7px;background:#fafbfc}.state-row.is-spoken{background:#edf8f0}.state-row .action{min-height:32px;padding:4px 7px;font-size:11px}.clear-button{width:100%;margin-top:4px}.speaker{border-color:#c9abd9;background:#f9f0ff}.log{min-height:42px;max-height:110px;overflow:auto;white-space:pre-wrap;background:#111a40;color:#fff;padding:8px;border-radius:8px;font-size:12px}.admin-body{padding:0 9px 9px}.preview{font-size:12px;white-space:pre-wrap;color:#566075}.upload-actions{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}@media(min-width:760px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.publication-row{grid-template-columns:minmax(180px,1fr) 90px minmax(160px,210px)}.publication-row label{grid-column:auto}.publication-row button{grid-column:auto}}
+  </style></head><body><main>${dayHtml}<details class="day-panel speaker" data-speaker><summary>\u0421\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0430\u044f</summary><div class="day-body"><section><h2>\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f</h2><div class="grid">${speakerButtons}<button class="action meeting-action topic-action" type="button" data-speaker-publish>\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443</button></div></section><section><h2>\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0438 \u0437\u0430\u044f\u0432\u043a\u0438</h2><div class="input-action"><input data-speaker-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441 / \u0437\u0430\u044f\u0432\u043a\u0443"><button class="action primary" data-speaker-add type="button">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441\u044b</button></div><div class="state-list" data-speaker-list>\u0412\u043e\u043f\u0440\u043e\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div></section></div></details><button class="action danger clear-button" data-board-clear data-loading-label="\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c..." data-success-label="\u0413\u043e\u0442\u043e\u0432\u043e \u2713" data-error-label="\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c" type="button">\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451: \u043e\u0447\u0435\u0440\u0435\u0434\u0438, \u0434\u043e\u043f. \u0442\u0435\u043c\u044b \u0438 \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0443\u044e</button><details class="admin"><summary>\u0410\u0434\u043c\u0438\u043d / \u043a\u043d\u0438\u0436\u043d\u0430\u044f \u0431\u0430\u0437\u0430</summary><div class="admin-body"><div class="preview" id="libraryStatusText">\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0431\u0430\u0437\u0443\u2026</div><div class="upload-actions"><input id="vaultFolder" type="file" webkitdirectory multiple accept=".md,text/markdown"><button class="action" id="publishLibrary" disabled>\u041e\u043f\u0443\u0431\u043b\u0438\u043a\u043e\u0432\u0430\u0442\u044c \u0431\u0430\u0437\u0443</button><button class="action" id="testMessage">\u0422\u0435\u0441\u0442 Zoom</button></div><div class="preview" id="libraryPreview">\u041f\u0430\u043f\u043a\u0430 \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u0430.</div></div></details><pre class="log" id="log">\u041f\u0443\u043b\u044c\u0442 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d.</pre></main><script>
+  const actionPath="${escapeAttr(actionPath)}",statusPath="${escapeAttr(statusPath)}",libraryStatusPath="${escapeAttr(libraryStatusPath)}",libraryImportPath="${escapeAttr(libraryImportPath)}";const token=new URLSearchParams(location.search).get("token")||"";const logEl=document.getElementById("log");let preparedLibrary=null,busy=false;
+  const visualStyles=document.createElement("style");visualStyles.textContent=".meeting-action{height:56px;min-height:56px;display:flex;align-items:center;text-align:left}.state-row>span{min-width:0}.state-row .action.rare{min-height:27px;padding:2px 6px;font-size:10px}.state-row .action.frequent{grid-column:1/-1;width:100%;min-height:42px;padding:7px 9px;font-size:13px}";document.head.append(visualStyles);
+  const headers=()=>({"content-type":"application/json","x-nafanya-zoom-panel-token":token});const requestId=()=>crypto.randomUUID();function log(text){const time=new Date().toLocaleTimeString("ru-RU");logEl.textContent="["+time+"] "+text+"\\n"+logEl.textContent}async function requestJson(path,init={}){const response=await fetch(path,{...init,headers:{...headers(),...(init.headers||{})}}),data=await response.json().catch(()=>({}));if(!response.ok||data.ok===false)throw new Error(data.error||("HTTP "+response.status));return data}function setBusy(value){busy=value;document.querySelectorAll("button").forEach(button=>button.disabled=value||(button.id==="publishLibrary"&&!preparedLibrary))}const feedbackTimers=new WeakMap();function feedbackLabels(button,state){const custom=button?.dataset||{};if(state==="sending")return custom.loadingLabel||"\u041e\u0447\u0438\u0449\u0430\u044e\u2026";if(state==="success")return custom.successLabel||"\u0413\u043e\u0442\u043e\\u0432\\u043e \u2713";return custom.errorLabel||"\u041e\u0448\\u0438\\u0431\\u043a\\u0430"}function setButtonFeedback(button,state){if(!button)return;const previous=feedbackTimers.get(button);if(previous)clearTimeout(previous);if(!button.dataset.originalLabel)button.dataset.originalLabel=button.textContent;button.classList.remove("is-sending","is-success","is-error");if(state==="sending"){button.classList.add("is-sending");button.textContent=feedbackLabels(button,"sending");return}if(state==="success"){button.classList.add("is-success");button.textContent=feedbackLabels(button,"success")}else{button.classList.add("is-error");button.textContent=feedbackLabels(button,"error")}feedbackTimers.set(button,setTimeout(()=>{button.classList.remove("is-success","is-error");button.textContent=button.dataset.originalLabel||button.textContent;feedbackTimers.delete(button)},1800))}async function run(body,button=null){if(busy)return null;const targetButton=button||((document.activeElement instanceof HTMLButtonElement)?document.activeElement:null);setButtonFeedback(targetButton,"sending");setBusy(true);try{const data=await requestJson(actionPath,{method:"POST",body:JSON.stringify(body)});log(data.message||"\u0413\u043e\u0442\u043e\u0432\u043e");await refreshState();setButtonFeedback(targetButton,"success");return data}catch(error){log("\u041e\u0448\u0438\u0431\u043a\u0430: "+error.message);setButtonFeedback(targetButton,"error");return null}finally{setBusy(false)}}
+  function row(text,buttons,spoken=false){const el=document.createElement("div");el.className="state-row"+(spoken?" is-spoken":"");const label=document.createElement("span");label.textContent=text;el.append(label,...buttons);return el}function smallButton(label,action,className=""){const button=document.createElement("button");button.type="button";button.className="action "+className;button.textContent=label;button.onclick=()=>{button.focus();action(button)};return button}
+  function renderBoard(board){document.querySelectorAll("[data-day]").forEach(panel=>{const entries=panel.querySelector("[data-entry-list]"),topics=panel.querySelector("[data-topic-list]");entries.replaceChildren();topics.replaceChildren();if(board?.dayKey!==panel.dataset.day){entries.textContent="\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0434\u043d\u044f \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0435\u0449\u0451 \u043d\u0435 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u043b\u0430\u0441\u044c.";topics.textContent="\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.";return}if(!board.entries?.length)entries.textContent="\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.";(board.entries||[]).forEach((item,index)=>{const spoken=item.status==="spoken",buttons=[smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",()=>run({action:"meeting_board_remove_entry",dayKey:panel.dataset.day,id:item.id,requestId:requestId()}),"danger rare")];if(!spoken&&index<board.entries.length-1)buttons.push(smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",()=>run({action:"meeting_board_defer_entry",dayKey:panel.dataset.day,id:item.id,requestId:requestId()}),"rare"));buttons.push(smallButton(spoken?"\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c":"\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f",()=>run({action:spoken?"meeting_board_restore_waiting":"meeting_board_mark_spoken",dayKey:panel.dataset.day,id:item.id,requestId:requestId()}),"frequent "+(spoken?"":"spoken")));entries.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))});if(!board.additionalTopics?.length)topics.textContent="\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.";(board.additionalTopics||[]).forEach((item,index)=>topics.append(row((index+1)+". "+item.text,[smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",()=>run({action:"meeting_board_remove_topic",dayKey:panel.dataset.day,id:item.id,requestId:requestId()}),"danger rare")])))}
+  );}
+  function renderSpeaker(state){const list=document.querySelector("[data-speaker-list]");list.replaceChildren();if(!state?.entries?.length){list.textContent="\u0412\u043e\u043f\u0440\u043e\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.";return}state.entries.forEach((item,index)=>list.append(row((index+1)+". "+item.text,[smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",()=>run({action:"speaker_questions_remove",id:item.id,requestId:requestId()}),"danger rare")])))}async function refreshState(){try{const data=await requestJson(statusPath);renderBoard(data.meetingBoard);renderSpeaker(data.speakerQuestions)}catch(error){log("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435: "+error.message)}}
+  document.querySelectorAll("[data-message-key]").forEach(button=>button.onclick=()=>run({type:"message",key:button.dataset.messageKey},button));document.querySelectorAll("[data-publish-day]").forEach(button=>button.onclick=()=>run({action:"meeting_board_publish",dayKey:button.dataset.publishDay,requestId:requestId()},button));document.querySelectorAll("[data-book]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1){log("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0439 \u043d\u043e\u043c\u0435\u0440.");return}run({action:"book_excerpt",collectionId:button.dataset.book,number},button).then(data=>{if(data)input.value=""})});document.querySelectorAll("[data-daily]").forEach(button=>button.onclick=()=>run({action:"daily_reflection"},button));document.querySelectorAll("[data-game]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1||number>500){log("\u041d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430: \u043e\u0442 1 \u0434\u043e 500.");return}run({action:"game_question",number},button).then(data=>{if(data)input.value=""})});
+  document.querySelectorAll("[data-day]").forEach(panel=>{const dayKey=panel.dataset.day;panel.querySelector("[data-add-entry]").onclick=()=>{const input=panel.querySelector("[data-entry-input]");run({action:"meeting_board_add_entry",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-entry]")).then(data=>{if(data)input.value=""})};panel.querySelector("[data-add-topic]").onclick=()=>{const input=panel.querySelector("[data-topic-input]");run({action:"meeting_board_add_topic",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-topic]")).then(data=>{if(data)input.value=""})}});document.querySelector("[data-speaker-publish]").onclick=event=>run({action:"speaker_questions_publish",requestId:requestId()},event.currentTarget);document.querySelector("[data-speaker-add]").onclick=()=>{const input=document.querySelector("[data-speaker-input]");run({action:"speaker_questions_add",text:input.value,requestId:requestId()},document.querySelector("[data-speaker-add]")).then(data=>{if(data)input.value=""})}
+  const weekday=new Intl.DateTimeFormat("en-US",{timeZone:"Europe/Moscow",weekday:"short"}).format(new Date()).toLowerCase(),map={mon:"monday",tue:"tuesday",thu:"thursday",fri:"friday",sun:"sunday"};const todayPanel=document.querySelector('[data-day="'+map[weekday]+'"]');if(todayPanel)todayPanel.open=true;
+  const fullClearButton=document.querySelector("[data-board-clear]");if(fullClearButton){fullClearButton.onclick=event=>{if(!confirm("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438, \u0434\u043e\u043f. \u0442\u0435\u043c\u044b \u0438 \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0443\u044e?"))return;const selected=document.querySelector("[data-day][open]")||document.querySelector("[data-day]");run({action:"meeting_board_clear_all",dayKey:selected?.dataset.day||"monday",requestId:requestId()},event.currentTarget)};}
+  function normalizedPath(value){return String(value||"").toLocaleLowerCase("ru-RU").replaceAll("\\\\","/").replaceAll("\u0451","\u0435")}function collectionForPath(path){const value=normalizedPath(path);if(value.includes("\u043a\u0430\u043a \u044d\u0442\u043e \u0432\u0438\u0434\u0438\u0442 \u0431\u0438\u043b\u043b"))return"as_bill_sees_it";if(value.includes("\u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d")||value.includes("\u0435\u0436\u0438\u043a"))return"daily_reflections";if(value.includes("\u0436\u0438\u0442\u044c \u0442\u0440\u0435\u0437\u0432"))return"living_sober";if(/12\\s*[x\u0445]\\s*12|12\\s+\u0448\u0430\u0433/u.test(value))return"twelve_twelve";if(value.includes("\u0432\u043e\u043f\u0440\u043e\u0441")&&value.includes("\u0438\u0433\u0440"))return"game_questions";if(value.includes("\u0431\u043e\u043b\u044c\u0448\u0430\u044f \u043a\u043d\u0438\u0433\u0430")||value.includes("big book")||value.includes("\u0430\u043d\u043e\u043d\u0438\u043c\u043d\u044b\u0435_\u0430\u043b\u043a\u043e\u0433\u043e\u043b\u0438\u043a\u0438"))return"big_book";return null}function entryKey(collectionId,path){const name=String(path||"").split(/[\\\\/]/u).at(-1).replace(/\\.md$/iu,"");if(collectionId==="daily_reflections"){const match=name.match(/^(\\d{1,2})[.-](\\d{1,2})$/u);return match?match[1].padStart(2,"0")+"."+match[2].padStart(2,"0"):null}const match=name.match(/^(\\d{1,4})/u);return match?String(Number(match[1])):null}async function inspectFolder(files){const collections={},errors=[];for(const file of files){const path=file.webkitRelativePath||file.name;if(!/\\.md$/iu.test(path)||normalizedPath(path).includes("/.obsidian/"))continue;const collectionId=collectionForPath(path),key=collectionId&&entryKey(collectionId,path);if(!collectionId||!key)continue;const bucket=collections[collectionId]||(collections[collectionId]={entries:[]});if(bucket.entries.some(item=>item.key===key)){errors.push("\u0414\u0443\u0431\u043b\u044c "+key+": "+path);continue}const text=(await file.text()).trim();if(!text){errors.push("\u041f\u0443\u0441\u0442\u043e\u0439 \u0444\u0430\u0439\u043b: "+path);continue}bucket.entries.push({key,text,sourcePath:path})}preparedLibrary=null;if(!errors.length&&Object.keys(collections).length){try{const checked=await requestJson(libraryImportPath+"?dryRun=1",{method:"POST",body:JSON.stringify({collections})});preparedLibrary={collections};document.getElementById("libraryPreview").textContent="\u041d\u0430\u0439\u0434\u0435\u043d\u043e: "+checked.preview.totalEntries+"; Zoom-\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439: "+checked.preview.totalMessages}catch(error){errors.push(error.message)}}if(errors.length||!preparedLibrary)document.getElementById("libraryPreview").textContent=errors.join("\\n")||"\u041d\u0435 \u043d\u0430\u0448\u0451\u043b Markdown-\u043a\u043d\u0438\u0433.";document.getElementById("publishLibrary").disabled=!preparedLibrary}document.getElementById("vaultFolder").onchange=event=>inspectFolder(event.target.files);document.getElementById("publishLibrary").onclick=async()=>{if(!preparedLibrary)return;setBusy(true);try{const data=await requestJson(libraryImportPath,{method:"POST",body:JSON.stringify(preparedLibrary)});log(data.message||"\u0411\u0430\u0437\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430");await refreshLibrary()}catch(error){log("\u041e\u0448\u0438\u0431\u043a\u0430: "+error.message)}finally{setBusy(false)}};document.getElementById("testMessage").onclick=event=>run({action:"test_message"},event.currentTarget);async function refreshLibrary(){try{const data=await requestJson(libraryStatusPath),items=Object.values(data.collections||{}).filter(item=>item.available).map(item=>item.label+": "+item.count);document.getElementById("libraryStatusText").textContent=items.join(" \u00b7 ")||"\u0411\u0430\u0437\u0430 \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u0430"}catch(error){log(error.message)}}refreshState();refreshLibrary();setInterval(refreshState,5000);
+  </script></body></html>`;
 }
-__name(buildZoomV2PanelHtml, "buildZoomV2PanelHtml");
+__name(buildZoomMeetingBoardPanelHtml, "buildZoomMeetingBoardPanelHtml");
 async function handleRootRequest(env) {
-  return htmlResponse(buildZoomAppHtml());
+  return handleStatusRequest(env);
 }
 __name(handleRootRequest, "handleRootRequest");
 async function handleZoomOnlyAppRequest(request, env) {
   if (!isZoomPanelAuthorized(request, env)) {
     return textResponse("\u041d\u0443\u0436\u0435\u043d \u0442\u043e\u043a\u0435\u043d \u043f\u0443\u043b\u044c\u0442\u0430 Zoom.", 401);
   }
-  return htmlResponse(buildZoomV2PanelHtml());
+  return htmlResponse(buildZoomMeetingBoardPanelHtml());
 }
 __name(handleZoomOnlyAppRequest, "handleZoomOnlyAppRequest");
+async function handleZoomLibraryRequest(request, env) {
+  if (!isZoomPanelAuthorized(request, env)) return zoomPanelUnauthorizedResponse();
+  if (request.method === "GET") {
+    try {
+      return Response.json({ ok: true, ...getLibraryStatus(await readZoomLibrary(env)) });
+    } catch (error) {
+      return Response.json({ ok: false, error: String(error?.message || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u043a\u043d\u0438\u0436\u043d\u0443\u044e \u0431\u0430\u0437\u0443.").slice(0, 300) }, { status: 500 });
+    }
+  }
+  if (request.method !== "POST") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (declaredLength > ZOOM_LIBRARY_IMPORT_MAX_BYTES) return Response.json({ ok: false, error: "\u041a\u043d\u0438\u0436\u043d\u0430\u044f \u0431\u0430\u0437\u0430 \u0441\u043b\u0438\u0448\u043a\u043e\u043c \u0431\u043e\u043b\u044c\u0448\u0430\u044f." }, { status: 413 });
+  try {
+    const raw = await request.text();
+    if (new TextEncoder().encode(raw).byteLength > ZOOM_LIBRARY_IMPORT_MAX_BYTES) return Response.json({ ok: false, error: "\u041a\u043d\u0438\u0436\u043d\u0430\u044f \u0431\u0430\u0437\u0430 \u0441\u043b\u0438\u0448\u043a\u043e\u043c \u0431\u043e\u043b\u044c\u0448\u0430\u044f." }, { status: 413 });
+    const payload = JSON.parse(raw || "{}");
+    const validation = validateLibraryImport(payload);
+    if (!validation.ok) return Response.json({ ok: false, error: "\u0411\u0430\u0437\u0430 \u043d\u0435 \u043e\u043f\u0443\u0431\u043b\u0438\u043a\u043e\u0432\u0430\u043d\u0430.", errors: validation.errors, warnings: validation.warnings, preview: validation.preview }, { status: 400 });
+    const current = await readZoomLibrary(env).catch(() => null);
+    const next = mergeLibraryCollections(current, validation.collections);
+    if (new URL(request.url).searchParams.get("dryRun") === "1") {
+      return Response.json({ ok: true, validated: true, warnings: validation.warnings, preview: validation.preview, ...getLibraryStatus(next) });
+    }
+    await saveZoomLibrary(env, next);
+    return Response.json({ ok: true, message: "\u041a\u043d\u0438\u0436\u043d\u0430\u044f \u0431\u0430\u0437\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430.", warnings: validation.warnings, preview: validation.preview, ...getLibraryStatus(next) });
+  } catch (error) {
+    const isSyntaxError = error instanceof SyntaxError;
+    return Response.json({ ok: false, error: isSyntaxError ? "\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0444\u043e\u0440\u043c\u0430\u0442 \u043a\u043d\u0438\u0436\u043d\u043e\u0439 \u0431\u0430\u0437\u044b." : String(error?.message || "\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u043a\u043d\u0438\u0436\u043d\u043e\u0439 \u0431\u0430\u0437\u044b.").slice(0, 300) }, { status: isSyntaxError ? 400 : 500 });
+  }
+}
+__name(handleZoomLibraryRequest, "handleZoomLibraryRequest");
 async function handleStatusRequest(env) {
   const tokenStatus = env.BOT_TOKEN ? "\u0435\u0441\u0442\u044C" : "\u043D\u0435\u0442";
   const speakerQuestions = await getSpeakerQuestions().catch(() => /* @__PURE__ */ new Map());
@@ -4272,13 +3462,9 @@ const callbackHandlerDeps = {
   CHAT_GROUP_ID,
   callQueueState,
   applyQueueResponse,
-  enqueueZoomMessages,
-  getZoomMeetingMessages,
   callTimerState,
   TIMER_DEFAULT_SECONDS,
-  getTodayTopicSourceMessageId,
-  getTodayTopicZoomMessages,
-  splitZoomText
+  getTodayTopicSourceMessageId
 };
 const messageHandlerDeps = {
   sendMessage: sendMessageWithInfoSilence,
@@ -4354,9 +3540,7 @@ const messageHandlerDeps = {
   makeManualQueueEntry: makeManualQueueEntryCore,
   getSpeakerQuestions,
   getTodayTopicSourceMessageId,
-  applyQueueResponse,
-  enqueueZoomMessages,
-  splitZoomText
+  applyQueueResponse
 };
   async function handleWebhookUpdate(request, env) {
     try {
@@ -4385,7 +3569,7 @@ __name(handleWebhookUpdate, "handleWebhookUpdate");
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/zoom/app")) {
+    if (request.method === "GET" && url.pathname === "/") {
       return handleRootRequest(env);
     }
     if (request.method === "GET" && url.pathname === "/zoom-only/app") {
@@ -4397,19 +3581,19 @@ var worker_default = {
     if (request.method === "GET" && url.pathname === "/oauth") {
       return handleZoomOAuthReturn(request);
     }
-    if (url.pathname === "/zoom/app/action") {
-      return handleZoomAppActionRequest(request, env);
-    }
     if (url.pathname === "/zoom-only/app/action") {
       return handleZoomOnlyAppActionRequest(request, env);
+    }
+    if (url.pathname.startsWith("/zoom-only/team-chat/")) {
+      return Response.json({ ok: false, error: "team_chat_test_retired" }, { status: 410 });
+    }
+    if ((request.method === "GET" && url.pathname === "/zoom-only/library/status") || (request.method === "POST" && url.pathname === "/zoom-only/library/import")) {
+      return handleZoomLibraryRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
       return handleWebhookUpdate(request, env);
     }
-    if (request.method === "POST" && (url.pathname === "/zoom/webhook" || url.pathname === "/zoom/outbox" || url.pathname === "/zoom/debug")) {
-      return handleZoomBridgeRequest(request, env);
-    }
-    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/reset" || url.pathname === "/zoom-only/chat-ingest")) {
+    if ((request.method === "POST" || request.method === "GET") && (url.pathname === "/zoom-only/webhook" || url.pathname === "/zoom-only/outbox" || url.pathname === "/zoom-only/status" || url.pathname === "/zoom-only/chat-ingest")) {
       return handleZoomOnlyBridgeRequest(request, env);
     }
     if (request.method === "POST" && url.pathname === "/zoom/events") {
@@ -4430,6 +3614,7 @@ var worker_default = {
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_11_00`, item.weekday, 11, 0, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId)),
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_21_20`, item.weekday, 21, 20, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId))
       ]),
+      runScheduledTaskOncePerDay(env, "daily_22_00", 22, 0, () => sendAnnouncementCopyToGroup(env, DAILY_22_ANNOUNCEMENT_ID), 120),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "evening_23_00", 23, 0, () => sendAnnouncementCopyToGroup(env, EVENING_ANNOUNCEMENT_ID)),
       ...PERSONAL_DAY_SCHEDULE.map((item) => runScheduledTaskOncePerDay(
@@ -4445,17 +3630,12 @@ var worker_default = {
         error,
         details: { action: "tick" },
         hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c Durable Object \u0442\u0430\u0439\u043c\u0435\u0440\u0430."
-      })),
-      runScheduledTaskOncePerDay(env, "queue_clear_23_55", 23, 55, async () => {
-        const result = await callQueueState(env, "clear");
-        await applyQueueResponse(env, result);
-      })
+      }))
     ]));
   }
 };
 export {
   AnnouncementStateDurableObject,
-  buildZoomPayloadFromChatEvent,
   buildZoomValidationResponse,
   hmacSha256Hex,
   handleRootRequest,
@@ -4468,7 +3648,10 @@ export {
   parseGameCommandCore as parseGameCommand,
   parseQueueEntryCore as parseQueueEntry,
   QueueStateDurableObject,
+  saveAnnouncementMessageIdAfterCopy,
   TimerStateDurableObject,
+  ZoomMeetingStateDurableObject,
+  ZoomSharedTimerStateDurableObject,
   verifyZoomWebhookSignature,
   worker_default as default
 };

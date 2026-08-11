@@ -1,7 +1,12 @@
 {
   "name": "pochti-normalnye-bot",
   "main": "worker.mjs",
-  "compatibility_date": "2026-04-16",
+  "compatibility_date": "2026-08-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "vars": {
     "FAQ_FILE_ID": "1tN9NDlJFaxvx0VJDardsMx0uM2mSInVVHUa4wkZPf8U",
     "SCHEDULE_FILE_ID": "1VAWzdnevTgTmfyx83wfSig9BW6PfdKK1wZorpW0bIvU",
@@ -11,12 +16,11 @@
     "COORDINATOR_USER_ID": "",
     "COORDINATOR_PRIVATE_CHAT_ID": "",
     "COORDINATOR_USERNAME": "khomutik",
-    "SERVICE_PERSON_MAP_JSON": "{\"Катя Ши\":{\"display_name\":\"Катя Ши\",\"username\":\"katukatun\"},\"@katukatun\":{\"display_name\":\"@katukatun\",\"username\":\"katukatun\"},\"Анна Лион\":{\"display_name\":\"Анна Лион\",\"username\":\"pifagor71\"},\"@pifagor71\":{\"display_name\":\"@pifagor71\",\"username\":\"pifagor71\"},\"Маня\":{\"display_name\":\"Маня\",\"username\":\"khomutik\"},\"@khomutik\":{\"display_name\":\"@khomutik\",\"username\":\"khomutik\"},\"Валя\":{\"display_name\":\"Валя\",\"username\":\"Well2456\"},\"@Well2456\":{\"display_name\":\"@Well2456\",\"username\":\"Well2456\"},\"Артем\":{\"display_name\":\"Артем\",\"username\":\"FrendlyLawyer\"},\"@FrendlyLawyer\":{\"display_name\":\"@FrendlyLawyer\",\"username\":\"FrendlyLawyer\"},\"Никита\":{\"display_name\":\"Никита\",\"username\":\"rlinrec\"},\"@rlinrec\":{\"display_name\":\"@rlinrec\",\"username\":\"rlinrec\"},\"Денис\":{\"display_name\":\"Денис\",\"username\":\"D3N1S_G33K\"},\"@D3N1S_G33K\":{\"display_name\":\"@D3N1S_G33K\",\"username\":\"D3N1S_G33K\"},\"@VladimirRingo\":{\"display_name\":\"@VladimirRingo\",\"username\":\"VladimirRingo\"}}",
+    "SERVICE_PERSON_MAP_JSON": "{\"Катя Ши\":{\"display_name\":\"Катя Ши\",\"username\":\"katukatun\"},\"@katukatun\":{\"display_name\":\"@katukatun\",\"username\":\"katukatun\"},\"Анна Лион\":{\"display_name\":\"Анна Лион\",\"username\":\"pifagor71\"},\"@pifagor71\":{\"display_name\":\"@pifagor71\",\"username\":\"pifagor71\"},\"Маня\":{\"display_name\":\"Маня\",\"username\":\"khomutik\"},\"@khomutik\":{\"display_name\":\"@khomutik\",\"username\":\"khomutik\"},\"Валя\":{\"display_name\":\"Валя\",\"username\":\"Well2456\"},\"@Well2456\":{\"display_name\":\"@Well2456\",\"username\":\"Well2456\"},\"Артем\":{\"display_name\":\"Артем\",\"username\":\"FrendlyLawyer\"},\"@FrendlyLawyer\":{\"display_name\":\"@FrendlyLawyer\",\"username\":\"FrendlyLawyer\"},\"Никита\":{\"display_name\":\"Никита\",\"username\":\"rlinrec\"},\"@rlinrec\":{\"display_name\":\"@rlinrec\",\"username\":\"rlinrec\"},\"Денис\":{\"display_name\":\"Денис\",\"username\":\"D3N1S_G33K\"},\"@D3N1S_G33K\":{\"display_name\":\"@D3N1S_G33K\",\"username\":\"D3N1S_G33K\"},\"@VladimirRingo\":{\"display_name\":\"@VladimirRingo\",\"username\":\"VladimirRingo\"},\"Юля\":{\"display_name\":\"Юля\",\"username\":\"gorinayua\",\"telegram_user_id\":\"6479617191\",\"private_chat_id\":\"6479617191\"},\"Julia Gorina\":{\"display_name\":\"Юля\",\"username\":\"gorinayua\",\"telegram_user_id\":\"6479617191\",\"private_chat_id\":\"6479617191\"},\"@gorinayua\":{\"display_name\":\"Юля\",\"username\":\"gorinayua\",\"telegram_user_id\":\"6479617191\",\"private_chat_id\":\"6479617191\"}}",
     "ADMIN_DM_USER_IDS": "",
     "ADMIN_DM_USERNAMES": "khomutik,katukatun,pifagor71,Well2456,FrendlyLawyer,Maks_gav,VladimirRingo,D3N1S_G33K,Owl1Max,rlinrec",
     "ADMIN_MANAGER_USER_IDS": "",
     "ADMIN_MANAGER_USERNAMES": "Maks_gav",
-    "ZOOM_ADMIN_NAMES": "AA Почти нормальные,Маня Х.,Маша Х.,Vladimir",
     "PRIVATE_SUBSCRIBER_USER_IDS": ""
   },
   "triggers": {
@@ -41,6 +45,14 @@
       {
         "name": "ANNOUNCEMENT_STATE",
         "class_name": "AnnouncementStateDurableObject"
+      },
+      {
+        "name": "ZOOM_MEETING_STATE",
+        "class_name": "ZoomMeetingStateDurableObject"
+      },
+      {
+        "name": "ZOOM_SHARED_TIMER_STATE",
+        "class_name": "ZoomSharedTimerStateDurableObject"
       }
     ]
   },
@@ -68,9 +80,34 @@
       "new_sqlite_classes": [
         "AnnouncementStateDurableObject"
       ]
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": [
+        "ZoomMeetingStateDurableObject",
+        "ZoomSharedTimerStateDurableObject"
+      ]
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": [
+        "ZoomTeamChatStateDurableObject"
+      ]
+    },
+    {
+      "tag": "v7",
+      "deleted_classes": [
+        "ZoomTeamChatStateDurableObject"
+      ]
     }
   ],
   "ai": {
     "binding": "AI"
-  }
+  },
+  "r2_buckets": [
+    {
+      "binding": "ZOOM_LIBRARY",
+      "bucket_name": "nafanya-zoom-library"
+    }
+  ]
 }

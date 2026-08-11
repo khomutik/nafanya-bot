@@ -125,12 +125,8 @@ export class ZoomControlService {
     }
   }
 
-  async stop({ force = false } = {}) {
+  async stop() {
     if (this.operation) return { ok: false, status: 409, error: "Дождитесь завершения текущей операции." };
-    const queue = await this.ops.getQueueStatus();
-    if (queue?.queueOpen && !force) {
-      return { ok: false, status: 409, error: "Сначала закройте очередь." };
-    }
     this.operation = "stop";
     try {
       await this.ops.stopSender();

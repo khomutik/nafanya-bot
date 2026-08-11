@@ -197,10 +197,6 @@ export function ensureSingleActiveEntry(state) {
   });
 }
 
-export function stripQueueHtml(text) {
-  return String(text || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
-}
-
 export function getEntryBlock(state, entry) {
   return state.mode === "bill" ? entry.block : "single";
 }
@@ -233,25 +229,6 @@ export function buildQueueText(state) {
   }
   lines.push(...QUEUE_FOOTER_LINES);
   return lines.join("\n");
-}
-
-export function buildZoomOnlyQueueText(state) {
-  const title = stripQueueHtml(getQueueModeTitle(state.mode));
-  const instruction = state.mode === "bill"
-    ? "\u041f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442 \"111\" \u0434\u043b\u044f \u0432\u044b\u0441\u043a\u0430\u0437\u044b\u0432\u0430\u043d\u0438\u044f \u0438\u043b\u0438 \"\u0438\u0433\u0440\u0430 \u043d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430 \u043e\u0442 1 \u0434\u043e 500\" \u0434\u043b\u044f \u0443\u0447\u0430\u0441\u0442\u0438\u044f \u0432 \u0438\u0433\u0440\u0435 \"500 \u043f\u043e\u0447\u0442\u0438 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432\""
-    : stripQueueHtml(getQueueInstruction(state.mode));
-  const base = [title, instruction, "", state.isOpen ? QUEUE_OPEN_LABEL : QUEUE_CLOSED_LABEL, ""];
-  if (!state.entries.length) {
-    base.push("\u041f\u043e\u043a\u0430 \u043f\u0443\u0441\u0442\u043e.");
-    return base.join("\n");
-  }
-  for (const [index, entry] of state.entries.entries()) {
-    let marker = "\u2022";
-    if (entry.status === "done") marker = "\u2705";
-    else if (entry.isActive) marker = "\u25B6";
-    base.push(`${marker} ${index + 1}. ${entry.author} \u2014 ${entry.label}`);
-  }
-  return base.join("\n");
 }
 
 export function addQueueEntryToState(state, entry, { allowDuplicateEntries = false } = {}) {
@@ -379,13 +356,6 @@ export function runQueueStateAction(queueState, action, payload = {}, buildText 
     state.entries = [];
     state.queueMessageId = null;
     return queueResult(state, { ok: true, publishQueue: true, previousMessageId }, buildText);
-  }
-  if (action === "auto_open") {
-    pushQueueHistory(state);
-    state.isOpen = true;
-    state.mode = payload.mode;
-    state.queueMessageId = null;
-    return { state, response: { ok: true, state } };
   }
   if (action === "close") {
     pushQueueHistory(state);

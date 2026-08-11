@@ -636,18 +636,11 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     sendAnnouncementCopyToGroup,
     copyTechMessageToGroup,
     CHAT_GROUP_ID,
-    getTodayTopicSourceMessageId,
-    getTodayTopicZoomMessages,
-    enqueueZoomMessages,
-    getZoomMeetingMessages,
-    splitZoomText
+    getTodayTopicSourceMessageId
   } = deps;
   if (key === "yozhik") {
     try {
-      const messageText = await sendYozhikToGroup(env);
-      if (enqueueZoomMessages) {
-        await enqueueZoomMessages(env, splitZoomText ? splitZoomText(messageText) : messageText).catch(() => null);
-      }
+      await sendYozhikToGroup(env);
       await answerCallback(env, callbackQuery.id, "\u0401\u0436\u0438\u043A \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D \u0432 \u0447\u0430\u0442 \u0433\u0440\u0443\u043F\u043F\u044B.");
     } catch (error) {
       await answerCallback(env, callbackQuery.id, `\u041E\u0448\u0438\u0431\u043A\u0430: ${error.message}`, true);
@@ -675,9 +668,6 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
       return okResponse();
     }
     await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId);
-    if (enqueueZoomMessages && getTodayTopicZoomMessages) {
-      await enqueueZoomMessages(env, getTodayTopicZoomMessages()).catch(() => null);
-    }
     await answerCallback(env, callbackQuery.id, "\u0422\u0435\u043C\u0430 \u0441\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0443\u0442\u0430\u0449\u0435\u043D\u0430 \u0432 \u0447\u0430\u0442.");
     return okResponse();
   }
@@ -691,9 +681,6 @@ async function handleMeetingCallback(env, callbackQuery, chatId, threadId, key, 
     await sendAnnouncementCopyToGroup(env, sourceMessageId);
   } else {
     await copyTechMessageToGroup(env, CHAT_GROUP_ID, INFO_CHAT_ID, sourceMessageId);
-  }
-  if (!sentViaAnnouncementCopy && enqueueZoomMessages && getZoomMeetingMessages) {
-    await enqueueZoomMessages(env, getZoomMeetingMessages(key)).catch(() => null);
   }
   await answerCallback(env, callbackQuery.id, "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0443\u0442\u0430\u0449\u0435\u043D\u043E \u0432 \u0447\u0430\u0442 \u0433\u0440\u0443\u043F\u043F\u044B.");
   return okResponse();
