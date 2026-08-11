@@ -31,6 +31,10 @@ function classifyZoomPresenceText(bodyText, chatOpen = false) {
   return { waitingRoom, zoomJoined };
 }
 
+function shouldAttemptChatRecovery({ chatOpen, zoomJoined, waitingRoom, lastAttemptAt = 0, now = Date.now(), intervalMs = 10000 } = {}) {
+  return !chatOpen && Boolean(zoomJoined) && !waitingRoom && now - Number(lastAttemptAt || 0) >= intervalMs;
+}
+
 async function clickFirst(page, selectors, { timeout = 1500 } = {}) {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -806,6 +810,7 @@ export class PlaywrightZoomSender {
     this.lastDiagnosticsDir = null;
     this.diagnosticsRun = null;
     this.chatDiagnosticFingerprints = new Set();
+    this.lastChatOpenAttemptAt = 0;
     this.diagnosticsEvents = {
       console: [],
       pageErrors: [],
@@ -916,8 +921,19 @@ export class PlaywrightZoomSender {
 
   async getPresence() {
     if (!this.page) return { ...this.presence };
-    const chatOpen = await hasChatInput(this.page);
+    let chatOpen = await hasChatInput(this.page);
     const bodyText = await this.page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+    const detected = classifyZoomPresenceText(bodyText, chatOpen);
+    if (shouldAttemptChatRecovery({
+      chatOpen,
+      zoomJoined: detected.zoomJoined,
+      waitingRoom: detected.waitingRoom,
+      lastAttemptAt: this.lastChatOpenAttemptAt
+    })) {
+      this.lastChatOpenAttemptAt = Date.now();
+      await openChatPanel(this.page).catch(() => false);
+      chatOpen = await hasChatInput(this.page);
+    }
     const { waitingRoom, zoomJoined } = classifyZoomPresenceText(bodyText, chatOpen);
     const chatUnavailable = !chatOpen && await hasChatUnavailableNotice(this.page);
     this.presence = {
@@ -994,4 +1010,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingMediaOff, exactOwnChatRecords, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText };
+export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingMediaOff, exactOwnChatRecords, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };

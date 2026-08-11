@@ -15,6 +15,7 @@ function publicHealth(health = null) {
     status: String(health.status || "unhealthy"),
     workerAvailable: Boolean(health.workerAvailable),
     zoomJoined: Boolean(health.zoomJoined),
+    waitingRoom: Boolean(health.waitingRoom),
     chatOpen: Boolean(health.chatOpen),
     chatUnavailable: Boolean(health.chatUnavailable),
     chatReason: health.chatReason ? String(health.chatReason) : null,
@@ -65,6 +66,10 @@ export class ZoomControlService {
     else if (running && health?.lastWorkerError && !health?.workerAvailable) {
       mode = "error";
       this.lastError = workerUnavailableMessage(health);
+    }
+    else if (running && health?.zoomJoined && !health?.waitingRoom && !health?.chatOpen) {
+      mode = "error";
+      this.lastError = "\u041d\u0430\u0444\u0430\u043d\u044f \u0432\u043e\u0448\u0451\u043b \u0432 Zoom, \u043d\u043e \u0447\u0430\u0442 \u043d\u0435 \u043e\u0442\u043a\u0440\u044b\u043b\u0441\u044f.";
     }
     else if (running && await this.ops.detectAuthRequired().catch(() => false)) mode = "auth_required";
     else if (running && health?.status === "unhealthy") mode = "error";

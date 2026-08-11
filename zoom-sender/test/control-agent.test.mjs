@@ -123,6 +123,19 @@ test("public health exposes readiness reasons without secrets", () => {
   assert.doesNotMatch(health.lastWorkerError.message, /hidden|abcd/u);
 });
 
+test("an admitted sender with a closed chat is an error, not endless starting", async () => {
+  const ops = fakeOps({
+    async isSenderRunning() { return true; },
+    async getSenderHealth() {
+      return { status: "warning", workerAvailable: true, zoomJoined: true, waitingRoom: false, chatOpen: false, chatUnavailable: false };
+    }
+  });
+  const service = new ZoomControlService(ops);
+  const status = await service.status();
+  assert.equal(status.mode, "error");
+  assert.match(status.lastError, /\u0447\u0430\u0442 \u043d\u0435 \u043e\u0442\u043a\u0440\u044b\u043b\u0441\u044f/iu);
+});
+
 test("control start reports worker and chat readiness failures honestly", async () => {
   let workerRunning = false;
   const workerOps = fakeOps({

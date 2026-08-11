@@ -6,7 +6,7 @@ import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
 import { ZoomSenderService } from "../src/sender.mjs";
 import { WorkerOutboxClient, classifyWorkerFetchError, classifyWorkerHttpStatus } from "../src/worker-client.mjs";
-import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, exactOwnChatRecords, isOwnIdentityChatRecord, sanitizeDiagnosticText, sanitizePageUrl } from "../src/adapters/playwright-zoom-sender.mjs";
+import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, exactOwnChatRecords, isOwnIdentityChatRecord, sanitizeDiagnosticText, sanitizePageUrl, shouldAttemptChatRecovery } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -25,6 +25,13 @@ function makeConfig() {
     errorIntervalMs: 10000
   };
 }
+
+test("chat recovery runs after admission but is throttled while Zoom is still opening the panel", () => {
+  assert.equal(shouldAttemptChatRecovery({ chatOpen: false, zoomJoined: true, waitingRoom: false, lastAttemptAt: 0, now: 20000 }), true);
+  assert.equal(shouldAttemptChatRecovery({ chatOpen: false, zoomJoined: true, waitingRoom: false, lastAttemptAt: 15000, now: 20000 }), false);
+  assert.equal(shouldAttemptChatRecovery({ chatOpen: false, zoomJoined: false, waitingRoom: true, lastAttemptAt: 0, now: 20000 }), false);
+  assert.equal(shouldAttemptChatRecovery({ chatOpen: true, zoomJoined: true, waitingRoom: false, lastAttemptAt: 0, now: 20000 }), false);
+});
 
 test("outbox client pulls zoom-only messages and sends ackIds", async () => {
   const calls = [];
