@@ -772,8 +772,9 @@ export async function handleServiceMessages(env, message, text, chatId, threadId
 
   const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, { isPrivateChat, CHAT_GROUP_ID, INFO_CHAT_ID, normalizeLightText, parseNafanyaQuestion });
   const canSendAdminSignal = nafanyaRequestHere || isPrepThread(chatId, threadId);
+  const canSendFixSignal = canSendAdminSignal || isChatGroup(chatId, threadId);
 
-  if (canSendAdminSignal && hasFixMarker(text)) {
+  if (canSendFixSignal && hasFixMarker(text)) {
     const author = getAuthorLabel(message);
     await sendAdminDigest(env, "\u0424\u0418\u041a\u0421\u0418\u0420\u0423\u042e", author, text, "#\u0444\u0438\u043a\u0441\u0438\u0440\u0443\u044e");
     await sendMessage(env, chatId, FIX_CONFIRMATION, threadId, message.message_id);
@@ -800,7 +801,7 @@ export async function handleServiceMessages(env, message, text, chatId, threadId
 function buildMessageLink(chatId, messageId) {
   const rawChatId = String(chatId || "");
   if (!messageId || !rawChatId.startsWith("-100")) return "";
-  return `https://t.me/c/${rawChatId.slice(4)}/${messageId}`;
+  return `https://telegram.me/c/${rawChatId.slice(4)}/${messageId}`;
 }
 
 function buildUnansweredDisplayName(user) {
@@ -1151,13 +1152,12 @@ async function handleModerationMessage(env, message, text, chatId, threadId, dep
   return null;
 }
 
-async function handleGroupQueueAndGameMessage(env, message, text, chatId, threadId, deps) {
+export async function handleGroupQueueAndGameMessage(env, message, text, chatId, threadId, deps) {
   const {
     isChatGroup,
     callQueueState,
     parseGameCommand,
     parseQueueEntry,
-    getBillQuestionNumber,
     getSpeakerQuestions,
     sendMessage,
     applyQueueResponse
@@ -1171,14 +1171,9 @@ async function handleGroupQueueAndGameMessage(env, message, text, chatId, thread
     return null;
   }
 
-  const queueInfo = await callQueueState(env, "get");
   const gameNumber = parseGameCommand(text);
 
   if (gameNumber !== null) {
-    if (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill") {
-      await sendMessage(env, chatId, "\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u043e \u0432\u0440\u0435\u043c\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", null, message.message_id);
-      return okResponse();
-    }
     let speakerQuestions;
     try {
       speakerQuestions = await getSpeakerQuestions();
@@ -1190,6 +1185,7 @@ async function handleGroupQueueAndGameMessage(env, message, text, chatId, thread
       const question = speakerQuestions.get(gameNumber);
       if (question) {
         await sendMessage(env, chatId, `\u0412\u043e\u043f\u0440\u043e\u0441 ${gameNumber}:\n\n${question}`, null, message.message_id);
+        const queueInfo = await callQueueState(env, "get");
         if (queueInfo.state?.isOpen && queueInfo.state?.mode === "bill") {
           const gameQueueEntry = parseQueueEntry(message, queueInfo.state);
           if (gameQueueEntry) {
@@ -1206,12 +1202,7 @@ async function handleGroupQueueAndGameMessage(env, message, text, chatId, thread
     return okResponse();
   }
 
-  const billGameNumber = typeof getBillQuestionNumber === "function" ? getBillQuestionNumber(text) : null;
-  if (billGameNumber !== null && (!queueInfo.state?.isOpen || queueInfo.state?.mode !== "bill")) {
-    await sendMessage(env, chatId, "\u0418\u0433\u0440\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u043e \u0432\u0440\u0435\u043c\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f", null, message.message_id);
-    return okResponse();
-  }
-
+  const queueInfo = await callQueueState(env, "get");
   const queueEntry = parseQueueEntry(message, queueInfo.state);
   if (queueEntry) {
     const result = await callQueueState(env, "add", { entry: queueEntry });
@@ -1375,6 +1366,9 @@ export async function handleWebhookMessage(env, message, deps) {
   }
 
   const text = String(message.text ?? message.caption ?? "").trim();
+  if (message?.from?.is_bot) {
+    return okResponse();
+  }
   if (isEmojiOnlyText(text)) {
     return okResponse();
   }

@@ -537,7 +537,7 @@ export function createKnowledgeRuntime(deps) {
     const text = norm(question);
     if (/(?:где|куда|ссылк|линк).*(?:инфоканал|инфо\s*канал)|(?:инфоканал|инфо\s*канал).*(?:где|куда|ссылк|линк)/u.test(text)) {
       return {
-        answer: "\u0418\u043d\u0444\u043e\u041a\u0430\u043d\u0430\u043b \u0433\u0440\u0443\u043f\u043f\u044b \u0432 Telegram:\nhttps://t.me/+n40PjinXX_pjNTcy\n\n\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: \u041f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0433\u0440\u0443\u043f\u043f\u044b.",
+        answer: "\u0418\u043d\u0444\u043e\u041a\u0430\u043d\u0430\u043b \u0433\u0440\u0443\u043f\u043f\u044b \u0432 Telegram:\nhttps://telegram.me/+n40PjinXX_pjNTcy\n\n\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: \u041f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0433\u0440\u0443\u043f\u043f\u044b.",
         source: "\u041f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0433\u0440\u0443\u043f\u043f\u044b"
       };
     }
