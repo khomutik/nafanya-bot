@@ -34,4 +34,5 @@ services:
 
 volumes:
   zoom-sender-profile:
+    external: true
     name: nafanya-zoom-sender_zoom-sender-profile

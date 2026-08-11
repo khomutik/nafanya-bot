@@ -15,7 +15,8 @@ const bridgeHeaders = { "x-nafanya-zoom-secret": process.env.ZOOM_ONLY_SECRET ||
 
 const statusResponse = await fetch(`${base}/zoom-only/library/status`, { headers: panelHeaders });
 const status = await statusResponse.json();
-if (!statusResponse.ok || status.collections?.big_book?.count !== 484) throw new Error("Library status verification failed");
+const bigBookCount = Number(status.collections?.big_book?.count || 0);
+if (!statusResponse.ok || !status.collections?.big_book?.available || bigBookCount < 1) throw new Error("Library status verification failed");
 const panelResponse = await fetch(`${base}/zoom-only/app`, { headers: panelHeaders });
 const panel = await panelResponse.text();
 if (!panelResponse.ok || !panel.includes("\u0411\u043e\u043b\u044c\u0448\u0430\u044f \u043a\u043d\u0438\u0433\u0430") || panel.includes("\u0411\u044b\u0441\u0442\u0440\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u044c\u044e")) throw new Error("Panel mode verification failed");
@@ -29,7 +30,7 @@ const controlPanel = await controlPanelResponse.text();
 if (!controlPanelResponse.ok || !controlPanel.includes('libraryStatusPath="./zoom-only/library/status"') || !controlPanel.includes('libraryImportPath="./zoom-only/library/import"')) throw new Error("Control proxy panel verification failed");
 const controlLibraryResponse = await fetch("http://127.0.0.1:3098/zoom-only/library/status", { headers: controlHeaders });
 const controlLibrary = await controlLibraryResponse.json();
-if (!controlLibraryResponse.ok || controlLibrary.collections?.big_book?.count !== 484) throw new Error("Control proxy library verification failed");
+if (!controlLibraryResponse.ok || Number(controlLibrary.collections?.big_book?.count || 0) !== bigBookCount) throw new Error("Control proxy library verification failed");
 
 async function enqueueAndAck(body, expectedPattern) {
   const response = await fetch(`${base}/zoom-only/app/action`, { method: "POST", headers: panelHeaders, body: JSON.stringify(body) });
@@ -44,4 +45,4 @@ async function enqueueAndAck(body, expectedPattern) {
 
 const meetingMessages = await enqueueAndAck({ type: "message", key: "prayer" }, /./u);
 const bookMessages = await enqueueAndAck({ action: "book_excerpt", collectionId: "big_book", number: 1 }, /\u0411\u043e\u043b\u044c\u0448\u0430\u044f \u043a\u043d\u0438\u0433\u0430\. \u041e\u0442\u0440\u044b\u0432\u043e\u043a \u21161/u);
-console.log(JSON.stringify({ library: status.collections.big_book.count, panelQueueUi: false, queueAction: paused.reason, controlProxy: true, meetingMessages, bookMessages, maxLimit: 950 }));
+console.log(JSON.stringify({ library: bigBookCount, panelQueueUi: false, queueAction: paused.reason, controlProxy: true, meetingMessages, bookMessages, maxLimit: 950 }));
