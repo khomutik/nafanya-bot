@@ -227,6 +227,8 @@ function testWorkerStaticRules() {
   assert.match(worker, /service_reminders_12_00/u, "service reminders should run at 12:00");
   assert.match(worker, /var DAILY_22_ANNOUNCEMENT_ID = 4191;/u, "the daily 22:00 announcement should use TECHVED message 4191");
   assert.match(worker, /runScheduledTaskOncePerDay\(env, "daily_22_00", 22, 0, \(\) => sendAnnouncementCopyToGroup\(env, DAILY_22_ANNOUNCEMENT_ID\), 120\)/u, "TECHVED message 4191 should refresh daily at 22:00 with a same-day catch-up window");
+  assert.match(worker, /var DAILY_17_ANNOUNCEMENT_ID = 2524;/u, "the daily 17:00 announcement should use TECHVED message 2524");
+  assert.match(worker, /runScheduledTaskOncePerDay\(env, "daily_17_00", 17, 0, \(\) => sendAnnouncementCopyToGroup\(env, DAILY_17_ANNOUNCEMENT_ID\)\)/u, "TECHVED message 2524 should be copied to the group daily at 17:00 Moscow time");
   assert.match(worker, /sendAdminTodayServiceSummary\(env, today, clock\.dateKey, personMap\)/u, "daily service summary should be sent to the admin thread");
   assert.match(worker, /service_admin_summary_sent:\$\{dateKey\}/u, "admin service summary should be deduplicated per day");
   assert.match(worker, /!deletion\.ok && !deletion\.expected/u, "expected Telegram deletion limits should not alert the owner");
