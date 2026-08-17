@@ -2,6 +2,8 @@
   "type": "module",
   "scripts": {
     "test": "node regression_tests.mjs",
+    "test:addressing": "node --test message_addressing_tests.mjs",
+    "test:quality": "node --test response_quality_tests.mjs",
     "test:regression-static": "node regression_tests.mjs --skip-live-knowledge",
     "test:queue": "node queue_engine_tests.mjs",
     "test:zoom-panel": "node zoom_panel_tests.mjs",

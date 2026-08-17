@@ -23,7 +23,13 @@ Set the Google service-account JSON as a Wrangler secret:
 wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 ```
 
+## Telegram identity
+- Set `BOT_USERNAME` in `wrangler.jsonc` to the bot username without `@`.
+- The addressing classifier also reads the bot identity from `reply_to_message.from`, but direct `@username` mentions outside replies require `BOT_USERNAME`.
+
 ## Common commands
 - `wrangler deploy --dry-run`
 - `wrangler deploy`
 - `wrangler dev`
+- `npm run test:addressing`
+- `npm run test:quality`

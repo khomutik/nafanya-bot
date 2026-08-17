@@ -10,6 +10,8 @@ import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQu
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
 import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
+import { buildAddressingPrompt } from "./message_addressing.js";
+import { RESPONSE_DISCIPLINE_PROMPT, buildRepairPrompt, reviewNafanyaAnswer } from "./response_quality.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
 import {
   ZOOM_LIBRARY_COLLECTIONS,
@@ -93,8 +95,8 @@ async function callYandexLightConversation(env, messages) {
         modelUri: `gpt://${folderId}/${YANDEX_LIGHT_MODEL}/latest`,
         completionOptions: {
           stream: false,
-          temperature: 0.70,
-          maxTokens: "650",
+          temperature: 0.45,
+          maxTokens: "350",
           reasoningOptions: {
             mode: "DISABLED"
           }
@@ -126,7 +128,7 @@ async function callYandexLightConversation(env, messages) {
   }
   const data = await response.json();
   const text = cleanLightAnswer(data?.result?.alternatives?.[0]?.message?.text || "");
-  const limited = limitLightAnswerSentences(text, 4, 700);
+  const limited = limitLightAnswerSentences(text, 3, 500);
   return limited && !looksLikeModelRefusal(limited) ? limited : null;
 }
 __name(callYandexLightConversation, "callYandexLightConversation");
@@ -194,7 +196,8 @@ function buildYandexMessages({
   autoDetectMode = true,
   includeFewShots = true,
   chatHistory = [],
-  includeCorePrompt = true
+  includeCorePrompt = true,
+  addressing = null
 }) {
   const cleanUserText = sanitizeUserText(userText);
   if (!cleanUserText) {
@@ -270,6 +273,16 @@ function buildYandexMessages({
     });
     messages.push(...FEW_SHOTS);
   }
+  messages.push({
+    role: "system",
+    text: RESPONSE_DISCIPLINE_PROMPT
+  });
+  if (addressing) {
+    messages.push({
+      role: "system",
+      text: buildAddressingPrompt(addressing)
+    });
+  }
   const normalizedHistory = normalizeChatHistory(chatHistory);
   if (normalizedHistory.length > 0) {
     messages.push(...normalizedHistory);
@@ -280,7 +293,7 @@ function buildYandexMessages({
   });
   return messages;
 }
-async function answerLightConversation(env, { history = [], userText = "", restrained = false, factualAnswer = null } = {}) {
+async function answerLightConversation(env, { history = [], userText = "", restrained = false, factualAnswer = null, addressing = null } = {}) {
   const cleaned = String(userText || "").trim();
   if (!cleaned) return null;
   const conversation = buildYandexMessages({
@@ -288,11 +301,20 @@ async function answerLightConversation(env, { history = [], userText = "", restr
     chatHistory: history,
     includeCorePrompt: true,
     includeFewShots: true,
-    autoDetectMode: true
+    autoDetectMode: true,
+    addressing
   });
   const yandexAnswer = await callYandexLightConversation(env, conversation).catch(() => null);
   if (yandexAnswer) {
-    return yandexAnswer;
+    const review = reviewNafanyaAnswer(yandexAnswer, cleaned);
+    if (review.ok) return yandexAnswer;
+    const repaired = await callYandexLightConversation(env, [
+      ...conversation,
+      { role: "assistant", text: yandexAnswer },
+      { role: "system", text: buildRepairPrompt(review.issues) },
+      { role: "user", text: "\u0412\u0435\u0440\u043D\u0438 \u0442\u043E\u043B\u044C\u043A\u043E \u0438\u0441\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043D\u0443\u044E \u0440\u0435\u043F\u043B\u0438\u043A\u0443." }
+    ]).catch(() => null);
+    if (repaired && reviewNafanyaAnswer(repaired, cleaned).ok) return repaired;
   }
   const safeConversation = [
     ...conversation,
@@ -302,9 +324,7 @@ async function answerLightConversation(env, { history = [], userText = "", restr
     }
   ];
   const retryAnswer = await callYandexLightConversation(env, safeConversation).catch(() => null);
-  if (retryAnswer) {
-    return retryAnswer;
-  }
+  if (retryAnswer && reviewNafanyaAnswer(retryAnswer, cleaned).ok) return retryAnswer;
   return null;
 }
 __name(answerLightConversation, "answerLightConversation");
@@ -568,29 +588,6 @@ function normalizeLightText(text) {
   return normalizeCommandText(text);
 }
 __name(normalizeLightText, "normalizeLightText");
-function hasExplicitNafanyaAddress(text) {
-  const source = String(text || "").trim();
-  if (/^\s*\u043d\u0430\u0444\u0430\u043d\u044f\s*,/iu.test(source)) {
-    return true;
-  }
-  const normalized = normalizeLightText(source);
-  return /(?:^|\s)\u0431\u043e\u0442(?:\s|$)/u.test(normalized);
-}
-__name(hasExplicitNafanyaAddress, "hasExplicitNafanyaAddress");
-function isReplyToBot(message) {
-  return Boolean(message?.reply_to_message?.from?.is_bot);
-}
-__name(isReplyToBot, "isReplyToBot");
-function shouldUseLightConversation(message, text, chatType) {
-  if (isPrivateChat(chatType)) {
-    return true;
-  }
-  if (isMainMeetingWindow()) {
-    return false;
-  }
-  return isReplyToBot(message) || hasExplicitNafanyaAddress(text);
-}
-__name(shouldUseLightConversation, "shouldUseLightConversation");
 function hasServiceRequest(text) {
   const normalized = normalizeCommandText(text);
   if (!normalized) {
@@ -3510,7 +3507,6 @@ const messageHandlerDeps = {
   parseBillInput,
   isUserAdmin,
   callAnnouncementState,
-  shouldUseLightConversation,
   getLightTalkKey,
   callLightTalkState,
   isMainMeetingWindow,

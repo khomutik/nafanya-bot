@@ -1,3 +1,5 @@
+import { classifyMessageAddressing } from "./message_addressing.js";
+
 function okResponse() {
   return new Response("ok");
 }
@@ -11,13 +13,6 @@ function isEmojiOnlyText(text) {
 function isPersonalLightTalk(text, normalizeLightText) {
   const normalized = normalizeLightText(text);
   return /(?:^|\s)(?:\u043f\u0440\u0438\u0432\u0435\u0442|\u0441\u043f\u043e\u043a\u0438|\u0441\u043f\u0430\u0442\u044c|\u0445\u043e\u0447\u0443\s+\u043f\u043e\u043a\u043e\u044f|\u043c\u043d\u0435\s+(?:(?:\u0441\u0435\u0439\u0447\u0430\u0441|\u043e\u0447\u0435\u043d\u044c|\u0441\u043e\u0432\u0441\u0435\u043c|\u0442\u0430\u043a)\s+){0,3}(?:\u043f\u043b\u043e\u0445\u043e|\u0433\u0440\u0443\u0441\u0442\u043d\u043e|\u0442\u044f\u0436\u0435\u043b\u043e|\u043e\u0434\u0438\u043d\u043e\u043a\u043e)|\u043f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c\s+\u043d\u0435\s+\u0441\s+\u043a\u0435\u043c|\u043d\u0435\s+\u0441\s+\u043a\u0435\u043c\s+\u043f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c|\u0445\u043e\u0447\u0443\s+\u043f\u043e\u0433\u043e\u0432\u043e\u0440\u0438\u0442\u044c|\u0441\u043f\u043e\u043d\u0441\u043e\u0440\s+\u0437\u0430\u043d\u044f\u0442|\u0441\u043f\u043e\u043d\u0441\u043e\u0440\u0430\s+\u043d\u0435\u0442|\u043c\u0435\u043d\u044f\s+\u0437\u043e\u0432\u0443\u0442|\u043a\u0430\u043a\s+\u043c\u0435\u043d\u044f\s+\u0437\u043e\u0432\u0443\u0442|\u044f\s+\u043d\u0435|\u0447\u0435\u0433\u043e\s+\u0431\u0443\u0440\u0447\u0438\u0448\u044c|\u043f\u043e\u0447\u0435\u043c\u0443\s+\u0431\u0443\u0440\u0447\u0438\u0448\u044c)(?:\s|$)/u.test(normalized);
-}
-
-function hasExplicitTextAddress(text, normalizeLightText) {
-  if (/^\s*\u043d\u0430\u0444\u0430\u043d\u044f\s*,/iu.test(String(text || ""))) {
-    return true;
-  }
-  return /(?:^|\s)\u0431\u043e\u0442(?:\s|$)/u.test(normalizeLightText(text));
 }
 
 function cleanDeclaredName(name) {
@@ -68,7 +63,11 @@ function isNafanyaPublicChannel(chatId, deps) {
 function isNafanyaRequestHere(message, text, chatId, chatType, deps) {
   if (deps.isPrivateChat(chatType)) return true;
   if (!isNafanyaPublicChannel(chatId, deps)) return false;
-  return Boolean(message?.reply_to_message?.from?.is_bot) || hasExplicitTextAddress(text, deps.normalizeLightText) || deps.parseNafanyaQuestion(text) !== null;
+  return classifyMessageAddressing(message, text, {
+    chatType,
+    botUsername: deps.botUsername,
+    personMap: deps.personMap
+  }).should_bot_reply;
 }
 
 async function copyTechMessageToCurrentChat(env, chatId, threadId, sourceMessageId, deps) {
@@ -770,7 +769,13 @@ export async function handleServiceMessages(env, message, text, chatId, threadId
     return okResponse();
   }
 
-  const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, { isPrivateChat, CHAT_GROUP_ID, INFO_CHAT_ID, normalizeLightText, parseNafanyaQuestion });
+  const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, {
+    isPrivateChat,
+    CHAT_GROUP_ID,
+    INFO_CHAT_ID,
+    botUsername: env.BOT_USERNAME,
+    personMap: env.SERVICE_PERSON_MAP_JSON
+  });
   const canSendAdminSignal = nafanyaRequestHere || isPrepThread(chatId, threadId);
   const canSendFixSignal = canSendAdminSignal || isChatGroup(chatId, threadId);
 
@@ -889,9 +894,8 @@ async function notifyUnansweredQuestion(env, message, question, chatId, threadId
   return true;
 }
 
-async function handleConversationMessage(env, message, text, chatId, threadId, chatType, deps) {
+export async function handleConversationMessage(env, message, text, chatId, threadId, chatType, deps) {
   const {
-    shouldUseLightConversation,
     getLightTalkKey,
     callLightTalkState,
     isMainMeetingWindow,
@@ -918,9 +922,20 @@ async function handleConversationMessage(env, message, text, chatId, threadId, c
     ADMIN_THREAD_ID
   } = deps;
 
-  const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, { isPrivateChat, CHAT_GROUP_ID, INFO_CHAT_ID, normalizeLightText, parseNafanyaQuestion });
+  const addressing = classifyMessageAddressing(message, text, {
+    chatType,
+    botUsername: env.BOT_USERNAME,
+    personMap: env.SERVICE_PERSON_MAP_JSON
+  });
+  const nafanyaRequestHere = isNafanyaRequestHere(message, text, chatId, chatType, {
+    isPrivateChat,
+    CHAT_GROUP_ID,
+    INFO_CHAT_ID,
+    botUsername: env.BOT_USERNAME,
+    personMap: env.SERVICE_PERSON_MAP_JSON
+  });
   const fixedMeeting = answerFixedMeetingQuestion(text);
-  if (fixedMeeting?.answer) {
+  if (fixedMeeting?.answer && nafanyaRequestHere) {
     await sendMessage(env, chatId, fixedMeeting.answer, threadId, message.message_id);
     return okResponse();
   }
@@ -965,14 +980,14 @@ async function handleConversationMessage(env, message, text, chatId, threadId, c
     }
   }
 
-  if (shouldUseLightConversation(message, text, chatType)) {
+  if (addressing.should_bot_reply && (isPrivateChat(chatType) || !isMainMeetingWindow())) {
     const restrained = isMainMeetingWindow();
     let factualAnswer = null;
     const groupQuestionLike = looksLikeGroupQuestion(text, normalizeLightText);
     const blockedProgramLike = looksLikeBlockedProgramQuestion(text, normalizeLightText);
-    const replyToBot = Boolean(message?.reply_to_message?.from?.is_bot);
+    const replyToBot = addressing.reply_to_bot;
     const parsedAddressedQuestion = parseNafanyaQuestion(text);
-    const explicitTextAddress = hasExplicitTextAddress(text, normalizeLightText) || parsedAddressedQuestion !== null;
+    const explicitTextAddress = addressing.bot_mentioned_as_addressee || parsedAddressedQuestion !== null;
     if ((isChatGroup(chatId, threadId) || nafanyaRequestHere) && looksLikeTelemostLinkRequest(text, normalizeLightText)) {
       await copyTechMessageToCurrentChat(env, chatId, threadId, TECH_MESSAGES.telemost_link, { callTelegram, INFO_CHAT_ID });
       return okResponse();
@@ -1030,7 +1045,7 @@ async function handleConversationMessage(env, message, text, chatId, threadId, c
       return okResponse();
     }
 
-    if (!explicitTextAddress && !replyToBot && !isPrivateChat(chatType)) {
+    if (!addressing.should_bot_reply && !isPrivateChat(chatType)) {
       return okResponse();
     }
 
@@ -1047,7 +1062,8 @@ async function handleConversationMessage(env, message, text, chatId, threadId, c
       history,
       userText: text,
       restrained,
-      factualAnswer: null
+      factualAnswer: null,
+      addressing
     }) || TEXT.lightFallback;
 
     try {

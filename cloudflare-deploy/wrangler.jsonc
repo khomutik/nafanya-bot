@@ -8,6 +8,7 @@
     "head_sampling_rate": 1
   },
   "vars": {
+    "BOT_USERNAME": "",
     "FAQ_FILE_ID": "1tN9NDlJFaxvx0VJDardsMx0uM2mSInVVHUa4wkZPf8U",
     "SCHEDULE_FILE_ID": "1VAWzdnevTgTmfyx83wfSig9BW6PfdKK1wZorpW0bIvU",
     "ROTATION_FILE_ID": "1HMeaRZShf-H4yEfnO6qTgePmNue5dd9MHxJCL5vrRHk",
