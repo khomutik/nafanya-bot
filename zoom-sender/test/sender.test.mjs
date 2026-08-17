@@ -341,6 +341,16 @@ test("sender explicitly turns microphone and video off after joining", async () 
   assert.match(source, /await ensureMeetingMediaOff\(this\.page\)/u);
 });
 
+test("chat input lookup does not wait on every obsolete Zoom selector", async () => {
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8");
+  assert.match(source, /async function findVisibleChatInput\(page\)/u);
+  assert.match(source, /page\.evaluateHandle\(\(selectors\)/u);
+  assert.match(source, /element\.focus\(\)/u);
+  assert.doesNotMatch(source, /for \(const selector of selectors\)[\s\S]{0,300}isVisible\(\{ timeout: 1500 \}\)/u);
+  assert.doesNotMatch(source, /input\.click\(\{ timeout:/u);
+});
+
 test("pre-meeting host wait is not reported as joined merely because microphone controls exist", () => {
   const waiting = classifyZoomPresenceText("\u0414\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c, \u043a\u043e\u0433\u0434\u0430 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0442\u043e\u0440 \u043d\u0430\u0447\u043d\u0435\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044e. \u041c\u0438\u043a\u0440\u043e\u0444\u043e\u043d");
   assert.deepEqual(waiting, { waitingRoom: true, zoomJoined: false });
@@ -362,6 +372,7 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
   assert.match(dockerfile, /xvfb xauth x11-utils/u);
   assert.match(dockerfile, /Xvfb :99/u);
+  assert.match(dockerfile, /chmod 1777 \/tmp\/\.X11-unix/u);
   assert.match(compose, /service|zoom-sender/u);
   assert.match(compose, /healthcheck:/u);
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);

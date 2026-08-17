@@ -16,7 +16,8 @@ RUN npm install --omit=dev \
 
 COPY . .
 
-RUN mkdir -p /app/profile \
+RUN mkdir -p /app/profile /tmp/.X11-unix \
+  && chmod 1777 /tmp/.X11-unix \
   && chown -R node:node /app /ms-playwright
 
 USER node

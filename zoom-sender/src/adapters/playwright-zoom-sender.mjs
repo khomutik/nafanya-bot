@@ -13,6 +13,23 @@ const DIAGNOSTIC_HTML_LIMIT = 5000;
 const CHAT_DIAGNOSTIC_TEXT_LIMIT = 1200;
 const CHAT_DIAGNOSTIC_DOM_LIMIT = 2500;
 const ZOOM_MESSAGE_REF_RE = /^\d+-\{[0-9a-f-]{20,}\}$/iu;
+const CHAT_INPUT_SELECTORS = [
+  'textarea[aria-label*="chat" i]',
+  'textarea[placeholder*="chat" i]',
+  'textarea[aria-placeholder*="chat" i]',
+  'input[aria-label*="chat" i]',
+  'input[placeholder*="chat" i]',
+  '[role="textbox"][aria-label*="chat" i]',
+  '[role="textbox"][aria-placeholder*="chat" i]',
+  '[role="textbox"][data-placeholder*="chat" i]',
+  'div[contenteditable="true"][aria-label*="chat" i]',
+  'div[contenteditable="plaintext-only"][aria-label*="chat" i]',
+  'div[contenteditable="plaintext-only"][aria-placeholder*="chat" i]',
+  'div[contenteditable="plaintext-only"][data-placeholder*="chat" i]',
+  'p[contenteditable="true"]',
+  'p[contenteditable="plaintext-only"]',
+  'div[contenteditable="true"]'
+];
 const DEFAULT_BROWSER_ARGS = [
   "--no-sandbox",
   "--disable-dev-shm-usage",
@@ -105,30 +122,32 @@ async function clickVisibleControlByText(page, patterns) {
 }
 
 async function hasChatInput(page) {
-  return page.evaluate(() => {
-    const selectors = [
-      'textarea[aria-label*="chat" i]',
-      'textarea[placeholder*="chat" i]',
-      'textarea[aria-placeholder*="chat" i]',
-      'input[aria-label*="chat" i]',
-      'input[placeholder*="chat" i]',
-      '[role="textbox"][aria-label*="chat" i]',
-      '[role="textbox"][aria-placeholder*="chat" i]',
-      '[role="textbox"][data-placeholder*="chat" i]',
-      'div[contenteditable="true"][aria-label*="chat" i]',
-      'div[contenteditable="plaintext-only"][aria-label*="chat" i]',
-      'div[contenteditable="plaintext-only"][aria-placeholder*="chat" i]',
-      'div[contenteditable="plaintext-only"][data-placeholder*="chat" i]',
-      'p[contenteditable="true"]',
-      'p[contenteditable="plaintext-only"]',
-      'div[contenteditable="true"]'
-    ];
+  return page.evaluate((selectors) => {
     return selectors.some((selector) => [...document.querySelectorAll(selector)].some((element) => {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.visibility !== "hidden" && style.display !== "none" && rect.width > 20 && rect.height > 10;
     }));
-  }).catch(() => false);
+  }, CHAT_INPUT_SELECTORS).catch(() => false);
+}
+
+async function findVisibleChatInput(page) {
+  const handle = await page.evaluateHandle((selectors) => {
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 20 && rect.height > 10;
+    };
+    for (const selector of selectors) {
+      const matches = [...document.querySelectorAll(selector)].filter(isVisible);
+      if (matches.length) return matches.at(-1);
+    }
+    return null;
+  }, CHAT_INPUT_SELECTORS).catch(() => null);
+  if (!handle) return null;
+  const element = handle.asElement();
+  if (!element) await handle.dispose().catch(() => null);
+  return element;
 }
 
 async function hasChatUnavailableNotice(page) {
@@ -261,32 +280,20 @@ async function ensureMeetingMediaOff(page) {
 
 async function sendChatText(page, text) {
   if (!await openChatPanel(page)) return { sent: false, ack: false };
-  const selectors = [
-    'textarea[aria-label*="chat" i]',
-    'textarea[placeholder*="chat" i]',
-    'textarea[aria-placeholder*="chat" i]',
-    '[role="textbox"][aria-label*="chat" i]',
-    '[role="textbox"][aria-placeholder*="chat" i]',
-    '[role="textbox"][data-placeholder*="chat" i]',
-    'div[contenteditable="true"][aria-label*="chat" i]',
-    'div[contenteditable="plaintext-only"][aria-label*="chat" i]',
-    'div[contenteditable="plaintext-only"][aria-placeholder*="chat" i]',
-    'div[contenteditable="plaintext-only"][data-placeholder*="chat" i]',
-    'p[contenteditable="true"]',
-    'p[contenteditable="plaintext-only"]',
-    'div[contenteditable="true"]'
-  ];
-  for (const selector of selectors) {
-    const input = page.locator(selector).last();
-    if (await input.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await input.click().catch(() => null);
-      await page.keyboard.insertText(String(text || ""));
-      await page.keyboard.press("Enter");
-      await page.waitForTimeout(700);
-      return { sent: true, ack: true };
-    }
+  const input = await findVisibleChatInput(page);
+  if (!input) return { sent: false, ack: false };
+  try {
+    await input.evaluate((element) => {
+      element.focus();
+      element.click();
+    });
+    await page.keyboard.insertText(String(text || ""));
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(700);
+    return { sent: true, ack: true };
+  } finally {
+    await input.dispose().catch(() => null);
   }
-  return { sent: false, ack: false };
 }
 
 function normalizeComparableChatText(value) {
@@ -1010,4 +1017,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingMediaOff, exactOwnChatRecords, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };
+export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingMediaOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };
