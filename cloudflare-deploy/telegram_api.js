@@ -1,4 +1,7 @@
 const TELEGRAM_RETRY_AFTER_LIMIT_SECONDS = 5;
+const TELEGRAM_TRANSIENT_RETRY_DELAY_MS = 750;
+const TELEGRAM_RESPONSE_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+const TELEGRAM_ERROR_BODY_PREVIEW_CHARS = 500;
 const SILENT_MAIN_CHAT_ID = -1003547823625;
 
 function shouldForceSilentMainChat(chatId) {
@@ -9,26 +12,134 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function postTelegram(env, method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-  return response.json();
+async function readResponseBodyLimited(response) {
+  if (!response.body) {
+    return { text: "", truncated: false };
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  let truncated = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.byteLength) continue;
+    const remaining = TELEGRAM_RESPONSE_BODY_LIMIT_BYTES - totalBytes;
+    if (remaining <= 0) {
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+    if (value.byteLength > remaining) {
+      chunks.push(value.slice(0, remaining));
+      totalBytes += remaining;
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+    chunks.push(value);
+    totalBytes += value.byteLength;
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { text: new TextDecoder().decode(bytes), truncated };
 }
 
-export async function callTelegram(env, method, payload) {
-  let data = await postTelegram(env, method, payload);
-  const retryAfter = Number(data?.parameters?.retry_after || 0);
-  if (!data.ok && data.error_code === 429 && retryAfter > 0 && retryAfter <= TELEGRAM_RETRY_AFTER_LIMIT_SECONDS) {
-    await sleep(retryAfter * 1000);
-    data = await postTelegram(env, method, payload);
+function responsePreview(text, truncated = false) {
+  const clean = String(text || "").replace(/\s+/gu, " ").trim();
+  if (!clean) return "<empty>";
+  const suffix = truncated || clean.length > TELEGRAM_ERROR_BODY_PREVIEW_CHARS ? "..." : "";
+  return `${clean.slice(0, TELEGRAM_ERROR_BODY_PREVIEW_CHARS)}${suffix}`;
+}
+
+function isTransientStatus(status) {
+  const numericStatus = Number(status || 0);
+  return numericStatus === 408 || numericStatus === 425 || numericStatus === 429 || numericStatus >= 500 && numericStatus <= 599;
+}
+
+function isTransientTelegramResult(result) {
+  if (result?.transportError) return true;
+  return isTransientStatus(result?.httpStatus || result?.data?.error_code);
+}
+
+export class TelegramApiError extends Error {
+  constructor(method, result) {
+    const data = result?.data;
+    const httpStatus = Number(result?.httpStatus || 0);
+    const errorCode = Number(data?.error_code || httpStatus || 0);
+    const detail = data
+      ? JSON.stringify(data)
+      : result?.transportError
+        ? `network error: ${String(result.transportError?.message || result.transportError)}`
+        : `HTTP ${httpStatus || "unknown"}; non-JSON response: ${responsePreview(result?.bodyText, result?.truncated)}`;
+    super(`${method} failed: ${detail}`);
+    this.name = "TelegramApiError";
+    this.method = method;
+    this.httpStatus = httpStatus;
+    this.errorCode = errorCode;
+    this.transient = isTransientTelegramResult(result);
   }
-  if (!data.ok) {
-    throw new Error(`${method} failed: ${JSON.stringify(data)}`);
+}
+
+export function isTransientTelegramError(error) {
+  return error?.transient === true || isTransientStatus(error?.httpStatus || error?.errorCode);
+}
+
+async function postTelegram(env, method, payload) {
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (transportError) {
+    return { data: null, httpStatus: 0, bodyText: "", truncated: false, transportError };
+  }
+  let body;
+  try {
+    body = await readResponseBodyLimited(response);
+  } catch (transportError) {
+    return { data: null, httpStatus: response.status, bodyText: "", truncated: false, transportError };
+  }
+  let data = null;
+  if (!body.truncated && body.text.trim()) {
+    try {
+      data = JSON.parse(body.text);
+    } catch {
+      data = null;
+    }
+  }
+  return {
+    data,
+    httpStatus: response.status,
+    bodyText: body.text,
+    truncated: body.truncated,
+    transportError: null
+  };
+}
+
+export async function callTelegram(env, method, payload, { retryTransient = false, transientRetryDelayMs = TELEGRAM_TRANSIENT_RETRY_DELAY_MS } = {}) {
+  let result = await postTelegram(env, method, payload);
+  let data = result.data;
+  const retryAfter = Number(data?.parameters?.retry_after || 0);
+  if (data && !data.ok && data.error_code === 429 && retryAfter > 0 && retryAfter <= TELEGRAM_RETRY_AFTER_LIMIT_SECONDS) {
+    await sleep(retryAfter * 1000);
+    result = await postTelegram(env, method, payload);
+    data = result.data;
+  } else if (retryTransient && data?.error_code !== 429 && isTransientTelegramResult(result)) {
+    await sleep(Math.max(0, Number(transientRetryDelayMs) || 0));
+    result = await postTelegram(env, method, payload);
+    data = result.data;
+  }
+  if (!data?.ok) {
+    throw new TelegramApiError(method, result);
   }
   return data;
 }
@@ -92,13 +203,32 @@ export async function setMyCommands(env, commands, scope = null) {
 }
 
 export async function callTelegramForm(env, method, formData) {
-  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-    method: "POST",
-    body: formData
-  });
-  const data = await response.json();
-  if (!data.ok) {
-    throw new Error(`${method} failed: ${JSON.stringify(data)}`);
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+      method: "POST",
+      body: formData
+    });
+  } catch (transportError) {
+    throw new TelegramApiError(method, { data: null, httpStatus: 0, bodyText: "", truncated: false, transportError });
+  }
+  let body;
+  try {
+    body = await readResponseBodyLimited(response);
+  } catch (transportError) {
+    throw new TelegramApiError(method, { data: null, httpStatus: response.status, bodyText: "", truncated: false, transportError });
+  }
+  let data = null;
+  if (!body.truncated && body.text.trim()) {
+    try {
+      data = JSON.parse(body.text);
+    } catch {
+      data = null;
+    }
+  }
+  const result = { data, httpStatus: response.status, bodyText: body.text, truncated: body.truncated, transportError: null };
+  if (!data?.ok) {
+    throw new TelegramApiError(method, result);
   }
   return data;
 }
@@ -175,7 +305,7 @@ export async function copyTechMessageToChat(env, targetChatId, infoChatId, sourc
   if (disableNotification || shouldForceSilentMainChat(targetChatId)) {
     payload.disable_notification = true;
   }
-  return callTelegram(env, "copyMessage", payload);
+  return callTelegram(env, "copyMessage", payload, { retryTransient: true });
 }
 
 export async function copyTechMessageToGroup(env, chatGroupId, infoChatId, sourceMessageId, disableNotification = false) {

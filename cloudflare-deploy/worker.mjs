@@ -4,7 +4,7 @@ import { SOBER_ALCOHOLIC_IDENTITY_PROMPT } from "./bot_prompts.js";
 import { FEW_SHOTS, detectNafanyaMode } from "./bot_dialogue.js";
 import { classifyModeration, getModerationDeleteText, getModerationWarningText } from "./bot_moderation.js";
 import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK_TEXTS, QUEUE_CLOSED_LABEL, QUEUE_OPEN_LABEL, QUEUE_PANEL_TEXT, SERVICE_CONFIRMATION, TIMER_CALLBACK_TEXTS, TIMER_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard, buildQueuePublicKeyboard, buildRootStatusText, buildTimerKeyboard, getQueueInstruction, getQueueModeTitle } from "./bot_panels.js";
-import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
+import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, isTransientTelegramError, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
 import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState, callZoomMeetingState, callZoomSharedTimerState } from "./state_clients.js";
 import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
@@ -2182,7 +2182,7 @@ function shortError(error) {
 __name(shortError, "shortError");
 function getErrorCode(error) {
   const text = String(error?.message || error || "");
-  const code = text.match(/"error_code"\s*:\s*(\d+)/)?.[1] || text.match(/\b(400|403|429|500|502|503|504)\b/)?.[1] || "error";
+  const code = Number(error?.errorCode || error?.httpStatus || 0) || text.match(/"error_code"\s*:\s*(\d+)/)?.[1] || text.match(/\b([45]\d{2})\b/)?.[1] || "error";
   return code;
 }
 __name(getErrorCode, "getErrorCode");
@@ -2801,7 +2801,9 @@ async function sendPersonalDayAnnouncement(env, sourceMessageId, silent = false)
         operation: "\u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 copyMessage",
         error,
         details: { user_id: subscription.userId, chat_id: subscription.chatId, source_message_id: sourceMessageId },
-        hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c private_chat_id, \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u043e\u0435 message_id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
+        hint: isTransientTelegramError(error)
+          ? "\u0412\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u0439 \u0441\u0431\u043e\u0439 Telegram API: \u041d\u0430\u0444\u0430\u043d\u044f \u0443\u0436\u0435 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u043b copyMessage \u043e\u0434\u0438\u043d \u0440\u0430\u0437. \u0415\u0441\u043b\u0438 \u043e\u0448\u0438\u0431\u043a\u0430 \u0435\u0434\u0438\u043d\u0438\u0447\u043d\u0430\u044f, id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0442\u044c \u043d\u0435 \u043d\u0443\u0436\u043d\u043e."
+          : "\u041f\u0440\u043e\u0432\u0435\u0440\u044c private_chat_id, \u044d\u0442\u0430\u043b\u043e\u043d\u043d\u043e\u0435 message_id \u0438 \u043f\u0440\u0430\u0432\u0430 \u0431\u043e\u0442\u0430."
       });
     }
   }));
