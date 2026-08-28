@@ -1193,12 +1193,28 @@ async function testMeetingBoardAndSpeakerState() {
   assert.match(outboxTexts(outbox).join("\n"), /1\. \u0421\u0430\u0448\u0430:/u);
   await ackOutbox(env, outbox.map((item) => item.id));
 
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "thursday",
+    text: "\u0412\u0438\u0442\u044f 111",
+    requestId: "thursday-entry-before-clear"
+  });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.state.entries.length, 1);
+  outbox = await pullOutbox(env);
+  await ackOutbox(env, outbox.map((item) => item.id));
+
   const statusBeforeClear = await getZoomOnlyStatus(env);
-  const boardVersionBeforeClear = statusBeforeClear.meetingBoard.version;
+  assert.equal(statusBeforeClear.meetingBoards.tuesday.entries.length, 2,
+    "Opening a different weekday must not replace the current weekday queue");
+  assert.equal(statusBeforeClear.meetingBoards.thursday.entries.length, 1,
+    "Every weekday must keep its own queue for all tech hosts");
+  const boardVersionBeforeClear = statusBeforeClear.meetingBoards.friday?.version || 0;
   const speakerVersionBeforeClear = statusBeforeClear.speakerQuestions.version;
   response = await postPanelAction(env, {
     action: "meeting_board_clear_all",
-    dayKey: "tuesday",
+    dayKey: "friday",
     requestId: "clear-all-1"
   });
   data = await json(response);
@@ -1208,6 +1224,12 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal(data.speakerQuestions.entries.length, 0);
   assert.ok(data.state.version > boardVersionBeforeClear);
   assert.ok(data.speakerQuestions.version > speakerVersionBeforeClear);
+  for (const dayKey of ["monday", "tuesday", "thursday", "friday", "sunday"]) {
+    assert.equal(data.meetingBoards[dayKey].entries.length, 0,
+      "Global clear must remove every weekday queue even from a stale panel");
+    assert.equal(data.meetingBoards[dayKey].additionalTopics.length, 0,
+      "Global clear must remove every weekday additional-topic list");
+  }
   assert.ok(data.queued.length >= 1);
   assert.ok(outboxTexts(data.queued).every((message) => Array.from(message).length <= 950));
   outbox = await pullOutbox(env);
@@ -1218,7 +1240,7 @@ async function testMeetingBoardAndSpeakerState() {
 
   response = await postPanelAction(env, {
     action: "meeting_board_clear_all",
-    dayKey: "tuesday",
+    dayKey: "friday",
     requestId: "clear-all-1"
   });
   data = await json(response);
@@ -1230,6 +1252,7 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal(status.meetingBoard.entries.length, 0);
   assert.equal(status.meetingBoard.additionalTopics.length, 0);
   assert.equal(status.speakerQuestions.entries.length, 0);
+  assert.ok(Object.values(status.meetingBoards).every((board) => board.entries.length === 0 && board.additionalTopics.length === 0));
   assert.equal(status.activeMode, "meeting");
 
   response = await postPanelAction(env, { action: "meeting_board_add_entry", dayKey: "tuesday", text: "\n", requestId: "bad-1" });
