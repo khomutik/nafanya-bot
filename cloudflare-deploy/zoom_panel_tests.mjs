@@ -164,6 +164,7 @@ async function testAccess() {
   assert.match(html, /data-board-clear/u);
   assert.match(html, /meeting_board_clear_all/u);
   assert.match(html, /\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451/u);
+  assert.doesNotMatch(html, /confirm\(/u, "Zoom panel must not rely on browser confirmation dialogs");
   assert.doesNotMatch(html, /meeting_board_replay/u);
   assert.match(html, /data-message-key="prayer"/u);
   assert.doesNotMatch(html, /add_test_participant|manualQueueInput|queueWorkbench/u);
@@ -1260,6 +1261,53 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal((await pullOutbox(env)).length, 0);
 }
 
+async function testGlobalClearRemovesYesterdayState() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  const yesterdayBoard = {
+    sessionDate: "2026-08-27",
+    dayKey: "tuesday",
+    version: 7,
+    entries: [{ id: "yesterday-entry", text: "\u0412\u0447\u0435\u0440\u0430\u0448\u043d\u044f\u044f \u043e\u0447\u0435\u0440\u0435\u0434\u044c", status: "waiting" }],
+    additionalTopics: [{ id: "yesterday-topic", text: "\u0412\u0447\u0435\u0440\u0430\u0448\u043d\u044f\u044f \u0442\u0435\u043c\u0430" }],
+    lastMessages: [],
+    processedRequestIds: [],
+    updatedAt: 0
+  };
+  const yesterdaySpeaker = {
+    sessionDate: "2026-08-27",
+    version: 4,
+    entries: [{ id: "yesterday-speaker", text: "\u0412\u0447\u0435\u0440\u0430\u0448\u043d\u0438\u0439 \u0432\u043e\u043f\u0440\u043e\u0441" }],
+    lastMessages: [],
+    processedRequestIds: [],
+    updatedAt: 0
+  };
+  const stateRecord = env.__testing.zoomMeeting.binding.getByName("main");
+  await stateRecord.storage.put("zoom-meeting-state", {
+    initialized: true,
+    zoomOnlyOutbox: [],
+    zoomOnlyOutboxNextId: 1,
+    zoomMeetingBoard: yesterdayBoard,
+    zoomMeetingBoards: { tuesday: yesterdayBoard },
+    zoomMeetingClearRequestIds: [],
+    zoomSpeakerQuestions: yesterdaySpeaker,
+    zoomPanelActiveMode: "meeting"
+  });
+
+  const response = await postPanelAction(env, {
+    action: "meeting_board_clear_all",
+    dayKey: "monday",
+    requestId: "clear-yesterday-state"
+  });
+  const data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.meetingBoards.tuesday.entries.length, 0,
+    "Global clear must remove yesterday's queue");
+  assert.equal(data.meetingBoards.tuesday.additionalTopics.length, 0,
+    "Global clear must remove yesterday's additional topics");
+  assert.equal(data.speakerQuestions.entries.length, 0,
+    "Global clear must remove yesterday's speaker questions");
+}
+
 async function testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks() {
   const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
   const repeatedText = "111 \u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440";
@@ -1548,6 +1596,7 @@ await testYozhikBillAndGameActions();
 await testQueuePausedLibraryPanelAndActions();
 await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
 await testMeetingBoardAndSpeakerState();
+await testGlobalClearRemovesYesterdayState();
 await testSharedZoomTimerState();
 await testZoomStateMigrationAndIsolation();
 await testConcurrentTechHostUpdatesAreSerialized();
