@@ -18,7 +18,7 @@ function readList(value) {
 
 export function loadConfig(env = process.env) {
   const minIntervalMs = readPositiveInt(env.ZOOM_SENDER_MIN_POLL_MS ?? env.ZOOM_SENDER_MIN_INTERVAL_MS, 1500, { min: 1000, max: 60000 });
-  const maxIntervalMs = readPositiveInt(env.ZOOM_SENDER_MAX_POLL_MS ?? env.ZOOM_SENDER_MAX_INTERVAL_MS, 1500, { min: minIntervalMs, max: 120000 });
+  const maxIntervalMs = readPositiveInt(env.ZOOM_SENDER_MAX_POLL_MS ?? env.ZOOM_SENDER_MAX_INTERVAL_MS, 5000, { min: minIntervalMs, max: 120000 });
   return {
     workerBaseUrl: String(env.WORKER_BASE_URL || "").replace(/\/+$/u, ""),
     zoomMeetingUrl: String(env.ZOOM_MEETING_URL || "").trim(),

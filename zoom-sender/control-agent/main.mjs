@@ -45,6 +45,19 @@ const zoomAppHtmlHeaders = (sessionCookie = "") => ({
   ...(sessionCookie ? { "set-cookie": sessionCookie } : {})
 });
 const zoomAppLockedHtml = "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Nafanya Zoom</title></head><body><p>\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0432\u043d\u0443\u0442\u0440\u0438 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438 Zoom.</p></body></html>";
+const workerPanelOffHtml = "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{margin:0;padding:18px;font:700 15px Arial,sans-serif;color:#4f5365;background:#fbf7ea}p{margin:0}</style><title>Nafanya Zoom</title></head><body><p>\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u041d\u0430\u0444\u0430\u043d\u044e, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0443\u043b\u044c\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430.</p></body></html>";
+
+async function proxyWorkerOnlyWhileSenderRuns(request, res, pathname, search = "", access = "admin") {
+  const current = await service.status();
+  if (!current.running) {
+    if (pathname === "/zoom-only/app") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      return res.end(workerPanelOffHtml);
+    }
+    return json(res, 409, { ok: false, error: "nafanya_off" });
+  }
+  return proxyWorker(request, res, pathname, search, access);
+}
 
 async function proxyWorker(request, res, pathname, search = "", access = "admin") {
   const body = request.method === "POST" ? await new Promise((resolve) => { const chunks = []; request.on("data", (chunk) => chunks.push(chunk)); request.on("end", () => resolve(Buffer.concat(chunks))); }) : undefined;
@@ -102,10 +115,10 @@ const server = http.createServer(async (request, res) => {
       res.writeHead(204, { "cache-control": "no-store" }); return res.end();
     }
     if (request.method === "GET" && url.pathname === "/app") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(buildControlHtml()); }
-    if (request.method === "GET" && url.pathname === "/worker-panel") return proxyWorker(request, res, "/zoom-only/app", url.search, access);
+    if (request.method === "GET" && url.pathname === "/worker-panel") return proxyWorkerOnlyWhileSenderRuns(request, res, "/zoom-only/app", url.search, access);
     if (["/zoom-only/status", "/zoom-only/app/action", "/zoom-only/library/status", "/zoom-only/library/import"].includes(url.pathname)) {
       if (request.method === "POST" && url.pathname === "/zoom-only/library/import" && access !== "admin") return json(res, 403, { ok: false, error: "admin_required" });
-      return proxyWorker(request, res, url.pathname, url.search, access);
+      return proxyWorkerOnlyWhileSenderRuns(request, res, url.pathname, url.search, access);
     }
     if (request.method === "GET" && url.pathname === "/api/status") return json(res, 200, await service.status());
     if (request.method === "POST" && url.pathname === "/api/start") return json(res, 202, service.requestStart());

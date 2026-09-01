@@ -1360,13 +1360,32 @@ function testMeetingBoardUnicodeLimit() {
 
 async function testSharedZoomTimerState() {
   const env = makeEnv();
-  let response = await postPanelAction(env, {
+  let response = await worker.fetch(panelRequest("/zoom-only/status?includeTimer=1&instanceId=mobile-panel&product=mobile&indicatorSupported=0"), env);
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.sharedTimer.ok, true);
+  assert.equal(data.sharedTimer.isExecutor, false);
+  assert.equal(data.sharedTimer.state.status, "idle");
+
+  const timerDownEnv = makeEnv({
+    ZOOM_SHARED_TIMER_STATE: {
+      getByName() { return { async fetch() { throw new Error("timer unavailable"); } }; }
+    }
+  });
+  response = await worker.fetch(panelRequest("/zoom-only/status?includeTimer=1&instanceId=mobile-panel&product=mobile"), timerDownEnv);
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.sharedTimer, null);
+  assert.equal(data.sharedTimerError, "timer_unavailable");
+
+  response = await postPanelAction(env, {
     action: "zoom_timer_action",
     timerAction: "sync",
     instanceId: "android-1",
     product: "mobile"
   });
-  let data = await json(response);
+  data = await json(response);
   assert.equal(response.status, 200);
   assert.equal(data.executorActive, false);
   assert.equal(data.isExecutor, false);
@@ -1585,6 +1604,9 @@ async function testRetiredTeamChatSurface() {
   assert.doesNotMatch(panelHtml, /Team Chat|sendMessageToChat|data-speaker-clear/u);
   assert.match(panelHtml, /meeting_board_clear_all/u);
   assert.match(panelHtml, /\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451/u);
+  const inlineScript = [...panelHtml.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1];
+  assert.ok(inlineScript);
+  assert.doesNotThrow(() => new Function(inlineScript));
 }
 
 testMeetingBoardUnicodeLimit();

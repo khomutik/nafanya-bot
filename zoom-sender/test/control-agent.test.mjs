@@ -35,7 +35,6 @@ function fakeOps(overrides = {}) {
     async startSender() { calls.push("start-sender"); },
     async stopSender() { calls.push("stop-sender"); },
     async getSenderHealth() { return { status: "healthy", zoomJoined: true, chatOpen: true, lastError: null }; },
-    async getQueueStatus() { return { queueOpen: false, outboxSize: 0 }; },
     async detectAuthRequired() { return false; },
     async startAuthSetup() { calls.push("auth-setup:start"); return "a".repeat(64); },
     async getAuthSetupState() { return { state: "completed" }; },
@@ -76,12 +75,15 @@ test("control start refuses to run while old bridge is active", async () => {
   assert.ok(!ops.calls.includes("start-sender"));
 });
 
-test("control stop ignores preserved legacy queue state", async () => {
-  const ops = fakeOps({ async getQueueStatus() { return { queueOpen: true }; } });
+test("control status and stop never query Worker when sender is off", async () => {
+  let workerChecks = 0;
+  const ops = fakeOps({ async getQueueStatus() { workerChecks += 1; return { queueOpen: true }; } });
   const service = new ZoomControlService(ops);
+  await service.status();
   const result = await service.stop();
   assert.equal(result.ok, true);
   assert.deepEqual(ops.calls, ["stop-sender", "mode:safe"]);
+  assert.equal(workerChecks, 0);
 });
 
 test("control stop uses only sender stop and safe mode", async () => {
@@ -201,13 +203,15 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /Нажмите Починить вход Zoom/u);
   assert.match(html, /\.\/vnc\/vnc\.html/u);
   assert.match(html, /\.auth-help\[hidden\]\{display:none\}/u);
-  assert.match(html, /<section class="control">[\s\S]*<iframe id="workerPanel"/u);
+  assert.match(html, /<section class="control">[\s\S]*id="workerPanelOff"[\s\S]*<iframe id="workerPanel"/u);
+  assert.doesNotMatch(html, /<iframe id="workerPanel"[^>]+src=/u);
   assert.match(html, /class="admin-panel"/u);
   assert.match(html, /Админ \/ вход Zoom/u);
   assert.match(html, /function syncAdminVisibility/u);
   assert.match(html, /\$\("auth"\)\.hidden=!needAuth&&!admin\.open/u);
   assert.match(html, /authorizedFetch\("\.\/api\/status"/u);
-  assert.match(html, /async function refreshAll\(\)[\s\S]*worker-panel\?refresh=/u);
+  assert.match(html, /function syncWorkerPanel\(s,force=false\)/u);
+  assert.match(html, /if\(s\?\.running\)syncWorkerPanel\(s,true\)/u);
   assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);
   assert.match(html, /let pendingMessage=""/u);
   assert.match(html, /pendingMessage=data\.error\|\|"Операция не выполнена"/u);
@@ -220,6 +224,9 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /\.control\{position:static/u);
   assert.match(html, /new ResizeObserver\(resizeWorkerPanel\)/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
+  const inlineScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1];
+  assert.ok(inlineScript);
+  assert.doesNotThrow(() => new Function(inlineScript));
 });
 
 test("control page has a configurable shared host timer and collapsible tech panel", () => {
@@ -237,9 +244,10 @@ test("control page has a configurable shared host timer and collapsible tech pan
   assert.match(html, /const TIMER_DEFAULT_MS=5\*60\*1000/u);
   assert.match(html, /baseMs:TIMER_DEFAULT_MS/u);
   assert.match(html, /action:"zoom_timer_action"/u);
-  assert.match(html, /timerRequest\("sync"\)/u);
-  assert.match(html, /setInterval\(syncSharedTimer,5000\)/u);
-  assert.doesNotMatch(html, /setInterval\(syncSharedTimer,1500\)/u);
+  assert.match(html, /type:"nafanya-timer-client"/u);
+  assert.match(html, /type!=="nafanya-worker-state"/u);
+  assert.doesNotMatch(html, /syncSharedTimer|setInterval\(syncSharedTimer/u);
+  assert.match(html, /if\(!nafanyaRunning\)return Promise\.reject\(new Error\("nafanya_off"\)\)/u);
   assert.match(html, /configured\.product/u);
   assert.match(html, /zoomProduct==="desktop"&&timerExecutor&&timerIndicatorSupported/u);
   assert.match(html, /configured\.product/u);
@@ -347,6 +355,9 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.match(source, /"\/zoom-only\/library\/import"/u);
   assert.match(source, /new URLSearchParams\(search\)/u);
   assert.match(source, /url\.pathname, url\.search/u);
+  assert.match(source, /proxyWorkerOnlyWhileSenderRuns/u);
+  assert.match(source, /if \(!current\.running\)/u);
+  assert.match(source, /error: "nafanya_off"/u);
   assert.doesNotMatch(source, /child_process|exec\(|spawn\(/u);
 });
 
@@ -437,6 +448,7 @@ test("auth view uses fixed docker compose commands without arbitrary shell", asy
   assert.match(source, /stopAuthSetup/u);
   assert.match(source, /import \{ execFile \} from "node:child_process"/u);
   assert.doesNotMatch(source, /import \{[^}]*\b(?:exec|spawn)\b[^}]*\} from "node:child_process"|shell:\s*true/u);
+  assert.doesNotMatch(source, /getQueueStatus|zoom-only\/status/u);
 });
 
 test("Docker auth view binds noVNC to localhost and has no embedded secret", async () => {
