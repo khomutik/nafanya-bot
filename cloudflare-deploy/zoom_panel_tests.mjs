@@ -167,6 +167,16 @@ async function testAccess() {
   assert.doesNotMatch(html, /confirm\(/u, "Zoom panel must not rely on browser confirmation dialogs");
   assert.doesNotMatch(html, /meeting_board_replay/u);
   assert.match(html, /data-message-key="prayer"/u);
+  assert.match(html, /async function requestAction\(body\)[\s\S]*attempt<2/u,
+    "Every panel action should reuse one idempotency key for one delayed retry after a transient 5xx");
+  assert.match(html, /if\(refreshPromise\)return refreshPromise/u,
+    "Concurrent panel refreshes must share one Worker request");
+  assert.match(html, /startupRefreshTimer=setTimeout/u,
+    "The initial board refresh should coalesce with the timer-client handshake");
+  assert.match(html, /\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u044e\u2026/u,
+    "Ordinary message buttons should not pretend that they are clearing queues");
+  assert.doesNotMatch(html, /const data=await requestJson\(actionPath[\s\S]{0,300}await refreshState/u,
+    "A successful one-shot action must not trigger an immediate duplicate status request");
   assert.doesNotMatch(html, /add_test_participant|manualQueueInput|queueWorkbench/u);
   const deniedAction = await postPanelAction(env, { type: "message", key: "prayer" }, false);
   assert.equal(deniedAction.status, 401);
@@ -1261,6 +1271,73 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal((await pullOutbox(env)).length, 0);
 }
 
+async function testOneShotActionUsesOneAtomicDurableObjectWrite() {
+  const env = makeEnv();
+  await getZoomOnlyStatus(env);
+  const meeting = env.__testing.zoomMeeting.binding.getByName("main");
+  meeting.fetchCount = 0;
+  const writesBefore = meeting.storage.putCount;
+
+  let response = await postPanelAction(env, {
+    type: "message",
+    key: "prayer",
+    requestId: "atomic-prayer-click"
+  });
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+  assert.equal(data.duplicate, false);
+  assert.equal(data.queued.length, 1);
+  assert.equal(meeting.fetchCount, 1,
+    "A one-shot button must enqueue, record and answer through one Durable Object request");
+  assert.equal(meeting.storage.putCount - writesBefore, 1,
+    "A one-shot button must persist the outbox and idempotency marker in one write");
+
+  response = await postPanelAction(env, {
+    type: "message",
+    key: "prayer",
+    requestId: "atomic-prayer-click"
+  });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.duplicate, true);
+  assert.equal(data.queued.length, 0);
+  assert.equal((await pullOutbox(env)).length, 1,
+    "An ambiguous retry with the same requestId must not duplicate the Zoom message");
+}
+
+async function testZoomRouteReturnsStructuredTransientFailure() {
+  const overloaded = new Error("Durable Object is overloaded");
+  overloaded.overloaded = true;
+  const env = makeEnv({
+    ZOOM_MEETING_STATE: {
+      getByName() {
+        return {
+          async fetch() {
+            throw overloaded;
+          }
+        };
+      }
+    }
+  });
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    const response = await postPanelAction(env, {
+      type: "message",
+      key: "prayer",
+      requestId: "overloaded-prayer-click"
+    });
+    const data = await json(response);
+    assert.equal(response.status, 503);
+    assert.equal(data.ok, false);
+    assert.equal(data.reason, "zoom_worker_transient");
+    assert.match(data.error, /\u0421\u0432\u044f\u0437\u044c \u0441 Worker/u);
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
 async function testGlobalClearRemovesYesterdayState() {
   const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
   const yesterdayBoard = {
@@ -1613,6 +1690,8 @@ testMeetingBoardUnicodeLimit();
 await testAccess();
 await testRetiredLegacyZoomSurface();
 await testSafeTestMessageAction();
+await testOneShotActionUsesOneAtomicDurableObjectWrite();
+await testZoomRouteReturnsStructuredTransientFailure();
 await testMessageButtonsAndOutbox();
 await testYozhikBillAndGameActions();
 await testQueuePausedLibraryPanelAndActions();
