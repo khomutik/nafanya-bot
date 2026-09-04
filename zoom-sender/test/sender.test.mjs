@@ -85,6 +85,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_SENDER_MIN_POLL_MS: "2000",
     ZOOM_SENDER_MAX_POLL_MS: "25000",
     ZOOM_SENDER_ERROR_POLL_MS: "7000",
+    ZOOM_SENDER_RECOVERY_AFTER_MS: "240000",
     ZOOM_SENDER_HEALTH_PORT: "4001",
     ZOOM_SENDER_DIAGNOSTICS_DIR: "/tmp/zoom-diagnostics",
     ZOOM_SENDER_BROWSER_ARGS: "--one --two",
@@ -99,6 +100,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(config.minIntervalMs, 2000);
   assert.equal(config.maxIntervalMs, 25000);
   assert.equal(config.errorIntervalMs, 7000);
+  assert.equal(config.zoomRecoveryAfterMs, 240000);
   assert.equal(config.healthPort, 4001);
   assert.equal(config.diagnosticsDir, "/tmp/zoom-diagnostics");
   assert.deepEqual(config.browserArgs, ["--one", "--two"]);
@@ -113,6 +115,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.minIntervalMs, 1500);
   assert.equal(fallback.maxIntervalMs, 1500);
   assert.equal(fallback.errorIntervalMs, 10000);
+  assert.equal(fallback.zoomRecoveryAfterMs, 180000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
   assert.equal(fallback.outboxMeetingId, "");
   assert.equal(loadConfig({}).maxIntervalMs, 5000);
@@ -209,6 +212,107 @@ test("sender does not ack failed individual sends that return no ack", async () 
   const result = await service.runOnce();
   assert.deepEqual(acked, [1]);
   assert.deepEqual(result.ackIds, [1]);
+});
+
+test("sender waits in the waiting room without polling Worker and resumes after admission", async () => {
+  let presence = { zoomPageOpen: true, zoomJoined: false, waitingRoom: true, chatOpen: false };
+  let pulls = 0;
+  let restarts = 0;
+  let now = 0;
+  const service = new ZoomSenderService({
+    workerClient: { async pull() { pulls += 1; return { messages: [] }; } },
+    zoomAdapter: {
+      async getPresence() { return presence; },
+      async restart() { restarts += 1; return presence; }
+    },
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} },
+    now: () => now,
+    zoomRecoveryAfterMs: 180000
+  });
+
+  const first = await service.runOnce();
+  now = 10 * 60 * 1000;
+  const second = await service.runOnce();
+  assert.equal(first.waitingForZoom, true);
+  assert.equal(second.waitingForZoom, true);
+  assert.equal(pulls, 0);
+  assert.equal(restarts, 0);
+
+  presence = { zoomPageOpen: true, zoomJoined: true, waitingRoom: false, chatOpen: true };
+  const admitted = await service.runOnce();
+  assert.equal(admitted.messages, 0);
+  assert.equal(pulls, 1);
+});
+
+test("sender recovers a closed Zoom page before touching the outbox", async () => {
+  let pulls = 0;
+  let restarts = 0;
+  const service = new ZoomSenderService({
+    workerClient: { async pull() { pulls += 1; return { messages: [] }; } },
+    zoomAdapter: {
+      async getPresence() { return { zoomPageOpen: false, zoomJoined: false, waitingRoom: false, chatOpen: false }; },
+      async restart() { restarts += 1; return { zoomPageOpen: true, zoomJoined: true, waitingRoom: false, chatOpen: true }; }
+    },
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  const result = await service.runOnce();
+  assert.equal(restarts, 1);
+  assert.equal(pulls, 1);
+  assert.equal(result.messages, 0);
+});
+
+test("sender recovers when Zoom presence inspection itself fails", async () => {
+  let pulls = 0;
+  let restarts = 0;
+  const service = new ZoomSenderService({
+    workerClient: { async pull() { pulls += 1; return { messages: [] }; } },
+    zoomAdapter: {
+      async getPresence() { throw new Error("page crashed"); },
+      async restart() { restarts += 1; return { zoomPageOpen: true, zoomJoined: true, waitingRoom: false, chatOpen: true }; }
+    },
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} }
+  });
+
+  const result = await service.runOnce();
+  assert.equal(restarts, 1);
+  assert.equal(pulls, 1);
+  assert.equal(result.messages, 0);
+});
+
+test("sender retries a failed initial browser launch instead of exiting", async () => {
+  let starts = 0;
+  let stops = 0;
+  let pulls = 0;
+  let service;
+  const zoomAdapter = {
+    async start() {
+      starts += 1;
+      if (starts === 1) throw new Error("temporary Zoom launch failure");
+      return { zoomPageOpen: true, zoomJoined: true, waitingRoom: false, chatOpen: true };
+    },
+    async getPresence() { return { zoomPageOpen: true, zoomJoined: true, waitingRoom: false, chatOpen: true }; },
+    async stop() { stops += 1; }
+  };
+  service = new ZoomSenderService({
+    workerClient: { async pull() { pulls += 1; return { messages: [] }; } },
+    zoomAdapter,
+    backoff: new Backoff(makeConfig()),
+    health: new HealthState(),
+    logger: { info() {}, warn() {} },
+    sleep: async () => { if (starts >= 2) await service.stop(); }
+  });
+
+  await service.runForever();
+  assert.equal(starts, 2);
+  assert.equal(pulls, 1);
+  assert.ok(stops >= 2);
 });
 
 test("interactive default backs an empty outbox off to five seconds", async () => {

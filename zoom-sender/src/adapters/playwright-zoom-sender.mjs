@@ -1014,6 +1014,21 @@ export class PlaywrightZoomSender {
 
   async stop() {
     await this.browser?.close().catch(() => null);
+    this.browser = null;
+    this.page = null;
+    this.presence = {
+      zoomPageOpen: false,
+      zoomJoined: false,
+      waitingRoom: false,
+      chatOpen: false,
+      chatUnavailable: false,
+      chatReason: null
+    };
+  }
+
+  async restart() {
+    await this.stop();
+    return this.start();
   }
 }
 

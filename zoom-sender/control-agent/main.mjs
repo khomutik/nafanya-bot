@@ -27,6 +27,7 @@ if (!config.token || !config.workerBaseUrl || !config.zoomOnlySecret || !config.
 
 const service = new ZoomControlService(new DockerOps(config));
 const json = (res, status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
+const audit = (event, details = {}) => console.log(JSON.stringify({ event, at: new Date().toISOString(), ...details }));
 const same = (a, b) => { const x = Buffer.from(String(a || "")); const y = Buffer.from(String(b || "")); return x.length === y.length && timingSafeEqual(x, y); };
 const cookies = (request) => Object.fromEntries(String(request.headers.cookie || "").split(";").map((item) => item.trim().split("=")).filter(([key]) => key));
 const adminAuthorized = (request) => same(cookies(request)[config.cookieName], config.token) || same(request.headers["x-nafanya-control-token"], config.token);
@@ -59,8 +60,26 @@ async function proxyWorkerOnlyWhileSenderRuns(request, res, pathname, search = "
   return proxyWorker(request, res, pathname, search, access);
 }
 
-async function proxyWorker(request, res, pathname, search = "", access = "admin") {
-  const body = request.method === "POST" ? await new Promise((resolve) => { const chunks = []; request.on("data", (chunk) => chunks.push(chunk)); request.on("end", () => resolve(Buffer.concat(chunks))); }) : undefined;
+async function readRequestBody(request, maxBytes = 32768) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error("request_too_large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+async function proxyWorker(request, res, pathname, search = "", access = "admin", suppliedBody) {
+  const body = suppliedBody === undefined && request.method === "POST" ? await readRequestBody(request) : suppliedBody;
   const query = new URLSearchParams(search);
   query.set("controlRequest", String(Date.now()));
   const workerPath = `${pathname}?${query}`;
@@ -81,6 +100,22 @@ async function proxyWorker(request, res, pathname, search = "", access = "admin"
     return res.end(html);
   }
   res.end(Buffer.from(await response.arrayBuffer()));
+}
+
+async function proxyTimer(request, res, access) {
+  if (request.method !== "POST") return json(res, 405, { ok: false, error: "method_not_allowed" });
+  const body = await readRequestBody(request);
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return json(res, 400, { ok: false, error: "invalid_json" });
+  }
+  const allowedTimerActions = new Set(["sync", "configure", "start", "pause", "extend", "reset"]);
+  if (payload?.action !== "zoom_timer_action" || !allowedTimerActions.has(String(payload.timerAction || "sync"))) {
+    return json(res, 400, { ok: false, error: "timer_action_required" });
+  }
+  return proxyWorker(request, res, "/zoom-only/app/action", "", access, body);
 }
 
 const server = http.createServer(async (request, res) => {
@@ -115,14 +150,15 @@ const server = http.createServer(async (request, res) => {
       res.writeHead(204, { "cache-control": "no-store" }); return res.end();
     }
     if (request.method === "GET" && url.pathname === "/app") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(buildControlHtml()); }
+    if (url.pathname === "/zoom-only/timer") return proxyTimer(request, res, access);
     if (request.method === "GET" && url.pathname === "/worker-panel") return proxyWorkerOnlyWhileSenderRuns(request, res, "/zoom-only/app", url.search, access);
     if (["/zoom-only/status", "/zoom-only/app/action", "/zoom-only/library/status", "/zoom-only/library/import"].includes(url.pathname)) {
       if (request.method === "POST" && url.pathname === "/zoom-only/library/import" && access !== "admin") return json(res, 403, { ok: false, error: "admin_required" });
       return proxyWorkerOnlyWhileSenderRuns(request, res, url.pathname, url.search, access);
     }
     if (request.method === "GET" && url.pathname === "/api/status") return json(res, 200, await service.status());
-    if (request.method === "POST" && url.pathname === "/api/start") return json(res, 202, service.requestStart());
-    if (request.method === "POST" && url.pathname === "/api/stop") { const result = await service.stop(); return json(res, result.status, result); }
+    if (request.method === "POST" && url.pathname === "/api/start") { const result = service.requestStart(); audit("zoom_sender_start_requested", { accepted: result.accepted }); return json(res, 202, result); }
+    if (request.method === "POST" && url.pathname === "/api/stop") { const result = await service.stop(); audit("zoom_sender_stop_requested", { ok: result.ok }); return json(res, result.status, result); }
     if (request.method === "POST" && url.pathname === "/api/auth-setup") {
       if (access !== "admin") return json(res, 403, { ok: false, error: "admin_required" });
       return json(res, 202, service.requestAuthSetup());
@@ -133,6 +169,7 @@ const server = http.createServer(async (request, res) => {
     }
     return json(res, 404, { ok: false, error: "not_found" });
   } catch (error) {
+    console.error(JSON.stringify({ event: "zoom_control_request_failed", path: String(request.url || "").split("?")[0], error: String(error?.message || error || "unknown").slice(0, 300) }));
     return json(res, 500, { ok: false, error: "control_agent_error" });
   }
 });
