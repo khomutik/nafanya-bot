@@ -801,9 +801,10 @@ async function getSystemDiagnostics(config, browser, launchArgs) {
 }
 
 export class PlaywrightZoomSender {
-  constructor(config, { logger = console } = {}) {
+  constructor(config, { logger = console, browserCloseTimeoutMs = 5000 } = {}) {
     this.config = config;
     this.logger = logger;
+    this.browserCloseTimeoutMs = browserCloseTimeoutMs;
     this.browser = null;
     this.page = null;
     this.presence = {
@@ -1013,7 +1014,7 @@ export class PlaywrightZoomSender {
   }
 
   async stop() {
-    await this.browser?.close().catch(() => null);
+    const browser = this.browser;
     this.browser = null;
     this.page = null;
     this.presence = {
@@ -1024,6 +1025,15 @@ export class PlaywrightZoomSender {
       chatUnavailable: false,
       chatReason: null
     };
+    if (!browser) return;
+    let timeoutId;
+    await Promise.race([
+      browser.close().catch(() => null),
+      new Promise((resolve) => {
+        timeoutId = setTimeout(resolve, this.browserCloseTimeoutMs);
+      })
+    ]);
+    clearTimeout(timeoutId);
   }
 
   async restart() {

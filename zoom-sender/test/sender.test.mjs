@@ -6,7 +6,7 @@ import { startHealthServer } from "../src/health-server.mjs";
 import { HealthState } from "../src/health-state.mjs";
 import { ZoomSenderService } from "../src/sender.mjs";
 import { WorkerOutboxClient, classifyWorkerFetchError, classifyWorkerHttpStatus } from "../src/worker-client.mjs";
-import { DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, exactOwnChatRecords, isOwnIdentityChatRecord, sanitizeDiagnosticText, sanitizePageUrl, shouldAttemptChatRecovery } from "../src/adapters/playwright-zoom-sender.mjs";
+import { DEFAULT_BROWSER_ARGS, PlaywrightZoomSender, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, exactOwnChatRecords, isOwnIdentityChatRecord, sanitizeDiagnosticText, sanitizePageUrl, shouldAttemptChatRecovery } from "../src/adapters/playwright-zoom-sender.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -25,6 +25,24 @@ function makeConfig() {
     errorIntervalMs: 10000
   };
 }
+
+test("browser shutdown cannot hang the sender indefinitely", async () => {
+  const adapter = new PlaywrightZoomSender({}, { browserCloseTimeoutMs: 5 });
+  adapter.browser = { close: () => new Promise(() => {}) };
+  adapter.page = { stale: true };
+  adapter.presence = { zoomPageOpen: true, zoomJoined: true, chatOpen: true };
+
+  await Promise.race([
+    adapter.stop(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("stop hung")), 100))
+  ]);
+
+  assert.equal(adapter.browser, null);
+  assert.equal(adapter.page, null);
+  assert.equal(adapter.presence.zoomPageOpen, false);
+  assert.equal(adapter.presence.zoomJoined, false);
+  assert.equal(adapter.presence.chatOpen, false);
+});
 
 test("chat recovery runs after admission but is throttled while Zoom is still opening the panel", () => {
   assert.equal(shouldAttemptChatRecovery({ chatOpen: false, zoomJoined: true, waitingRoom: false, lastAttemptAt: 0, now: 20000 }), true);
