@@ -490,8 +490,10 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
     fs.readFile(new URL("../RUNBOOK.md", import.meta.url), "utf8")
   ]);
   assert.match(dockerfile, /node src\/main\.mjs/u);
+  assert.match(dockerfile, /exec node src\/main\.mjs/u);
   assert.match(dockerfile, /ZOOM_AUTH_SETUP/u);
   assert.match(dockerfile, /node src\/auth-setup\.mjs/u);
+  assert.match(dockerfile, /exec node src\/auth-setup\.mjs/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
   assert.match(dockerfile, /xvfb xauth x11-utils/u);
   assert.match(dockerfile, /Xvfb :99/u);
