@@ -498,6 +498,7 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
   assert.match(dockerfile, /xvfb xauth x11-utils/u);
   assert.match(dockerfile, /Xvfb :99/u);
   assert.match(dockerfile, /chmod 1777 \/tmp\/\.X11-unix/u);
+  assert.match(dockerfile, /rm -f \/tmp\/\.X99-lock \/tmp\/\.X11-unix\/X99/u);
   assert.match(compose, /service|zoom-sender/u);
   assert.match(compose, /healthcheck:/u);
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
