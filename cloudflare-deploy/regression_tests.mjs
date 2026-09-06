@@ -217,6 +217,10 @@ function testWorkerStaticRules() {
   const worker = fs.readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   const wranglerConfig = JSON.parse(fs.readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8"));
   const servicePersonMap = JSON.parse(wranglerConfig.vars.SERVICE_PERSON_MAP_JSON);
+  const staticAdminUsernames = new Set(String(wranglerConfig.vars.ADMIN_DM_USERNAMES || "").split(/[\s,]+/u).map((item) => item.replace(/^@/u, "").toLowerCase()).filter(Boolean));
+  for (const username of ["katukatun", "pifagor71", "JeanneKova", "Well2456", "nikitinaYLA", "FrendlyLawyer", "Maks_gav", "VladimirRingo", "D3N1S_G33K", "rlinrec", "gorinayua"]) {
+    assert.equal(staticAdminUsernames.has(username.toLowerCase()), true, `Static admin list should include @${username}`);
+  }
   const messageHandlers = fs.readFileSync(new URL("./message_handlers.js", import.meta.url), "utf8");
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
