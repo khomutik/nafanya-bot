@@ -26,6 +26,18 @@ const children = [
   spawn(process.platform === "win32" ? "npx.cmd" : "npx", ["wrangler", "dev", "--config", "wrangler.local.jsonc", "--local", "--port", "8787"], { cwd: workerDir, env, stdio: "inherit", windowsHide: false }),
   spawn(process.execPath, [path.join(senderDir, "control-agent", "main.mjs")], { cwd: senderDir, env, stdio: "inherit", windowsHide: false })
 ];
+async function seedLibrary() {
+  const payload = readFileSync(path.join(workerDir, "local_library_seed.json"), "utf8");
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const response = await fetch(`${env.WORKER_BASE_URL}/zoom-only/library/import`, { method: "POST", headers: { "x-nafanya-zoom-panel-token": env.ZOOM_PANEL_TOKEN, "content-type": "application/json" }, body: payload });
+      if (response.ok) { console.log("Local Zoom library seed loaded."); return; }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  console.warn("Local Zoom library seed was not loaded; import it from the panel if excerpts are needed.");
+}
+void seedLibrary();
 let stopping = false;
 async function stop() {
   if (stopping) return; stopping = true;
