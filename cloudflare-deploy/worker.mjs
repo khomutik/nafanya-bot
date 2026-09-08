@@ -3657,6 +3657,9 @@ __name(handleWebhookUpdate, "handleWebhookUpdate");
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (String(env?.ZOOM_LOCAL_DEBUG || "").toLowerCase() === "true" && (url.pathname === "/webhook" || url.pathname === "/zoom/events")) {
+      return Response.json({ ok: false, error: "telegram_disabled_in_local_debug" }, { status: 410 });
+    }
     if (request.method === "GET" && url.pathname === "/") {
       return handleRootRequest(env);
     }
@@ -3690,6 +3693,7 @@ var worker_default = {
     return textResponse("Not found", 404);
   },
   async scheduled(controller, env, ctx) {
+    if (String(env?.ZOOM_LOCAL_DEBUG || "").toLowerCase() === "true") return;
     ctx.waitUntil(Promise.all([
       runScheduledTaskOncePerDay(env, "morning_07_00", 7, 0, () => sendAnnouncementCopyToGroup(env, MORNING_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "yozhik_08_00", 8, 0, () => sendYozhikToGroup(env, { disableNotification: false })),

@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "nafanya-zoom-local-debug",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-08-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ZOOM_LOCAL_DEBUG": "true",
+    "BOT_USERNAME": "",
+    "ZOOM_PANEL_TOKEN": "local-panel-token",
+    "ZOOM_ONLY_SECRET": "local-bridge-secret",
+    "OWNER_USER_ID": "",
+    "OWNER_PRIVATE_CHAT_ID": "",
+    "COORDINATOR_USER_ID": "",
+    "COORDINATOR_PRIVATE_CHAT_ID": "",
+    "COORDINATOR_USERNAME": "",
+    "SERVICE_PERSON_MAP_JSON": "{}",
+    "ADMIN_DM_USER_IDS": "",
+    "ADMIN_DM_USERNAMES": "",
+    "ADMIN_MANAGER_USER_IDS": "",
+    "ADMIN_MANAGER_USERNAMES": "",
+    "PRIVATE_SUBSCRIBER_USER_IDS": ""
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "QUEUE_STATE", "class_name": "QueueStateDurableObject" },
+      { "name": "TIMER_STATE", "class_name": "TimerStateDurableObject" },
+      { "name": "LIGHT_TALK_STATE", "class_name": "LightTalkStateDurableObject" },
+      { "name": "ANNOUNCEMENT_STATE", "class_name": "AnnouncementStateDurableObject" },
+      { "name": "ZOOM_MEETING_STATE", "class_name": "ZoomMeetingStateDurableObject" },
+      { "name": "ZOOM_SHARED_TIMER_STATE", "class_name": "ZoomSharedTimerStateDurableObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["QueueStateDurableObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["TimerStateDurableObject"] },
+    { "tag": "v3", "new_sqlite_classes": ["LightTalkStateDurableObject"] },
+    { "tag": "v4", "new_sqlite_classes": ["AnnouncementStateDurableObject"] },
+    { "tag": "v5", "new_sqlite_classes": ["ZoomMeetingStateDurableObject", "ZoomSharedTimerStateDurableObject"] }
+  ],
+  "r2_buckets": [
+    { "binding": "ZOOM_LIBRARY", "bucket_name": "nafanya-zoom-local-library" }
+  ]
+}

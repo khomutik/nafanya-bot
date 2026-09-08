@@ -1,6 +1,7 @@
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { DockerOps } from "./docker-ops.mjs";
+import { LocalProcessOps } from "./local-ops.mjs";
 import { ZoomControlService } from "./service.mjs";
 import { buildControlHtml } from "./html.mjs";
 import { buildZoomAppSessionCookie, decryptZoomAppContext, issueZoomAppSession, verifyZoomAppSession } from "./zoom-app-auth.mjs";
@@ -25,7 +26,8 @@ const config = {
 };
 if (!config.token || !config.workerBaseUrl || !config.zoomOnlySecret || !config.panelToken) throw new Error("Missing control-agent configuration");
 
-const service = new ZoomControlService(new DockerOps(config));
+const ops = env("ZOOM_CONTROL_LOCAL_MODE", "false").toLowerCase() === "true" ? new LocalProcessOps(config) : new DockerOps(config);
+const service = new ZoomControlService(ops);
 const json = (res, status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
 const audit = (event, details = {}) => console.log(JSON.stringify({ event, at: new Date().toISOString(), ...details }));
 const same = (a, b) => { const x = Buffer.from(String(a || "")); const y = Buffer.from(String(b || "")); return x.length === y.length && timingSafeEqual(x, y); };
