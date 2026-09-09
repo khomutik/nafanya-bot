@@ -239,6 +239,8 @@ function testWorkerStaticRules() {
   assert.match(telegramApi, /isExpectedDeleteMessageFailure\(error\)/u, "Telegram delete failures should be classified");
   assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.username, "gorinayua", "Julia should resolve from the schedule name");
   assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.telegram_user_id, "6479617191", "Julia should resolve to her Telegram user ID");
+  assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.username, "katukatun", "Katya should resolve when the schedule mixes Cyrillic and Latin");
+  assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.display_name, "\u041a\u0430\u0442\u044f \u0428\u0438", "Katya's mixed-script alias should keep the canonical display name");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
   assert.match(worker, /meeting_schedule: 3053/u, "Meeting schedule requests should copy message 3053");
   assert.match(messageHandlers, /zoom\|\\u0437\\u0443\\u043c/u, "Zoom link detector should understand Zoom wording");
