@@ -2269,7 +2269,7 @@ function serviceMapEntryFromSubscription(subscription) {
   };
 }
 __name(serviceMapEntryFromSubscription, "serviceMapEntryFromSubscription");
-function entryMatchesServiceName(entry, name) {
+function entryMatchesServiceName(entry, name, exactOnly = false) {
   const wanted = normalizeServiceName(name);
   if (!wanted) return false;
   const candidates = [
@@ -2281,6 +2281,7 @@ function entryMatchesServiceName(entry, name) {
     entry?.username ? `@${entry.username}` : "",
     entry?.username
   ].map(normalizeServiceName).filter(Boolean);
+  if (exactOnly) return candidates.some((candidate) => candidate === wanted);
   return candidates.some((candidate) => candidate === wanted || candidate.includes(wanted) || wanted.includes(candidate));
 }
 __name(entryMatchesServiceName, "entryMatchesServiceName");
@@ -2291,7 +2292,7 @@ async function buildServicePersonMap(env) {
 }
 __name(buildServicePersonMap, "buildServicePersonMap");
 function resolveServicePerson(map, name) {
-  const entry = map.find((item) => entryMatchesServiceName(item, name));
+  const entry = map.find((item) => entryMatchesServiceName(item, name, true)) || map.find((item) => entryMatchesServiceName(item, name));
   if (!entry) return null;
   const username = String(entry.username || "").replace(/^@/u, "").trim();
   const linkedEntry = username

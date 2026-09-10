@@ -237,8 +237,13 @@ function testWorkerStaticRules() {
   assert.match(worker, /service_admin_summary_sent:\$\{dateKey\}/u, "admin service summary should be deduplicated per day");
   assert.match(worker, /!deletion\.ok && !deletion\.expected/u, "expected Telegram deletion limits should not alert the owner");
   assert.match(telegramApi, /isExpectedDeleteMessageFailure\(error\)/u, "Telegram delete failures should be classified");
-  assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.username, "gorinayua", "Julia should resolve from the schedule name");
-  assert.equal(servicePersonMap["\u042e\u043b\u044f"]?.telegram_user_id, "6479617191", "Julia should resolve to her Telegram user ID");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f \u041d."]?.username, "nikitinaYLA", "Julia Nikitina should resolve from the schedule abbreviation");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f. \u041d"]?.username, "nikitinaYLA", "Julia Nikitina should resolve from the admin-panel spelling");
+  assert.equal(servicePersonMap["@nikitinaYLA"]?.display_name, "\u042e\u043b\u044f \u041d.", "Julia Nikitina's username should keep her canonical display name");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f \u0413."]?.username, "gorinayua", "Julia Gorina should resolve from the schedule abbreviation");
+  assert.equal(servicePersonMap["\u042e\u043b\u044f \u0413."]?.telegram_user_id, "6479617191", "Julia Gorina should resolve to her Telegram user ID");
+  assert.equal(servicePersonMap["@gorinayua"]?.display_name, "\u042e\u043b\u044f \u0413.", "Julia Gorina's username should keep her canonical display name");
+  assert.match(worker, /map\.find\(\(item\) => entryMatchesServiceName\(item, name, true\)\) \|\| map\.find/u, "Service-person aliases should prefer an exact match before fuzzy fallback");
   assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.username, "katukatun", "Katya should resolve when the schedule mixes Cyrillic and Latin");
   assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.display_name, "\u041a\u0430\u0442\u044f \u0428\u0438", "Katya's mixed-script alias should keep the canonical display name");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
