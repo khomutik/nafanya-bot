@@ -481,6 +481,14 @@ test("pre-meeting host wait is not reported as joined merely because microphone 
   assert.deepEqual(joined, { waitingRoom: false, zoomJoined: true });
 });
 
+test("an open chat wins over stale hidden waiting-room text", () => {
+  const joined = classifyZoomPresenceText(
+    "\u0414\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c, \u043a\u043e\u0433\u0434\u0430 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0442\u043e\u0440 \u043d\u0430\u0447\u043d\u0435\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u044e.",
+    true
+  );
+  assert.deepEqual(joined, { waitingRoom: false, zoomJoined: true });
+});
+
 test("docker packaging is sender-only and contains no obvious secrets", async () => {
   const fs = await import("node:fs/promises");
   const [dockerfile, compose, envExample, runbook] = await Promise.all([

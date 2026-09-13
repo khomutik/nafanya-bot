@@ -43,7 +43,7 @@ const ZOOM_RESPONSE_RE = /(?:^|\.)zoom\.us$|zoomcdn\.com$|zmdownload\.zoom\.us$/
 
 function classifyZoomPresenceText(bodyText, chatOpen = false) {
   const text = String(bodyText || "");
-  const waitingRoom = /waiting room|host.*let you in|wait.*host.*start|\u043e\u0436\u0438\u0434\u0430|\u0434\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c[\s\S]{0,80}\u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0442\u043e\u0440[\s\S]{0,80}\u043d\u0430\u0447\u043d/iu.test(text);
+  const waitingRoom = !chatOpen && /waiting room|host.*let you in|wait.*host.*start|\u043e\u0436\u0438\u0434\u0430|\u0434\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c[\s\S]{0,80}\u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0442\u043e\u0440[\s\S]{0,80}\u043d\u0430\u0447\u043d/iu.test(text);
   const zoomJoined = !waitingRoom && (Boolean(chatOpen) || /leave|mute|unmute|participants|chat|\u0432\u044b\u0439\u0442\u0438|\u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0438|\u0447\u0430\u0442/iu.test(text));
   return { waitingRoom, zoomJoined };
 }

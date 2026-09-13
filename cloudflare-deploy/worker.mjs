@@ -764,7 +764,15 @@ function normalizeZoomOutboxItem(value) {
   const id = Math.max(0, Math.floor(Number(source.id) || 0));
   const createdAt = Math.max(0, Number(source.createdAt) || 0);
   const text = String(source.text || "").trim();
-  return id && text ? { id, text, createdAt } : null;
+  const coalesceKey = String(source.coalesceKey || "").trim().slice(0, 160);
+  const coalesceVersion = Math.max(0, Math.floor(Number(source.coalesceVersion) || 0));
+  if (!id || !text) return null;
+  return {
+    id,
+    text,
+    createdAt,
+    ...(coalesceKey ? { coalesceKey, coalesceVersion } : {})
+  };
 }
 __name(normalizeZoomOutboxItem, "normalizeZoomOutboxItem");
 function normalizeZoomMeetingRuntimeState(value) {
@@ -1153,13 +1161,32 @@ var ZoomMeetingStateDurableObject = class {
   async saveState(runtimeState) {
     await this.state.storage.put("zoom-meeting-state", normalizeZoomMeetingRuntimeState(runtimeState));
   }
-  appendMessages(runtimeState, messages) {
+  appendMessages(runtimeState, messages, { coalesceKey = "", coalesceVersion = 0, replaceCoalescePrefixes = [] } = {}) {
     const createdAt = Date.now();
+    const normalizedCoalesceKey = String(coalesceKey || "").trim().slice(0, 160);
+    const normalizedPrefixes = (Array.isArray(replaceCoalescePrefixes) ? replaceCoalescePrefixes : [])
+      .map((prefix) => String(prefix || "").trim().slice(0, 160))
+      .filter(Boolean);
+    if (normalizedCoalesceKey || normalizedPrefixes.length) {
+      runtimeState.zoomOnlyOutbox = runtimeState.zoomOnlyOutbox.filter((item) => {
+        const itemKey = String(item?.coalesceKey || "");
+        if (normalizedCoalesceKey && itemKey === normalizedCoalesceKey) return false;
+        return !normalizedPrefixes.some((prefix) => itemKey.startsWith(prefix));
+      });
+    }
     const queued = (Array.isArray(messages) ? messages : [])
       .map((message) => String(message || "").trim())
       .filter(Boolean)
       .map((text) => {
-        const item = { id: runtimeState.zoomOnlyOutboxNextId, text, createdAt };
+        const item = {
+          id: runtimeState.zoomOnlyOutboxNextId,
+          text,
+          createdAt,
+          ...(normalizedCoalesceKey ? {
+            coalesceKey: normalizedCoalesceKey,
+            coalesceVersion: Math.max(0, Math.floor(Number(coalesceVersion) || 0))
+          } : {})
+        };
         runtimeState.zoomOnlyOutboxNextId += 1;
         return item;
       });
@@ -1169,8 +1196,25 @@ var ZoomMeetingStateDurableObject = class {
     }
     return queued;
   }
-  deliverBoardMessages(runtimeState, messages) {
-    return { queued: this.appendMessages(runtimeState, messages), deliveryMessages: [] };
+  deliverBoardMessages(runtimeState, messages, payload = {}, metadata = {}) {
+    const key = String(metadata.key || "").trim();
+    const dayKey = String(payload.dayKey || runtimeState.zoomMeetingBoard?.dayKey || "").trim();
+    const coalesceKey = key === "meeting_board" && dayKey
+      ? `meeting_board:${dayKey}`
+      : key === "speaker_questions"
+        ? "speaker_questions"
+        : "";
+    const replaceCoalescePrefixes = payload.boardAction === "clear_all" && key === "meeting_board"
+      ? ["meeting_board:"]
+      : [];
+    return {
+      queued: this.appendMessages(runtimeState, messages, {
+        coalesceKey,
+        coalesceVersion: metadata.version,
+        replaceCoalescePrefixes
+      }),
+      deliveryMessages: []
+    };
   }
   rememberRequest(target, requestId) {
     const id = String(requestId || "").trim();

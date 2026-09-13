@@ -1686,6 +1686,58 @@ async function testRetiredTeamChatSurface() {
   assert.doesNotThrow(() => new Function(inlineScript));
 }
 
+async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessages() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  let response = await postPanelAction(env, {
+    type: "message",
+    key: "prayer",
+    requestId: "coalesce-prayer"
+  });
+  assert.equal((await json(response)).ok, true);
+
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "sunday",
+    text: "\u041c\u0430\u043d\u044f 111",
+    requestId: "coalesce-board-1"
+  });
+  assert.equal((await json(response)).ok, true);
+  response = await postPanelAction(env, {
+    action: "meeting_board_add_entry",
+    dayKey: "sunday",
+    text: "\u041c\u0430\u043d\u044f 333",
+    requestId: "coalesce-board-2"
+  });
+  assert.equal((await json(response)).ok, true);
+
+  let outbox = await pullOutbox(env);
+  const prayerMessages = outbox.filter((item) => !item.coalesceKey);
+  const boardMessages = outbox.filter((item) => item.coalesceKey === "meeting_board:sunday");
+  assert.equal(prayerMessages.length, 1, "A normal meeting message must not be coalesced away");
+  assert.equal(boardMessages.length, 1, "Only the newest unsent board snapshot should remain");
+  assert.match(boardMessages[0].text, /\u041c\u0430\u043d\u044f 111/u);
+  assert.match(boardMessages[0].text, /\u041c\u0430\u043d\u044f 333/u);
+  assert.equal(boardMessages[0].coalesceVersion, 2);
+
+  response = await postPanelAction(env, {
+    action: "speaker_questions_add",
+    text: "\u041f\u0435\u0440\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+    requestId: "coalesce-speaker-1"
+  });
+  assert.equal((await json(response)).ok, true);
+  response = await postPanelAction(env, {
+    action: "speaker_questions_add",
+    text: "\u0412\u0442\u043e\u0440\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+    requestId: "coalesce-speaker-2"
+  });
+  assert.equal((await json(response)).ok, true);
+  outbox = await pullOutbox(env);
+  const speakerMessages = outbox.filter((item) => item.coalesceKey === "speaker_questions");
+  assert.equal(speakerMessages.length, 1, "Only the newest unsent speaker snapshot should remain");
+  assert.match(speakerMessages[0].text, /\u041f\u0435\u0440\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441/u);
+  assert.match(speakerMessages[0].text, /\u0412\u0442\u043e\u0440\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441/u);
+}
+
 testMeetingBoardUnicodeLimit();
 await testAccess();
 await testRetiredLegacyZoomSurface();
@@ -1696,6 +1748,7 @@ await testMessageButtonsAndOutbox();
 await testYozhikBillAndGameActions();
 await testQueuePausedLibraryPanelAndActions();
 await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
+await testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessages();
 await testMeetingBoardAndSpeakerState();
 await testGlobalClearRemovesYesterdayState();
 await testSharedZoomTimerState();
