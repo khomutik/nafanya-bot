@@ -136,7 +136,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.zoomRecoveryAfterMs, 180000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
   assert.equal(fallback.outboxMeetingId, "");
-  assert.equal(loadConfig({}).maxIntervalMs, 5000);
+  assert.equal(loadConfig({}).maxIntervalMs, 1500);
 });
 
 test("replacement safety matches only exact messages owned by Nafanya", () => {
@@ -333,7 +333,7 @@ test("sender retries a failed initial browser launch instead of exiting", async 
   assert.ok(stops >= 2);
 });
 
-test("interactive default backs an empty outbox off to five seconds", async () => {
+test("an admitted sender checks an empty outbox every 1.5 seconds", async () => {
   const config = loadConfig({});
   const backoff = new Backoff(config);
   const service = new ZoomSenderService({
@@ -344,9 +344,9 @@ test("interactive default backs an empty outbox off to five seconds", async () =
     logger: { info() {}, warn() {} }
   });
 
-  assert.equal((await service.runOnce()).delayMs, 3000);
-  assert.equal((await service.runOnce()).delayMs, 5000);
-  assert.equal((await service.runOnce()).delayMs, 5000);
+  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal((await service.runOnce()).delayMs, 1500);
   assert.equal(backoff.onError(), 10000);
 });
 
