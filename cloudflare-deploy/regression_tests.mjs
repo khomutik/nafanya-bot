@@ -244,6 +244,12 @@ function testWorkerStaticRules() {
   assert.equal(servicePersonMap["\u042e\u043b\u044f \u0413."]?.telegram_user_id, "6479617191", "Julia Gorina should resolve to her Telegram user ID");
   assert.equal(servicePersonMap["@gorinayua"]?.display_name, "\u042e\u043b\u044f \u0413.", "Julia Gorina's username should keep her canonical display name");
   assert.match(worker, /map\.find\(\(item\) => entryMatchesServiceName\(item, name, true\)\) \|\| map\.find/u, "Service-person aliases should prefer an exact match before fuzzy fallback");
+  assert.equal(servicePersonMap["\u041d\u0438\u043a\u0438\u0442\u043e\u0441"]?.username, "iddqd977", "Nikitos should resolve from the schedule name");
+  assert.equal(servicePersonMap["\u041d\u0438\u043a\u0438\u0442\u043e\u0441"]?.telegram_user_id, "148524131", "Nikitos should resolve to his Telegram user ID");
+  assert.equal(servicePersonMap["@iddqd977"]?.display_name, "\u041d\u0438\u043a\u0438\u0442\u043e\u0441", "Nikitos's username should keep his schedule display name");
+  assert.equal(servicePersonMap["\u041d\u0438\u043a\u0438\u0442\u0430 \u041c."]?.username, "rlinrec", "Nikita M should resolve from the schedule abbreviation");
+  assert.equal(servicePersonMap["\u041d\u0438\u043a\u0438\u0442\u0430 \u041c"]?.username, "rlinrec", "Nikita M should also resolve without the final period");
+  assert.equal(servicePersonMap["@rlinrec"]?.display_name, "\u041d\u0438\u043a\u0438\u0442\u0430 \u041c.", "Nikita M's username should keep his canonical display name");
   assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.username, "katukatun", "Katya should resolve when the schedule mixes Cyrillic and Latin");
   assert.equal(servicePersonMap["\u041a\u0430\u0442\u044f Shi"]?.display_name, "\u041a\u0430\u0442\u044f \u0428\u0438", "Katya's mixed-script alias should keep the canonical display name");
   assert.match(worker, /telemost_link: 2597/u, "Zoom link requests should copy tech message 2597");
