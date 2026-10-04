@@ -218,9 +218,10 @@ function testWorkerStaticRules() {
   const wranglerConfig = JSON.parse(fs.readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8"));
   const servicePersonMap = JSON.parse(wranglerConfig.vars.SERVICE_PERSON_MAP_JSON);
   const staticAdminUsernames = new Set(String(wranglerConfig.vars.ADMIN_DM_USERNAMES || "").split(/[\s,]+/u).map((item) => item.replace(/^@/u, "").toLowerCase()).filter(Boolean));
-  for (const username of ["katukatun", "pifagor71", "JeanneKova", "Well2456", "nikitinaYLA", "FrendlyLawyer", "Maks_gav", "VladimirRingo", "D3N1S_G33K", "rlinrec", "gorinayua"]) {
+  for (const username of ["katukatun", "pifagor71", "JeanneKova", "Well2456", "nikitinaYLA", "Maks_gav", "VladimirRingo", "D3N1S_G33K", "rlinrec", "gorinayua"]) {
     assert.equal(staticAdminUsernames.has(username.toLowerCase()), true, `Static admin list should include @${username}`);
   }
+  assert.equal(staticAdminUsernames.has("frendlylawyer"), false, "Removed admin must not remain in the static admin list");
   const messageHandlers = fs.readFileSync(new URL("./message_handlers.js", import.meta.url), "utf8");
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
@@ -395,6 +396,8 @@ function testWorkerStaticRules() {
   assert.match(worker, /async function isUserAdmin\(env, userId, chatId = INFO_CHAT_ID, chatType = ""\)[\s\S]*isPrivateChat\(chatType\)[\s\S]*getPrivateRoles/u, "Private callback permissions should use bot admin roles");
   assert.match(worker, /ADMIN_MANAGER_USERNAMES/u, "Admin manager usernames should be configurable");
   assert.match(worker, /get_personal_subscription[\s\S]*subscription\?\.username[\s\S]*isAdminDmUser\(env, id, username\)/u, "Private roles should recognize saved usernames from /start");
+  assert.match(worker, /adminDmDisabledUsers/u, "Admin removal should persist a revocation for legacy static admins");
+  assert.match(worker, /!dynamicAdminAccess\.disabled/u, "A persisted admin revocation should override static admin settings");
   assert.match(stateClients, /function callScheduleState[\s\S]*getByName\("schedule"\)/u, "Cron run markers should use a separate Durable Object instance");
   assert.match(worker, /let previous = await callScheduleState\(env, "get", \{ key: stateKey \}\)[\s\S]*legacyPrevious = await callAnnouncementState\(env, "get", \{ key: stateKey \}\)[\s\S]*await callScheduleState\(env, "set_message_id"/u, "Cron run markers should migrate old once-per-day state without duplicating sends");
   assert.match(worker, /async function sendPersonalDayAnnouncement\(env, sourceMessageId, silent = false\) \{\s*const result = await callPersonalDayState\(env, "list_personal_subscriptions"\);/u, "Personal 10-11 delivery should not silently treat storage failures as zero subscribers");

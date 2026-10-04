@@ -817,6 +817,7 @@ function createEmptyAnnouncementState() {
     personalSubscriptions: {},
     adminDmDrafts: {},
     adminDmUsers: {},
+    adminDmDisabledUsers: {},
     replacementRequests: {}
   };
 }
@@ -834,6 +835,9 @@ function normalizeAnnouncementState(announcementState) {
   }
   if (!normalized.adminDmUsers || typeof normalized.adminDmUsers !== "object") {
     normalized.adminDmUsers = {};
+  }
+  if (!normalized.adminDmDisabledUsers || typeof normalized.adminDmDisabledUsers !== "object") {
+    normalized.adminDmDisabledUsers = {};
   }
   if (!normalized.replacementRequests || typeof normalized.replacementRequests !== "object") {
     normalized.replacementRequests = {};
@@ -1728,7 +1732,8 @@ var AnnouncementStateDurableObject = class {
         const userId = String(payload.userId || "").trim();
         return Response.json({
           ok: true,
-          admin: userId ? announcementState.adminDmUsers[userId] ?? null : null
+          admin: userId ? announcementState.adminDmUsers[userId] ?? null : null,
+          disabled: userId ? Boolean(announcementState.adminDmDisabledUsers[userId]) : false
         });
       }
       if (action === "set_admin_dm_user") {
@@ -1742,6 +1747,7 @@ var AnnouncementStateDurableObject = class {
           updatedAt: Date.now()
         };
         announcementState.adminDmUsers[userId] = admin;
+        delete announcementState.adminDmDisabledUsers[userId];
         await this.saveState(announcementState);
         return Response.json({ ok: true, admin });
       }
@@ -1749,6 +1755,7 @@ var AnnouncementStateDurableObject = class {
         const userId = String(payload.userId || "").trim();
         if (userId) {
           delete announcementState.adminDmUsers[userId];
+          announcementState.adminDmDisabledUsers[userId] = { userId, updatedAt: Date.now() };
           await this.saveState(announcementState);
         }
         return Response.json({ ok: true });
@@ -2750,22 +2757,22 @@ function isPrivateSubscriber(env, userId) {
   return Boolean(String(userId || "").trim());
 }
 __name(isPrivateSubscriber, "isPrivateSubscriber");
-async function isDynamicAdminDmUser(env, userId) {
+async function getDynamicAdminDmAccess(env, userId) {
   const id = String(userId || "").trim();
-  if (!id) return false;
+  if (!id) return { admin: false, disabled: false };
   const result = await callPersonalDayState(env, "get_admin_dm_user", { userId: id }).catch(() => ({ admin: null }));
-  return Boolean(result?.admin);
+  return { admin: Boolean(result?.admin), disabled: Boolean(result?.disabled) };
 }
-__name(isDynamicAdminDmUser, "isDynamicAdminDmUser");
+__name(getDynamicAdminDmAccess, "getDynamicAdminDmAccess");
 async function getPrivateRoles(env, userId) {
   const id = String(userId || "").trim();
   const owner = isOwner(env, id);
-  const [dynamicAdmin, subscriptionResult] = await Promise.all([
-    isDynamicAdminDmUser(env, id),
+  const [dynamicAdminAccess, subscriptionResult] = await Promise.all([
+    getDynamicAdminDmAccess(env, id),
     callPersonalDayState(env, "get_personal_subscription", { userId: id }).catch(() => ({ subscription: null }))
   ]);
   const username = subscriptionResult?.subscription?.username || "";
-  const admin = owner || isAdminDmUser(env, id, username) || dynamicAdmin;
+  const admin = owner || (!dynamicAdminAccess.disabled && (isAdminDmUser(env, id, username) || dynamicAdminAccess.admin));
   const adminManager = owner || isAdminManagerUser(env, id, username);
   return {
     isOwner: owner,
