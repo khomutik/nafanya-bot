@@ -44,7 +44,12 @@ export class PublicationDelivery {
     }
     return true;
   }
-  async deliver(items) {
+  serial(operation) {
+    const result=(this.serialTail||Promise.resolve()).then(operation);
+    this.serialTail=result.catch(()=>{});return result;
+  }
+  deliver(items) {return this.serial(()=>this.deliverCore(items));}
+  async deliverCore(items) {
     if(!items.length)return {ackIds:[]};
     await this.load();
     const p=items[0].publication;
@@ -91,18 +96,20 @@ export class PublicationDelivery {
       if(receipt.nextAttemptAt>this.now()||attempts>=4)continue;
       if(protectedRefs.has(receipt.ref))throw new Error('publication_cleanup_targets_current');
       attempts++;
-      const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash).catch(()=>({deleted:false,reason:'delete_failed'}));
+      const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash).catch(error=>({deleted:false,reason:'delete_failed',detail:String(error?.message||error).split('\n')[0].slice(0,250)}));
       if(result?.deleted)stream.cleanup=stream.cleanup.filter(item=>item.ref!==receipt.ref);
-      else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';this.report('publication_cleanup_pending');}
+      else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';receipt.lastError=result?.detail||null;this.report('publication_cleanup_pending');}
       await this.save();
     }
     this.report(stream.cleanup.length?'publication_cleanup_pending':null);
   }
-  async retryCleanup() {
+  retryCleanup() {return this.serial(()=>this.retryCleanupCore());}
+  async retryCleanupCore() {
     await this.load();
     for(const [scope,stream] of Object.entries(this.state.streams))if(scope.startsWith(this.meetingScope+':'))await this.cleanupStream(stream);
   }
-  async inspect() {
+  inspect() {return this.serial(()=>this.inspectCore());}
+  async inspectCore() {
     await this.load();
     const publications=[];
     for(const [scope,stream] of Object.entries(this.state.streams)) {
@@ -113,7 +120,7 @@ export class PublicationDelivery {
       }
       let controls=null;
       for(const receipt of stream.cleanup){controls=await this.adapter.inspectOwnControls(receipt.ref).catch(()=>null);if(controls)break;}
-      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,reasons:stream.cleanup.map(item=>item.lastReason||null),controls});
+      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,reasons:stream.cleanup.map(item=>({reason:item.lastReason||null,error:item.lastError||null})),controls});
     }
     return {publications,warning:this.warning};
   }
