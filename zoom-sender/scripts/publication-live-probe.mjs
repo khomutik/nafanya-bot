@@ -16,5 +16,6 @@ if(command==='action') {
   const response=await fetch('http://127.0.0.1:3097/publication-status',{headers:{'x-nafanya-zoom-secret':secret}});
   const delivery=response.ok?await response.json():{httpStatus:response.status};
   const status=await (await fetch(workerBase+'/zoom-only/status',{headers:{'x-nafanya-zoom-panel-token':panelToken}})).json();
-  console.log(JSON.stringify({health,delivery,outboxSize:status.outboxSize,queues:Object.fromEntries(Object.entries(status.meetingBoards||{}).map(([key,b])=>[key,{queue:b.entries?.length,topics:b.additionalTopics?.length}])),speaker:status.speakerQuestions?.entries?.length}));
+  const ourTests=items=>(items||[]).filter(item=>item.text.startsWith('\u0416\u043e\u0440\u0438\u043a:')&&item.text.includes('08.10')).map(item=>({id:item.id,text:item.text,status:item.status}));
+  console.log(JSON.stringify({health,delivery,outboxSize:status.outboxSize,queues:Object.fromEntries(Object.entries(status.meetingBoards||{}).map(([key,b])=>[key,{queue:b.entries?.length,topics:b.additionalTopics?.length,testEntries:ourTests(b.entries),testTopics:ourTests(b.additionalTopics)}])),speaker:status.speakerQuestions?.entries?.length,testSpeaker:ourTests(status.speakerQuestions?.entries)}));
 }else throw new Error('Unknown live probe command');

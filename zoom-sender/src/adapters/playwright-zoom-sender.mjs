@@ -971,9 +971,29 @@ export class PlaywrightZoomSender {
   }
   async locateOwnMessage(ref) {
     if(!this.page||!isZoomMessageRef(ref))return null;
-    let target=this.page.locator(`[data-id="${ref}"]`).first();
-    if(!await target.count())target=this.page.locator(`[id="${ref}"]`).first();
-    if(!await target.count())return null;
+    const candidate=()=>this.page.locator(`[data-id="${ref}"],[id="${ref}"]`).first();
+    let target=candidate();
+    if(!await target.count()) {
+      // Zoom virtualizes the chat: off-screen messages can be absent from the DOM.
+      const scrollChat=async mode=>this.page.evaluate(mode=>{
+        const anchor=[...document.querySelectorAll('[data-id]')].find(el=>/^\d+-\{[0-9a-f-]{20,}\}$/i.test(el.getAttribute('data-id')||''));
+        for(let node=anchor?.parentElement;node&&node!==document.body;node=node.parentElement) {
+          const style=getComputedStyle(node);
+          if(node.scrollHeight>node.clientHeight+10&&/(auto|scroll)/.test(style.overflowY)) {
+            const before=node.scrollTop;node.scrollTop=mode==='bottom'?node.scrollHeight:Math.max(0,before-Math.max(120,node.clientHeight*.8));
+            return {before,after:node.scrollTop};
+          }
+        }
+        return null;
+      },mode);
+      await scrollChat('bottom');await this.page.waitForTimeout(150);
+      for(let attempt=0;attempt<24&&!await candidate().count();attempt++) {
+        const moved=await scrollChat('up');await this.page.waitForTimeout(150);
+        if(!moved||moved.before===moved.after)break;
+      }
+      target=candidate();
+      if(!await target.count()){await scrollChat('bottom');return null;}
+    }
     await target.scrollIntoViewIfNeeded({timeout:3000});
     const records=await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000});
     const record=records.find(item=>item.sourceMessageId===ref&&isOwnIdentityChatRecord(item));
@@ -985,6 +1005,7 @@ export class PlaywrightZoomSender {
     if(/^(?:You deleted|This message was deleted|\u0412\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438|\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u043e)/iu.test(found.record.text))return {deleted:true};
     if(publicationTextHash(found.record.text)!==expectedHash)return {deleted:false,reason:'message_content_mismatch'};
     const target=found.target;
+    const containerId=found.record.itemId;
     await target.hover({timeout:3000});
     // Toolbar belongs to the UUID-bearing message, never to an unrelated chat row.
     let row=target;
@@ -1005,9 +1026,9 @@ export class PlaywrightZoomSender {
       await confirm.click({timeout:3000});
     }
     for(let attempt=0;attempt<12;attempt++) {
-      if(!await target.count())return {deleted:true};
-      const text=await target.innerText().catch(()=>null);
-      const deletedClass=await target.locator('[class*="deleted"],[class*="removed"]').count().catch(()=>0);
+      const evidence=await target.count()?target:containerId?this.page.locator(`[id="${containerId}"]`).first():null;
+      const text=evidence&&await evidence.count()?await evidence.innerText().catch(()=>null):null;
+      const deletedClass=evidence&&await evidence.count()?await evidence.locator('[class*="deleted"],[class*="removed"]').count().catch(()=>0):0;
       if(text!==null && (deletedClass || /(?:message.{0,30}deleted|deleted.{0,30}message|\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435.{0,35}\u0443\u0434\u0430\u043b|\u0443\u0434\u0430\u043b.{0,35}\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435)/iu.test(text)))return {deleted:true};
       await this.page.waitForTimeout(250);
     }
