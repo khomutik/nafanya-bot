@@ -63,3 +63,20 @@ test('different meeting and date have independent publication receipts',async()=
   const tomorrow=messages(3,['Tomorrow']).map(item=>({...item,publication:{...item.publication,id:'2026-10-09:3',sessionDate:'2026-10-09'}}));
   await f.delivery.deliver(tomorrow);assert.ok([...f.adapter.messages.values()].includes('Meeting A'));assert.deepEqual(f.adapter.deleted,[]);
 });
+test('inaccessible old receipts cannot starve deletion of a fresh previous snapshot',async()=>{
+  const f=await fixture();await f.delivery.deliver(messages(1,['Old']));
+  const stream=f.delivery.state.streams['test-meeting:2026-10-08:meeting_board'];
+  stream.cleanup=Array.from({length:5},(_,i)=>({ref:`gone-${i}`,hash:publicationTextHash('Gone'),nextAttemptAt:0,lastReason:'message_not_found_or_not_own'}));
+  const remove=f.adapter.deleteOwnMessage.bind(f.adapter);
+  f.adapter.deleteOwnMessage=(ref,hash)=>ref.startsWith('gone-')?Promise.resolve({deleted:false,reason:'message_not_found_or_not_own'}):remove(ref,hash);
+  await f.delivery.deliver(messages(2,['New']));assert.ok(![...f.adapter.messages.values()].includes('Old'));assert.ok([...f.adapter.messages.values()].includes('New'));
+  await f.delivery.deliver(messages(3,['Speaker'],'speaker_questions'));
+  assert.equal(f.delivery.warning,'publication_cleanup_pending','Successful independent streams must not hide outstanding cleanup');
+});
+test('a new Zoom participant session produces a specific history-unavailable warning',async()=>{
+  const f=await fixture();let prefix='13';
+  f.adapter.sendMessage=async()=>({sent:true,ack:true,messageRef:`${prefix}-{11111111-2222-3333-4444-555555555555}`});
+  f.adapter.deleteOwnMessage=async()=>({deleted:false,reason:'message_not_found_or_not_own'});
+  await f.delivery.deliver(messages(1,['Previous session']));prefix='14';await f.delivery.deliver(messages(2,['New session']));
+  assert.equal(f.delivery.warning,'publication_previous_session_unavailable');
+});

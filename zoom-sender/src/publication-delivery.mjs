@@ -32,7 +32,11 @@ export class PublicationDelivery {
   report(code=null) {
     const pendingDeletes=Object.values(this.state?.streams||{}).reduce((n,s)=>n+(s.cleanup?.length||0),0);
     const pendingSends=Object.values(this.state?.streams||{}).some(s=>Object.values(s.groups||{}).some(g=>Object.keys(g.pending||{}).length));
-    this.warning=code||(pendingSends?'publication_send_uncertain':pendingDeletes?'publication_cleanup_pending':null);
+    const previousSessionUnavailable=Object.values(this.state?.streams||{}).some(s=>{
+      const currentPrefixes=new Set(Object.values(s.groups[s.active]?.parts||{}).map(p=>p.ref.match(/^(\d+)-\{/u)?.[1]).filter(Boolean));
+      return currentPrefixes.size && s.cleanup.some(p=>{const prefix=p.ref.match(/^(\d+)-\{/u)?.[1];return prefix&&p.lastReason==='message_not_found_or_not_own'&&!currentPrefixes.has(prefix)});
+    });
+    this.warning=(previousSessionUnavailable&&(!code||code==='publication_cleanup_pending'))?'publication_previous_session_unavailable':code||(pendingSends?'publication_send_uncertain':pendingDeletes?'publication_cleanup_pending':null);
     this.health?.updatePublication?.({warning:this.warning,pendingDeletes});
   }
   async recoverPending(stream) {
