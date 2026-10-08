@@ -96,7 +96,7 @@ export class PublicationDelivery {
       if(receipt.nextAttemptAt>this.now()||attempts>=4)continue;
       if(protectedRefs.has(receipt.ref))throw new Error('publication_cleanup_targets_current');
       attempts++;
-      const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash).catch(error=>({deleted:false,reason:'delete_failed',detail:String(error?.message||error).split('\n')[0].slice(0,250)}));
+      const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash,{evidence:receipt.deleteEvidence,onBeforeDelete:async evidence=>{receipt.deleteEvidence=evidence;await this.save();}}).catch(error=>({deleted:false,reason:'delete_failed',detail:String(error?.message||error).split('\n')[0].slice(0,250)}));
       if(result?.deleted)stream.cleanup=stream.cleanup.filter(item=>item.ref!==receipt.ref);
       else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';receipt.lastError=result?.detail||null;this.report('publication_cleanup_pending');}
       await this.save();

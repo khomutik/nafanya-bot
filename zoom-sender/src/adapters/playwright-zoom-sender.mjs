@@ -301,6 +301,20 @@ function normalizeComparableChatText(value) {
   return String(value || "").replace(/\s+/gu, " ").trim();
 }
 
+async function scrollZoomChat(page,mode) {
+  return page.evaluate(mode=>{
+    const anchor=[...document.querySelectorAll('[data-id]')].find(el=>/^\d+-\{[0-9a-f-]{20,}\}$/i.test(el.getAttribute('data-id')||''));
+    for(let node=anchor?.parentElement;node&&node!==document.body;node=node.parentElement) {
+      const style=getComputedStyle(node);
+      if(node.scrollHeight>node.clientHeight+10&&/(auto|scroll)/.test(style.overflowY)) {
+        const before=node.scrollTop;node.scrollTop=mode==='bottom'?node.scrollHeight:Math.max(0,before-Math.max(120,node.clientHeight*.8));
+        return {before,after:node.scrollTop};
+      }
+    }
+    return null;
+  },mode);
+}
+
 function isZoomMessageRef(value) {
   return ZOOM_MESSAGE_REF_RE.test(String(value || ""));
 }
@@ -876,6 +890,7 @@ export class PlaywrightZoomSender {
     this.diagnosticsRun = diagnosticsRun;
     this.browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
     this.page = await this.browser.newPage();
+    this.browserSessionId = crypto.randomUUID();
     this.attachPageDiagnostics(this.page);
     await this.page.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -975,17 +990,7 @@ export class PlaywrightZoomSender {
     let target=candidate();
     if(!await target.count()) {
       // Zoom virtualizes the chat: off-screen messages can be absent from the DOM.
-      const scrollChat=async mode=>this.page.evaluate(mode=>{
-        const anchor=[...document.querySelectorAll('[data-id]')].find(el=>/^\d+-\{[0-9a-f-]{20,}\}$/i.test(el.getAttribute('data-id')||''));
-        for(let node=anchor?.parentElement;node&&node!==document.body;node=node.parentElement) {
-          const style=getComputedStyle(node);
-          if(node.scrollHeight>node.clientHeight+10&&/(auto|scroll)/.test(style.overflowY)) {
-            const before=node.scrollTop;node.scrollTop=mode==='bottom'?node.scrollHeight:Math.max(0,before-Math.max(120,node.clientHeight*.8));
-            return {before,after:node.scrollTop};
-          }
-        }
-        return null;
-      },mode);
+      const scrollChat=mode=>scrollZoomChat(this.page,mode);
       await scrollChat('bottom');await this.page.waitForTimeout(150);
       for(let attempt=0;attempt<24&&!await candidate().count();attempt++) {
         const moved=await scrollChat('up');await this.page.waitForTimeout(150);
@@ -999,11 +1004,25 @@ export class PlaywrightZoomSender {
     const record=records.find(item=>item.sourceMessageId===ref&&isOwnIdentityChatRecord(item));
     return record?{target,record}:null;
   }
-  async deleteOwnMessage(ref, expectedHash) {
-    const found=await this.locateOwnMessage(ref);
+  async ownDeletionNoteRefs() {
+    await scrollZoomChat(this.page,'bottom');await this.page.waitForTimeout(150);
+    return this.page.evaluate(()=>[...document.querySelectorAll('.chat-item-container__sys')].filter(el=>/^(?:\u0412\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438 (?:\u044d\u0442\u043e )?\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435|You deleted a message)$/iu.test((el.textContent||'').replace(/\s+/gu,' ').trim())).map(el=>el.closest('[data-id]')?.getAttribute('data-id')).filter(Boolean));
+  }
+  async deleteOwnMessage(ref, expectedHash, {evidence=null,onBeforeDelete=null}={}) {
+    this.browserSessionId ||= crypto.randomUUID();
+    if(evidence?.sessionId===this.browserSessionId) {
+      const notes=await this.ownDeletionNoteRefs();
+      if(notes.some(id=>!evidence.beforeNoteRefs.includes(id))&&!await this.locateOwnMessage(ref))return {deleted:true};
+    }
+    let found=await this.locateOwnMessage(ref);
     if(!found)return {deleted:false,reason:'message_not_found_or_not_own'};
     if(/^(?:You deleted|This message was deleted|\u0412\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438|\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u043e)/iu.test(found.record.text))return {deleted:true};
     if(publicationTextHash(found.record.text)!==expectedHash)return {deleted:false,reason:'message_content_mismatch'};
+    const beforeNoteRefs=await this.ownDeletionNoteRefs();
+    const deletionEvidence={sessionId:this.browserSessionId,beforeNoteRefs};
+    if(onBeforeDelete)await onBeforeDelete(deletionEvidence);
+    found=await this.locateOwnMessage(ref);
+    if(!found||publicationTextHash(found.record.text)!==expectedHash)return {deleted:false,reason:'message_changed_before_delete'};
     const target=found.target;
     const containerId=found.record.itemId;
     await target.hover({timeout:3000});
@@ -1026,6 +1045,8 @@ export class PlaywrightZoomSender {
       await confirm.click({timeout:3000});
     }
     for(let attempt=0;attempt<12;attempt++) {
+      const notes=await this.ownDeletionNoteRefs();
+      if(notes.some(id=>!beforeNoteRefs.includes(id))&&!await this.locateOwnMessage(ref))return {deleted:true};
       const evidence=await target.count()?target:containerId?this.page.locator(`[id="${containerId}"]`).first():null;
       const text=evidence&&await evidence.count()?await evidence.innerText().catch(()=>null):null;
       const deletedClass=evidence&&await evidence.count()?await evidence.locator('[class*="deleted"],[class*="removed"]').count().catch(()=>0):0;
