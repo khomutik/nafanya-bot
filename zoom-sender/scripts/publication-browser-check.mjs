@@ -22,4 +22,11 @@ try {
   assert.equal((await adapter.deleteOwnMessage(ref,publicationTextHash('Own queue'))).deleted,true,'A retained deletion marker is an idempotent success');
   assert.equal(await page.locator(`[id="${other}"]`).innerText(),'Own queue');
   console.log('Browser deletion checks passed: UUID/ownership/content guards, deletion marker, unchanged participant message.');
+  await page.setContent(`<div class="chat-item-container" data-id="${ref}" id="chat-item-container-0" aria-label="You to Everyone"><div id="${ref}" class="new-chat-message__text-box--self">New queue</div><div role="button" class="zmu-drop-down new-chat-message__options-button" onclick="document.getElementById('menu').hidden=false">…</div></div><div data-id="previous-note"><div class="chat-item-container__sys">Вы удалили сообщение</div></div><div id="menu" hidden><button onclick="document.getElementById('chat-item-container-0').remove();document.getElementById('menu').hidden=true;const note=document.createElement('div');note.setAttribute('data-id','new-deletion-note');note.innerHTML='<div class=chat-item-container__sys>Вы удалили сообщение</div>';document.body.append(note)">Delete</button></div>`);
+  let evidence;
+  const outcome=await adapter.deleteOwnMessage(ref,publicationTextHash('New queue'),{onBeforeDelete:async e=>{evidence=e;assert.deepEqual(e.beforeNoteRefs,['previous-note'])}});
+  assert.equal(outcome.deleted,true,'Recognize Zoom removing the old UUID and appending a separate system note');
+  assert.equal((await adapter.deleteOwnMessage(ref,publicationTextHash('New queue'),{evidence})).deleted,true,'Recover an already completed deletion in the same browser session');
+  assert.equal((await adapter.deleteOwnMessage(ref,publicationTextHash('New queue'),{evidence:{...evidence,sessionId:'another-browser'}})).deleted,false,'A new browser session cannot claim a previous deletion');
+  console.log('Native-style deletion-note checks passed: changed note UUID, persisted intent, session-bound recovery.');
 }finally{await browser.close();}

@@ -92,7 +92,10 @@ export class PublicationDelivery {
   async cleanupStream(stream) {
     const protectedRefs=new Set(Object.values(stream.groups[stream.active]?.parts||{}).map(p=>p.ref));
     let attempts=0;
-    for(const receipt of [...stream.cleanup]) {
+    const due=[...stream.cleanup].sort((a,b)=>Number(a.nextAttemptAt!==0)-Number(b.nextAttemptAt!==0)
+      || Number(a.lastReason==='message_not_found_or_not_own')-Number(b.lastReason==='message_not_found_or_not_own')
+      || a.nextAttemptAt-b.nextAttemptAt);
+    for(const receipt of due) {
       if(receipt.nextAttemptAt>this.now()||attempts>=4)continue;
       if(protectedRefs.has(receipt.ref))throw new Error('publication_cleanup_targets_current');
       attempts++;
