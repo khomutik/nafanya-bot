@@ -768,7 +768,12 @@ function normalizeZoomOutboxItem(value) {
   const coalesceKey = String(source.coalesceKey || "").trim().slice(0, 160);
   const coalesceVersion = Math.max(0, Math.floor(Number(source.coalesceVersion) || 0));
   if (!id || !text) return null;
-  return { id, text, createdAt, ...(coalesceKey ? { coalesceKey, coalesceVersion } : {}) };
+  const publication = source.publication;
+  const validPublication = publication && ["meeting_board", "speaker_questions"].includes(publication.key)
+    && typeof publication.id === "string" && /^\d{4}-\d{2}-\d{2}:\d+$/u.test(publication.id)
+    && Number.isInteger(publication.partIndex) && Number.isInteger(publication.partCount)
+    && publication.partCount > 0 && publication.partCount <= 300 && publication.partIndex >= 0 && publication.partIndex < publication.partCount;
+  return { id, text, createdAt, ...(coalesceKey ? { coalesceKey, coalesceVersion } : {}), ...(validPublication ? { publication } : {}) };
 }
 __name(normalizeZoomOutboxItem, "normalizeZoomOutboxItem");
 function normalizeZoomMeetingRuntimeState(value) {
@@ -1161,8 +1166,10 @@ var ZoomMeetingStateDurableObject = class {
   async saveState(runtimeState) {
     await this.state.storage.put("zoom-meeting-state", normalizeZoomMeetingRuntimeState(runtimeState));
   }
-  appendMessages(runtimeState, messages, { coalesceKey = "", coalesceVersion = 0, replaceCoalescePrefixes = [] } = {}) {
+  appendMessages(runtimeState, messages, { coalesceKey = "", coalesceVersion = 0, replaceCoalescePrefixes = [], publication = null } = {}) {
     const createdAt = Date.now();
+    const texts = (Array.isArray(messages) ? messages : []).map((message) => String(message || "").trim()).filter(Boolean);
+    if (publication && texts.length > 300) throw new Error("zoom_publication_too_large");
     const normalizedCoalesceKey = String(coalesceKey || "").trim().slice(0, 160);
     const normalizedPrefixes = (Array.isArray(replaceCoalescePrefixes) ? replaceCoalescePrefixes : []).map((prefix) => String(prefix || "").trim().slice(0, 160)).filter(Boolean);
     if (normalizedCoalesceKey || normalizedPrefixes.length) {
@@ -1172,12 +1179,10 @@ var ZoomMeetingStateDurableObject = class {
         return !normalizedPrefixes.some((prefix) => itemKey.startsWith(prefix));
       });
     }
-    const queued = (Array.isArray(messages) ? messages : [])
-      .map((message) => String(message || "").trim())
-      .filter(Boolean)
-      .map((text) => {
+    const queued = texts.map((text, partIndex) => {
         const item = { id: runtimeState.zoomOnlyOutboxNextId, text, createdAt,
-          ...(normalizedCoalesceKey ? { coalesceKey: normalizedCoalesceKey, coalesceVersion: Math.max(0, Math.floor(Number(coalesceVersion) || 0)) } : {}) };
+          ...(normalizedCoalesceKey ? { coalesceKey: normalizedCoalesceKey, coalesceVersion: Math.max(0, Math.floor(Number(coalesceVersion) || 0)) } : {}),
+          ...(publication ? { publication: { ...publication, partIndex, partCount: texts.length } } : {}) };
         runtimeState.zoomOnlyOutboxNextId += 1;
         return item;
       });
@@ -1190,9 +1195,11 @@ var ZoomMeetingStateDurableObject = class {
   deliverBoardMessages(runtimeState, messages, payload = {}, metadata = {}) {
     const key = String(metadata.key || "").trim();
     const dayKey = String(payload.dayKey || runtimeState.zoomMeetingBoard?.dayKey || "").trim();
-    const coalesceKey = key === "meeting_board" && dayKey ? `meeting_board:${dayKey}` : key === "speaker_questions" ? "speaker_questions" : "";
-    const replaceCoalescePrefixes = payload.boardAction === "clear_all" && key === "meeting_board" ? ["meeting_board:"] : [];
-    return { queued: this.appendMessages(runtimeState, messages, { coalesceKey, coalesceVersion: metadata.version, replaceCoalescePrefixes }), deliveryMessages: [] };
+    const coalesceKey = ["meeting_board", "speaker_questions"].includes(key) ? key : "";
+    const replaceCoalescePrefixes = key === "meeting_board" ? ["meeting_board:"] : [];
+    const sessionDate = String(payload.sessionDate || runtimeState.zoomMeetingBoard?.sessionDate || runtimeState.zoomSpeakerQuestions?.sessionDate || "");
+    const publication = coalesceKey ? { key, id: `${sessionDate}:${runtimeState.zoomOnlyOutboxNextId}`, sessionDate, version: metadata.version, dayKey } : null;
+    return { queued: this.appendMessages(runtimeState, messages, { coalesceKey, coalesceVersion: metadata.version, replaceCoalescePrefixes, publication }), deliveryMessages: [] };
   }
   rememberRequest(target, requestId) {
     const id = String(requestId || "").trim();
@@ -1428,7 +1435,13 @@ var ZoomMeetingStateDurableObject = class {
         const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
         const minId = Number(payload.minId) || 0;
         const messages = runtimeState.zoomOnlyOutbox.filter((item) => !minId || Number(item.id) >= minId);
-        return Response.json({ ok: true, messages: messages.slice(0, limit) });
+        const selected = messages.slice(0, limit);
+        if (payload.completePublications === true) {
+          const publicationIds = new Set(selected.map(item => item.publication?.id).filter(Boolean));
+          const selectedIds = new Set(selected.map(item => item.id));
+          return Response.json({ ok: true, messages: messages.filter(item => selectedIds.has(item.id) || publicationIds.has(item.publication?.id)) });
+        }
+        return Response.json({ ok: true, messages: selected });
       }
       if (action === "ack_messages") {
         const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
@@ -3067,7 +3080,7 @@ async function handleZoomOnlyBridgeRequest(request, env) {
     if (Array.isArray(payload.ackIds) && payload.ackIds.length) {
       await callZoomMeetingState(env, "ack_messages", { ids: payload.ackIds });
     }
-    const result = await callZoomMeetingState(env, "pull_messages", { limit: payload.limit || 20 });
+    const result = await callZoomMeetingState(env, "pull_messages", { limit: payload.limit || 20, completePublications: payload.completePublications === true });
     return Response.json({ ok: true, botName: ZOOM_BOT_NAME, messages: result.messages || [] });
   }
   if (url.pathname === "/zoom-only/status") {

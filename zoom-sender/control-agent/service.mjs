@@ -24,7 +24,8 @@ function publicHealth(health = null) {
       httpStatus: Number.isInteger(health.lastWorkerError.httpStatus) ? health.lastWorkerError.httpStatus : null,
       message: safeError(health.lastWorkerError.message || "")
     } : null,
-    lastError: health.lastError ? safeError(health.lastError?.message || health.lastError) : null
+    lastError: health.lastError ? safeError(health.lastError?.message || health.lastError) : null,
+    publicationWarning: health.publication?.warning ? String(health.publication.warning) : null
   };
 }
 

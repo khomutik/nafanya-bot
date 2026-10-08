@@ -31,6 +31,7 @@ export function loadConfig(env = process.env) {
     chatReadonlyDiagnostics: readBool(env.ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS, false),
     headless: readBool(env.HEADLESS ?? env.ZOOM_SENDER_HEADLESS, true),
     userDataDir: String(env.ZOOM_SENDER_USER_DATA_DIR || "/app/profile").trim(),
+    publicationStateFile: String(env.ZOOM_PUBLICATION_STATE_FILE || "/app/profile/nafanya-publications.json").trim(),
     diagnosticsDir: String(env.ZOOM_SENDER_DIAGNOSTICS_DIR || (readBool(env.ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS, false) ? "/app/diagnostics" : "")).trim(),
     browserArgs: readList(env.ZOOM_SENDER_BROWSER_ARGS),
     minIntervalMs,

@@ -1759,6 +1759,33 @@ async function testEditingAndCompactQueueActions() {
   assert.equal(services.split('\n').filter(line => line.startsWith('\u2022')).length, 10);
 }
 
+async function testCompletePublicationBatches() {
+  const env=makeEnv();
+  for(let i=0;i<85;i++) {
+    const response=await postPanelAction(env,{action:'meeting_board_add_entry',dayKey:'thursday',text:`${i} ${'x'.repeat(280)}`,requestId:`publication-${i}`});
+    assert.equal(response.status,200);
+  }
+  let response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1})}),env);
+  assert.equal((await json(response)).messages.length,1,'Legacy limit remains unchanged');
+  response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1,completePublications:true})}),env);
+  let batch=(await json(response)).messages;
+  assert.ok(batch.length>20);
+  assert.equal(new Set(batch.map(item=>item.publication.id)).size,1);
+  assert.equal(batch[0].publication.partCount,batch.length);
+  assert.deepEqual(batch.map(item=>item.publication.partIndex),Array.from({length:batch.length},(_,i)=>i));
+  await postPanelAction(env,{action:'meeting_board_publish',dayKey:'friday',requestId:'different-day'});
+  batch=await pullOutbox(env);
+  assert.equal(batch.length,1,'Changing weekday replaces an unsent meeting-board publication');
+  assert.equal(batch[0].publication.dayKey,'friday');
+  await postPanelAction(env,{action:'speaker_questions_publish',requestId:'speaker-snapshot'});
+  batch=await pullOutbox(env);
+  assert.deepEqual(batch.map(item=>item.publication.key),['meeting_board','speaker_questions'],'The two publication streams remain independent');
+  await postPanelAction(env,{type:'message',key:'prayer',requestId:'plain-prayer'});
+  batch=await pullOutbox(env);
+  assert.equal(batch.at(-1).publication,undefined,'Ordinary meeting messages are never marked for replacement');
+}
+
+await testCompletePublicationBatches();
 await testEditingAndCompactQueueActions();
 await testAccess();
 await testRetiredLegacyZoomSurface();

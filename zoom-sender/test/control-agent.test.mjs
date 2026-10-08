@@ -242,7 +242,8 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /\$\("stop"\)\.disabled=busy\|\|!s\.running/u);
   assert.match(html, /let pendingMessage=""/u);
   assert.match(html, /pendingMessage=data\.error\|\|"Операция не выполнена"/u);
-  assert.match(html, /\[s\.lastError,pendingMessage,next\]/u);
+  assert.match(html, /s\.health\?\.publicationWarning/u);
+  assert.match(html, /pendingMessage,next\]/u);
   assert.match(html, /button:active,.auth-link:active\{transform:translateY\(2px\)/u);
   assert.match(html, /box-shadow:0 3px 0 #777267/u);
   assert.match(html, /class="power-row">[\s\S]*id="start"[\s\S]*id="stop"[\s\S]*<\/div>/u);

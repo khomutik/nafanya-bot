@@ -7,6 +7,7 @@ import { MockWorkerOutboxClient } from "./mock-worker-client.mjs";
 import { DryRunZoomSender } from "./adapters/dry-run.mjs";
 import { PlaywrightZoomSender } from "./adapters/playwright-zoom-sender.mjs";
 import { ZoomSenderService } from "./sender.mjs";
+import { PublicationDelivery } from "./publication-delivery.mjs";
 
 const logger = console;
 const config = loadConfig();
@@ -18,8 +19,10 @@ const workerClient = config.mockOutbox ? new MockWorkerOutboxClient(config) : ne
 const zoomAdapter = config.dryRun
   ? new DryRunZoomSender({ logger })
   : new PlaywrightZoomSender(config, { logger });
-const service = new ZoomSenderService({ workerClient, zoomAdapter, backoff, health, logger, zoomRecoveryAfterMs: config.zoomRecoveryAfterMs });
-const healthServer = startHealthServer(config, health, logger);
+const meetingScope = config.outboxMeetingId || String(config.zoomMeetingUrl).match(/\/(?:j|wc)\/(\d+)/u)?.[1] || "configured-meeting";
+const publicationDelivery = config.dryRun || config.mockOutbox ? null : new PublicationDelivery({filePath:config.publicationStateFile,meetingScope,adapter:zoomAdapter,health});
+const service = new ZoomSenderService({ workerClient, zoomAdapter, publicationDelivery, backoff, health, logger, zoomRecoveryAfterMs: config.zoomRecoveryAfterMs });
+const healthServer = startHealthServer(config, health, logger, publicationDelivery);
 
 async function shutdown(signal) {
   logger.info?.(`Zoom Sender received ${signal}; stopping`);
