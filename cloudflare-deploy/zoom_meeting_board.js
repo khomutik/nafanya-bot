@@ -116,7 +116,7 @@ export function buildMeetingBoardText(state, topicTexts) {
 
 export function buildSpeakerQuestionsText(state) {
   const speaker = normalizeSpeakerQuestionsState(state);
-  const lines = speaker.entries.map((item, index) => `${index + 1}. ${item.text}`);
+  const lines = speaker.entries.map((item, index) => `${index + 1}. ${item.status === "spoken" ? "\u2705 " : ""}${item.text}`);
   return [
     "\u0412\u041e\u041f\u0420\u041e\u0421\u042b \u0421\u041f\u0418\u041a\u0415\u0420\u0423",
     "\uD83D\uDC49 \u0414\u043b\u044f \u0442\u043e\u0433\u043e, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0434\u0430\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441 \u0441\u043f\u0438\u043a\u0435\u0440\u0443 \u0433\u043e\u043b\u043e\u0441\u043e\u043c, \u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u0447\u0430\u0442\u0435 \u00ab111\u00bb\n\u270D\uFE0F \u041b\u0438\u0431\u043e \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441 \u0432 \u0447\u0430\u0442\u0435 \u0438 \u0435\u0433\u043e \u0437\u0430\u0434\u0430\u0441\u0442 \u0432\u0435\u0434\u0443\u0449\u0438\u0439",
