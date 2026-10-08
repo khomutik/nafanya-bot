@@ -389,6 +389,7 @@ var EVENING_ANNOUNCEMENT_ID = 2385;
 var DAILY_15_ANNOUNCEMENT_ID = 3053;
 var DAILY_17_ANNOUNCEMENT_ID = 2524;
 var DAILY_22_ANNOUNCEMENT_ID = 4191;
+var DAILY_22_50_ANNOUNCEMENT_ID = 5941;
 var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
 var WEEKDAY_TECH_ANNOUNCEMENTS = [
   { key: "monday", weekday: 1, sourceMessageId: 2893 },
@@ -3761,6 +3762,7 @@ var worker_default = {
       ]),
       runScheduledTaskOncePerDay(env, "daily_22_00", 22, 0, () => sendAnnouncementCopyToGroup(env, DAILY_22_ANNOUNCEMENT_ID), 120),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
+      runScheduledTaskOncePerDay(env, "daily_22_50", 22, 50, () => sendAnnouncementCopyToGroup(env, DAILY_22_50_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "evening_23_00", 23, 0, () => sendAnnouncementCopyToGroup(env, EVENING_ANNOUNCEMENT_ID)),
       ...PERSONAL_DAY_SCHEDULE.map((item) => runScheduledTaskOncePerDay(
         env,
