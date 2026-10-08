@@ -30,9 +30,10 @@ export class PublicationDelivery {
     await rename(temporary,this.filePath);
   }
   report(code=null) {
-    this.warning=code;
     const pendingDeletes=Object.values(this.state?.streams||{}).reduce((n,s)=>n+(s.cleanup?.length||0),0);
-    this.health?.updatePublication?.({warning:code,pendingDeletes});
+    const pendingSends=Object.values(this.state?.streams||{}).some(s=>Object.values(s.groups||{}).some(g=>Object.keys(g.pending||{}).length));
+    this.warning=code||(pendingSends?'publication_send_uncertain':pendingDeletes?'publication_cleanup_pending':null);
+    this.health?.updatePublication?.({warning:this.warning,pendingDeletes});
   }
   async recoverPending(stream) {
     for(const group of Object.values(stream.groups))for(const [index,pending] of Object.entries(group.pending||{})) {
@@ -111,7 +112,7 @@ export class PublicationDelivery {
         current.push({ref:part.ref,expectedHash:part.hash,found:!!found,actualHash:found?publicationTextHash(found.record.text):null});
       }
       let controls=null;
-      if(stream.cleanup[0])controls=await this.adapter.inspectOwnControls(stream.cleanup[0].ref).catch(()=>null);
+      for(const receipt of stream.cleanup){controls=await this.adapter.inspectOwnControls(receipt.ref).catch(()=>null);if(controls)break;}
       publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,reasons:stream.cleanup.map(item=>item.lastReason||null),controls});
     }
     return {publications,warning:this.warning};
