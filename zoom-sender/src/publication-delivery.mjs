@@ -92,7 +92,7 @@ export class PublicationDelivery {
       attempts++;
       const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash).catch(()=>({deleted:false,reason:'delete_failed'}));
       if(result?.deleted)stream.cleanup=stream.cleanup.filter(item=>item.ref!==receipt.ref);
-      else {receipt.nextAttemptAt=this.now()+this.retryMs;this.report('publication_cleanup_pending');}
+      else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';this.report('publication_cleanup_pending');}
       await this.save();
     }
     this.report(stream.cleanup.length?'publication_cleanup_pending':null);
@@ -112,7 +112,7 @@ export class PublicationDelivery {
       }
       let controls=null;
       if(stream.cleanup[0])controls=await this.adapter.inspectOwnControls(stream.cleanup[0].ref).catch(()=>null);
-      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,controls});
+      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,reasons:stream.cleanup.map(item=>item.lastReason||null),controls});
     }
     return {publications,warning:this.warning};
   }

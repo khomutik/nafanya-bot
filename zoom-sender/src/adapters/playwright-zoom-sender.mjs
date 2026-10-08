@@ -991,7 +991,7 @@ export class PlaywrightZoomSender {
     const parent=target.locator('xpath=ancestor-or-self::*[@data-id][1]');
     if(await parent.count())row=parent;
     const more=row.locator('button,[role="button"]').filter({hasText:/^\s*(?:\.\.\.|\u2026)\s*$/u});
-    let opener=row.locator('button[aria-label*="more" i],button[aria-label*="\u0435\u0449" i],button[title*="more" i],[class*="more-icon"],[class*="more-button"]');
+    let opener=row.locator('button.zmu-drop-down.new-chat-message__options-button,button[aria-label="More" i],button[aria-label="Chat message options" i],button[aria-label*="\u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439 \u0447\u0430\u0442\u0430" i]');
     if(!await opener.count())opener=more;
     if(!await opener.count())return {deleted:false,reason:'message_menu_missing'};
     await opener.first().click({timeout:3000});
