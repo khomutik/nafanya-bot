@@ -8,7 +8,8 @@
     "debug:sender": "node src/main.mjs",
     "debug:control": "node control-agent/main.mjs",
     "debug:stop": "node scripts/debug-stop.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:publication-browser": "node scripts/publication-browser-check.mjs"
   },
   "dependencies": {
     "playwright": "^1.56.0"

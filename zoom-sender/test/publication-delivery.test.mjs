@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PublicationDelivery, publicationTextHash } from '../src/publication-delivery.mjs';
@@ -50,4 +50,16 @@ test('persisted acknowledgements make replay idempotent and retain receipts',asy
 });
 test('changed content in an existing publication is rejected without deletion',async()=>{
   const f=await fixture();await f.delivery.deliver(messages(1,['Original']));await assert.rejects(()=>f.delivery.deliver(messages(1,['Different'])),/publication_content_changed/);assert.deepEqual(f.adapter.deleted,[]);
+});
+test('corrupt receipt state never causes sending or deletion',async()=>{
+  const f=await fixture();await writeFile(f.settings.filePath,'not valid JSON');
+  await assert.rejects(()=>f.delivery.deliver(messages(1,['New'])),/publication_state_unreadable/);
+  assert.equal(f.adapter.calls,0);assert.deepEqual(f.adapter.deleted,[]);
+});
+test('different meeting and date have independent publication receipts',async()=>{
+  const f=await fixture();await f.delivery.deliver(messages(1,['Meeting A']));
+  const other=new PublicationDelivery({...f.settings,meetingScope:'meeting-b'});await other.deliver(messages(2,['Meeting B']));
+  assert.ok([...f.adapter.messages.values()].includes('Meeting A'));
+  const tomorrow=messages(3,['Tomorrow']).map(item=>({...item,publication:{...item.publication,id:'2026-10-09:3',sessionDate:'2026-10-09'}}));
+  await f.delivery.deliver(tomorrow);assert.ok([...f.adapter.messages.values()].includes('Meeting A'));assert.deepEqual(f.adapter.deleted,[]);
 });

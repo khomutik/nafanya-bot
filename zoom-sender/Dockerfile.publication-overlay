@@ -1,0 +1,6 @@
+# Reuse the currently working browser/runtime for a small code-only deployment.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY --chown=node:node src /app/src
+COPY --chown=node:node control-agent /app/control-agent
+COPY --chown=node:node test /app/test
