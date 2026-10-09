@@ -2338,9 +2338,17 @@ function entryMatchesServiceName(entry, name, exactOnly = false) {
 }
 __name(entryMatchesServiceName, "entryMatchesServiceName");
 async function buildServicePersonMap(env) {
+  const canonicalPeople = [
+    { display_name: "\u041d\u0438\u043a\u0438\u0442\u043e\u0441", username: "iddqd977", telegram_user_id: "148524131", private_chat_id: "148524131" },
+    { display_name: "@iddqd977", username: "iddqd977", telegram_user_id: "148524131", private_chat_id: "148524131" },
+    { display_name: "\u041d\u0438\u043a\u0438\u0442\u0430 \u041c.", username: "rlinrec" },
+    { display_name: "\u041d\u0438\u043a\u0438\u0442\u0430 \u041c", username: "rlinrec" },
+    { display_name: "\u041d\u0438\u043a\u0438\u0442\u0430", username: "rlinrec" },
+    { display_name: "@rlinrec", username: "rlinrec" }
+  ];
   const fromEnv = parseServicePersonMapEnv(env);
   const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
-  return [...fromEnv, ...(subscriptions?.subscriptions || []).map(serviceMapEntryFromSubscription)];
+  return [...canonicalPeople, ...fromEnv, ...(subscriptions?.subscriptions || []).map(serviceMapEntryFromSubscription)];
 }
 __name(buildServicePersonMap, "buildServicePersonMap");
 function resolveServicePerson(map, name) {
