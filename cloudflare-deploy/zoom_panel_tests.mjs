@@ -1033,9 +1033,17 @@ async function testQueuePausedLibraryPanelAndActions() {
   assert.match(html, /\.publication-row label\{[^}]*font-size:17px/u);
   assert.match(html, /\.meeting-action\{height:56px;min-height:56px/u);
   assert.match(html, /\.state-row \.action\.rare\{min-height:27px/u);
-  assert.match(html, /\.state-row \.action\.frequent\{grid-column:1\/-1;width:100%/u);
+  assert.match(html, /row-actions/u);
   assert.match(html, /"danger rare"/u);
-  assert.match(html, /"frequent "\+\(spoken/u);
+  assert.match(html, /aria-pressed/u);
+  assert.match(html, /meeting_board_edit_entry|meeting_board_edit_topic/u);
+  for (const panel of [...html.matchAll(/<details class="day-panel(?: speaker)?"[^>]*>[\s\S]*?<\/details>/gu)]) {
+    const content = panel[0];
+    assert.match(content, /data-message-group="start"[\s\S]*data-message-group="middle"[\s\S]*data-message-group="end"/u);
+    const endKeys = [...content.slice(content.indexOf('data-message-group="end"')).matchAll(/data-message-key="([^"]+)"/gu)].map(match => match[1]);
+    assert.deepEqual(endKeys, ['meeting_schedule', 'group_sponsors', 'free_services', 'tea_rules', 'telemost_link', 'chat_cleanliness']);
+  }
+  assert.match(speakerPanelHtml, /data-message-key="scam_warning"[\s\S]*data-speaker-publish[\s\S]*data-message-group="end"/u);
   assert.match(html, /publication-big_book/u);
   assert.match(html, /publication-twelve_twelve/u);
   assert.match(html, /publication-living_sober/u);
@@ -1712,7 +1720,7 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
 
   let outbox = await pullOutbox(env);
   const prayerMessages = outbox.filter((item) => !item.coalesceKey);
-  const boardMessages = outbox.filter((item) => item.coalesceKey === "meeting_board:sunday");
+  const boardMessages = outbox.filter((item) => item.coalesceKey === "meeting_board");
   assert.equal(prayerMessages.length, 1, "A normal meeting message must not be coalesced away");
   assert.equal(boardMessages.length, 1, "Only the newest unsent board snapshot should remain");
   assert.match(boardMessages[0].text, /\u041c\u0430\u043d\u044f 111/u);
@@ -1739,6 +1747,98 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
 }
 
 testMeetingBoardUnicodeLimit();
+async function testEditingAndCompactQueueActions() {
+  const env = makeEnv();
+  const act = async payload => {
+    const response = await postPanelAction(env, { ...payload, requestId: crypto.randomUUID() });
+    const data = await json(response);
+    return { response, data };
+  };
+  let { data } = await act({ action: 'meeting_board_add_entry', dayKey: 'thursday', text: '111' });
+  const id = data.state.entries[0].id;
+  await act({ action: 'meeting_board_add_entry', dayKey: 'thursday', text: '222' });
+  await act({ action: 'meeting_board_mark_spoken', dayKey: 'thursday', id });
+  ({ data } = await act({ action: 'meeting_board_edit_entry', dayKey: 'thursday', id, expectedText: '111', text: '111 corrected' }));
+  assert.equal(data.state.entries[0].id, id);
+  assert.equal(data.state.entries[0].text, '111 corrected');
+  assert.equal(data.state.entries[0].status, 'spoken');
+  assert.equal(data.state.entries[1].text, '222');
+  assert.match((await pullOutbox(env)).at(-1).text, /111 corrected/u);
+  let result = await act({ action: 'meeting_board_edit_entry', dayKey: 'thursday', id, expectedText: '111', text: 'stale overwrite' });
+  assert.equal(result.response.status, 400, 'Reject a stale edit from a second host');
+  result = await act({ action: 'meeting_board_edit_entry', dayKey: 'thursday', id, expectedText: '111 corrected', text: '' });
+  assert.equal(result.response.status, 400);
+  await act({ action: 'meeting_board_restore_waiting', dayKey: 'thursday', id });
+  ({ data } = await act({ action: 'meeting_board_defer_entry', dayKey: 'thursday', id }));
+  assert.equal(data.state.entries[1].id, id);
+  assert.equal(data.state.entries[1].status, 'waiting');
+  ({ data } = await act({ action: 'meeting_board_add_topic', dayKey: 'thursday', text: 'Old topic' }));
+  const topicId = data.state.additionalTopics[0].id;
+  await act({ action: 'meeting_board_add_topic', dayKey: 'thursday', text: 'Another topic' });
+  ({ data } = await act({ action: 'meeting_board_edit_topic', dayKey: 'thursday', id: topicId, expectedText: 'Old topic', text: '1. New topic' }));
+  assert.equal(data.state.additionalTopics[0].id, topicId);
+  assert.equal(data.state.additionalTopics[0].text, 'New topic');
+  result = await act({ action: 'meeting_board_edit_topic', dayKey: 'thursday', id: topicId, expectedText: 'New topic', text: 'Another topic' });
+  assert.equal(result.response.status, 400, 'Prevent duplicate additional topics');
+  ({ data } = await act({ action: 'speaker_questions_add', text: 'First question' }));
+  const speakerId = data.state.entries[0].id;
+  await act({ action: 'speaker_questions_add', text: 'Second question' });
+  ({ data } = await act({ action: 'speaker_questions_edit', id: speakerId, expectedText: 'First question', text: 'Corrected question' }));
+  assert.equal(data.state.entries[0].id, speakerId);
+  assert.equal(data.state.entries[0].text, 'Corrected question');
+  ({ data } = await act({ action: 'speaker_questions_mark_spoken', id: speakerId }));
+  assert.equal(data.state.entries[0].status, 'spoken');
+  assert.match((await pullOutbox(env)).at(-1).text, /\u2705 Corrected question/u);
+  await act({ action: 'speaker_questions_restore_waiting', id: speakerId });
+  ({ data } = await act({ action: 'speaker_questions_defer', id: speakerId }));
+  assert.equal(data.state.entries[1].id, speakerId);
+  result = await act({ action: 'speaker_questions_edit', id: speakerId, expectedText: 'First question', text: 'stale' });
+  assert.equal(result.response.status, 400);
+  result = await act({ action: 'speaker_questions_edit', id: speakerId, expectedText: 'Corrected question', text: 'x'.repeat(301) });
+  assert.equal(result.response.status, 400);
+  result = await act({ action: 'speaker_questions_edit', id: speakerId, expectedText: 'Corrected question', text: 'Second question' });
+  assert.equal(result.response.status, 400);
+  assert.equal((await getZoomOnlyStatus(env)).speakerQuestions.entries[1].text, 'Corrected question');
+  await ackOutbox(env, (await pullOutbox(env)).map(item => item.id));
+  ({ data } = await act({ type: 'message', key: 'group_sponsors' }));
+  assert.equal(data.ok, true);
+  const sponsors = outboxTexts(await pullOutbox(env)).join('\n');
+  for (const contact of ['@VladimirRingo', '@iddqd977', '@khomutik', '+971502729577', '@pifagor71', '@katukatun', '@Well2456']) assert.ok(sponsors.includes(contact));
+  await ackOutbox(env, (await pullOutbox(env)).map(item => item.id));
+  ({ data } = await act({ type: 'message', key: 'free_services' }));
+  assert.equal(data.ok, true);
+  const services = outboxTexts(await pullOutbox(env)).join('\n');
+  assert.equal(services.split('\n').filter(line => line.startsWith('\u2022')).length, 10);
+}
+
+async function testCompletePublicationBatches() {
+  const env=makeEnv();
+  for(let i=0;i<85;i++) {
+    const response=await postPanelAction(env,{action:'meeting_board_add_entry',dayKey:'thursday',text:`${i} ${'x'.repeat(280)}`,requestId:`publication-${i}`});
+    assert.equal(response.status,200);
+  }
+  let response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1})}),env);
+  assert.equal((await json(response)).messages.length,1,'Legacy limit remains unchanged');
+  response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1,completePublications:true})}),env);
+  let batch=(await json(response)).messages;
+  assert.ok(batch.length>20);
+  assert.equal(new Set(batch.map(item=>item.publication.id)).size,1);
+  assert.equal(batch[0].publication.partCount,batch.length);
+  assert.deepEqual(batch.map(item=>item.publication.partIndex),Array.from({length:batch.length},(_,i)=>i));
+  await postPanelAction(env,{action:'meeting_board_publish',dayKey:'friday',requestId:'different-day'});
+  batch=await pullOutbox(env);
+  assert.equal(batch.length,1,'Changing weekday replaces an unsent meeting-board publication');
+  assert.equal(batch[0].publication.dayKey,'friday');
+  await postPanelAction(env,{action:'speaker_questions_publish',requestId:'speaker-snapshot'});
+  batch=await pullOutbox(env);
+  assert.deepEqual(batch.map(item=>item.publication.key),['meeting_board','speaker_questions'],'The two publication streams remain independent');
+  await postPanelAction(env,{type:'message',key:'prayer',requestId:'plain-prayer'});
+  batch=await pullOutbox(env);
+  assert.equal(batch.at(-1).publication,undefined,'Ordinary meeting messages are never marked for replacement');
+}
+
+await testCompletePublicationBatches();
+await testEditingAndCompactQueueActions();
 await testAccess();
 await testRetiredLegacyZoomSurface();
 await testSafeTestMessageAction();

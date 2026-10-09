@@ -1,7 +1,9 @@
+import { isManagedPublication } from './publication-delivery.mjs';
 export class ZoomSenderService {
-  constructor({ workerClient, zoomAdapter, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), zoomRecoveryAfterMs = 180000 }) {
+  constructor({ workerClient, zoomAdapter, publicationDelivery = null, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), zoomRecoveryAfterMs = 180000 }) {
     this.workerClient = workerClient;
     this.zoomAdapter = zoomAdapter;
+    this.publicationDelivery = publicationDelivery;
     this.backoff = backoff;
     this.health = health;
     this.logger = logger;
@@ -63,10 +65,11 @@ export class ZoomSenderService {
       }
       this.zoomUnreadySince = null;
       await this.zoomAdapter.observeChatDiagnostics?.();
-      const pulled = await this.workerClient.pull();
+      const pulled = await this.workerClient.pull(this.publicationDelivery ? {completePublications:true} : {});
       this.health.markWorkerPoll();
       const messages = Array.isArray(pulled.messages) ? pulled.messages : [];
       if (!messages.length) {
+        await this.publicationDelivery?.retryCleanup().catch(()=>this.health.updatePublication?.({warning:'publication_state_unavailable',pendingDeletes:0}));
         const delay = this.backoff.onMessages(0);
         this.health.updateBackoff(this.backoff);
         this.health.clearError();
@@ -74,7 +77,19 @@ export class ZoomSenderService {
       }
 
       const ackIds = [];
+      const handledPublications = new Set();
       for (const message of messages) {
+        if(this.publicationDelivery && isManagedPublication(message)) {
+          const publicationId=message.publication.id;
+          if(handledPublications.has(publicationId))continue;
+          handledPublications.add(publicationId);
+          try {
+            const result=await this.publicationDelivery.deliver(messages.filter(item=>item.publication?.id===publicationId));
+            ackIds.push(...result.ackIds);
+            if(result.ackIds.length)this.health.markSend();
+          } catch {this.health.updatePublication?.({warning:'publication_state_unavailable',pendingDeletes:0});}
+          continue;
+        }
         const id = Number(message.id);
         const text = String(message.text || "").trim();
         if (!id || !text) continue;

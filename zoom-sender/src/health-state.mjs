@@ -14,6 +14,7 @@ export class HealthState {
     this.lastOutboxPollAt = null;
     this.lastError = null;
     this.currentDelayMs = null;
+    this.publication = { warning: null, pendingDeletes: 0 };
   }
 
   markWorkerPoll() {
@@ -35,6 +36,7 @@ export class HealthState {
   markSend() {
     this.lastSuccessfulSendAt = Date.now();
   }
+  updatePublication(state) { this.publication = state; }
 
   markError(error) {
     this.lastError = {
@@ -80,6 +82,7 @@ export class HealthState {
       lastOutboxPollAt: this.lastOutboxPollAt,
       currentDelayMs: this.currentDelayMs,
       lastError: this.lastError,
+      publication: this.publication,
       uptimeMs: Date.now() - this.startedAt
     };
   }

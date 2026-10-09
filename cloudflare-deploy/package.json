@@ -1,6 +1,8 @@
 {
   "type": "module",
   "scripts": {
+    "deploy:production": "node scripts/deploy-production.mjs",
+    "preflight:production": "node scripts/deploy-preflight.mjs",
     "test": "node regression_tests.mjs",
     "test:addressing": "node --test message_addressing_tests.mjs",
     "test:quality": "node --test response_quality_tests.mjs",
@@ -8,9 +10,11 @@
     "test:regression-static": "node regression_tests.mjs --skip-live-knowledge",
     "test:queue": "node queue_engine_tests.mjs",
     "test:zoom-panel": "node zoom_panel_tests.mjs",
+    "test:zoom-browser": "node zoom_panel_browser_tests.mjs",
     "test:zoom-library": "node zoom_library_tests.mjs"
   },
   "devDependencies": {
+    "playwright": "1.64.0",
     "wrangler": "4.120.1"
   }
 }

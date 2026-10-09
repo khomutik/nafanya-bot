@@ -1,3 +1,4 @@
+import { publicationTextHash } from '../publication-delivery.mjs';
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
 const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435/iu, /\u0435\u0449\u0435/iu];
 const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
@@ -300,6 +301,20 @@ function normalizeComparableChatText(value) {
   return String(value || "").replace(/\s+/gu, " ").trim();
 }
 
+async function scrollZoomChat(page,mode) {
+  return page.evaluate(mode=>{
+    const anchor=[...document.querySelectorAll('[data-id]')].find(el=>/^\d+-\{[0-9a-f-]{20,}\}$/i.test(el.getAttribute('data-id')||''));
+    for(let node=anchor?.parentElement;node&&node!==document.body;node=node.parentElement) {
+      const style=getComputedStyle(node);
+      if(node.scrollHeight>node.clientHeight+10&&/(auto|scroll)/.test(style.overflowY)) {
+        const before=node.scrollTop;node.scrollTop=mode==='bottom'?node.scrollHeight:Math.max(0,before-Math.max(120,node.clientHeight*.8));
+        return {before,after:node.scrollTop};
+      }
+    }
+    return null;
+  },mode);
+}
+
 function isZoomMessageRef(value) {
   return ZOOM_MESSAGE_REF_RE.test(String(value || ""));
 }
@@ -328,7 +343,7 @@ function exactOwnChatRecords(records, text, excludedRefs = new Set()) {
 async function waitForOwnChatMessage(page, text, beforeRefs = new Set(), { timeoutMs = 6000, pollMs = 300 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
-    const records = await collectVisibleChatMessages(page);
+    const records = await collectVisibleChatMessages(page,{textLimit:4000,domLimit:10000});
     const matches = exactOwnChatRecords(records, text, beforeRefs);
     if (matches.length) return matches.at(-1);
     await page.waitForTimeout(pollMs).catch(() => null);
@@ -336,10 +351,10 @@ async function waitForOwnChatMessage(page, text, beforeRefs = new Set(), { timeo
   return null;
 }
 
-async function sendVerifiedChatText(page, text) {
+async function sendVerifiedChatText(page, text, { beforeRefs: suppliedRefs = null } = {}) {
   if (!await openChatPanel(page)) return { sent: false, ack: false, reason: "chat_not_open" };
   const before = await collectVisibleChatMessages(page);
-  const beforeRefs = new Set(before.filter(isOwnIdentityChatRecord).map((record) => String(record.sourceMessageId || record.itemDataId || "")).filter(Boolean));
+  const beforeRefs = new Set(suppliedRefs || before.filter(isOwnIdentityChatRecord).map((record) => String(record.sourceMessageId || record.itemDataId || "")).filter(Boolean));
   const sent = await sendChatText(page, text);
   if (!sent.sent) return sent;
   const record = await waitForOwnChatMessage(page, text, beforeRefs);
@@ -479,7 +494,7 @@ async function collectPageDiagnostics(page) {
   }));
 }
 
-async function collectVisibleChatMessages(page) {
+async function collectVisibleChatMessages(page, {textLimit=CHAT_DIAGNOSTIC_TEXT_LIMIT,domLimit=CHAT_DIAGNOSTIC_DOM_LIMIT} = {}) {
   return page.evaluate(({ textLimit, domLimit }) => {
     const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
     const zoomText = (element) => {
@@ -726,7 +741,7 @@ async function collectVisibleChatMessages(page) {
       })
       .filter((record) => record.text && record.sourceMessageId);
     return [...records.slice(-80), ...identityRecords];
-  }, { textLimit: CHAT_DIAGNOSTIC_TEXT_LIMIT, domLimit: CHAT_DIAGNOSTIC_DOM_LIMIT }).catch(() => []);
+  }, { textLimit, domLimit }).catch(() => []);
 }
 
 async function makeDiagnosticsDir(diagnosticsDir) {
@@ -875,6 +890,7 @@ export class PlaywrightZoomSender {
     this.diagnosticsRun = diagnosticsRun;
     this.browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
     this.page = await this.browser.newPage();
+    this.browserSessionId = crypto.randomUUID();
     this.attachPageDiagnostics(this.page);
     await this.page.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -955,13 +971,100 @@ export class PlaywrightZoomSender {
     return { ...this.presence };
   }
 
-  async sendMessage(text, { verifyOwn = false } = {}) {
+  async sendMessage(text, { verifyOwn = false, beforeRefs = null } = {}) {
     if (!this.page) return { sent: false, ack: false };
-    const result = verifyOwn ? await sendVerifiedChatText(this.page, text) : await sendChatText(this.page, text);
+    const result = verifyOwn ? await sendVerifiedChatText(this.page, text, {beforeRefs}) : await sendChatText(this.page, text);
     this.presence = await this.getPresence();
     return result;
   }
+  async ownMessageRefs(text) {
+    return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text).map(record=>record.sourceMessageId);
+  }
+  async findOwnSentMessage(text, beforeRefs = []) {
+    const matches=exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text,new Set(beforeRefs));
+    return matches.length===1?{messageRef:matches[0].sourceMessageId}:null;
+  }
+  async locateOwnMessage(ref) {
+    if(!this.page||!isZoomMessageRef(ref))return null;
+    const candidate=()=>this.page.locator(`[data-id="${ref}"],[id="${ref}"]`).first();
+    let target=candidate();
+    if(!await target.count()) {
+      // Zoom virtualizes the chat: off-screen messages can be absent from the DOM.
+      const scrollChat=mode=>scrollZoomChat(this.page,mode);
+      await scrollChat('bottom');await this.page.waitForTimeout(150);
+      for(let attempt=0;attempt<24&&!await candidate().count();attempt++) {
+        const moved=await scrollChat('up');await this.page.waitForTimeout(150);
+        if(!moved||moved.before===moved.after)break;
+      }
+      target=candidate();
+      if(!await target.count()){await scrollChat('bottom');return null;}
+    }
+    await target.scrollIntoViewIfNeeded({timeout:3000});
+    const records=await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000});
+    const record=records.find(item=>item.sourceMessageId===ref&&isOwnIdentityChatRecord(item));
+    return record?{target,record}:null;
+  }
+  async ownDeletionNoteRefs() {
+    await scrollZoomChat(this.page,'bottom');await this.page.waitForTimeout(150);
+    return this.page.evaluate(()=>[...document.querySelectorAll('.chat-item-container__sys')].filter(el=>/^(?:\u0412\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438 (?:\u044d\u0442\u043e )?\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435|You deleted a message)$/iu.test((el.textContent||'').replace(/\s+/gu,' ').trim())).map(el=>el.closest('[data-id]')?.getAttribute('data-id')).filter(Boolean));
+  }
+  async deleteOwnMessage(ref, expectedHash, {evidence=null,onBeforeDelete=null}={}) {
+    this.browserSessionId ||= crypto.randomUUID();
+    if(evidence?.sessionId===this.browserSessionId) {
+      const notes=await this.ownDeletionNoteRefs();
+      if(notes.some(id=>!evidence.beforeNoteRefs.includes(id))&&!await this.locateOwnMessage(ref))return {deleted:true};
+    }
+    let found=await this.locateOwnMessage(ref);
+    if(!found)return {deleted:false,reason:'message_not_found_or_not_own'};
+    if(/^(?:You deleted|This message was deleted|\u0412\u044b \u0443\u0434\u0430\u043b\u0438\u043b\u0438|\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u043e)/iu.test(found.record.text))return {deleted:true};
+    if(publicationTextHash(found.record.text)!==expectedHash)return {deleted:false,reason:'message_content_mismatch'};
+    const beforeNoteRefs=await this.ownDeletionNoteRefs();
+    const deletionEvidence={sessionId:this.browserSessionId,beforeNoteRefs};
+    if(onBeforeDelete)await onBeforeDelete(deletionEvidence);
+    found=await this.locateOwnMessage(ref);
+    if(!found||publicationTextHash(found.record.text)!==expectedHash)return {deleted:false,reason:'message_changed_before_delete'};
+    const target=found.target;
+    const containerId=found.record.itemId;
+    await target.hover({timeout:3000});
+    // Toolbar belongs to the UUID-bearing message, never to an unrelated chat row.
+    let row=target;
+    const parent=target.locator('xpath=ancestor-or-self::*[@data-id][1]');
+    if(await parent.count())row=parent;
+    const more=row.locator('button,[role="button"]').filter({hasText:/^\s*(?:\.\.\.|\u2026)\s*$/u});
+    let opener=row.locator('.zmu-drop-down.new-chat-message__options-button,[role="button"][aria-label="More" i],button[aria-label="More" i],[aria-label="Chat message options" i],[aria-label*="\u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439 \u0447\u0430\u0442\u0430" i]');
+    if(!await opener.count())opener=more;
+    if(!await opener.count())return {deleted:false,reason:'message_menu_missing'};
+    await opener.first().click({timeout:3000});
+    const remove=this.page.getByText(/^(?:Delete|\u0423\u0434\u0430\u043b\u0438\u0442\u044c)$/u,{exact:true}).filter({visible:true});
+    if(await remove.count()!==1){await this.page.keyboard.press('Escape');return {deleted:false,reason:'delete_command_missing'};}
+    await remove.click({timeout:3000});
+    const dialog=this.page.getByRole('dialog').filter({visible:true});
+    if(await dialog.count()) {
+      const confirm=dialog.getByRole('button',{name:/^(?:Delete|\u0423\u0434\u0430\u043b\u0438\u0442\u044c)$/u});
+      if(await confirm.count()!==1)return {deleted:false,reason:'delete_confirmation_unknown'};
+      await confirm.click({timeout:3000});
+    }
+    for(let attempt=0;attempt<12;attempt++) {
+      const notes=await this.ownDeletionNoteRefs();
+      if(notes.some(id=>!beforeNoteRefs.includes(id))&&!await this.locateOwnMessage(ref))return {deleted:true};
+      const evidence=await target.count()?target:containerId?this.page.locator(`[id="${containerId}"]`).first():null;
+      const text=evidence&&await evidence.count()?await evidence.innerText().catch(()=>null):null;
+      const deletedClass=evidence&&await evidence.count()?await evidence.locator('[class*="deleted"],[class*="removed"]').count().catch(()=>0):0;
+      if(text!==null && (deletedClass || /(?:message.{0,30}deleted|deleted.{0,30}message|\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435.{0,35}\u0443\u0434\u0430\u043b|\u0443\u0434\u0430\u043b.{0,35}\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435)/iu.test(text)))return {deleted:true};
+      await this.page.waitForTimeout(250);
+    }
+    return {deleted:false,reason:'deletion_not_verified'};
+  }
 
+  async inspectOwnControls(ref) {
+    const found=await this.locateOwnMessage(ref);if(!found)return null;
+    await found.target.hover();
+    return found.target.evaluate(element=>{
+      const parents=[];
+      for(let node=element,level=0;node&&level<4;node=node.parentElement,level++)parents.push({tag:node.tagName,classes:String(node.className),buttons:[...node.querySelectorAll('button,[role="button"]')].map(b=>({label:b.getAttribute('aria-label')||b.getAttribute('title')||b.textContent,classes:String(b.className)})).slice(0,15)});
+      return parents;
+    });
+  }
   async observeChatDiagnostics() {
     if (!this.config.chatReadonlyDiagnostics || !this.page || !this.diagnosticsRun) {
       return { enabled: Boolean(this.config.chatReadonlyDiagnostics), newMessages: 0, messages: [] };

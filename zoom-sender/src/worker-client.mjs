@@ -30,8 +30,8 @@ export class WorkerOutboxClient {
     return data;
   }
 
-  async pull({ limit = this.config.outboxLimit } = {}) {
-    return this.postOutbox({ limit });
+  async pull({ limit = this.config.outboxLimit, completePublications = false } = {}) {
+    return this.postOutbox({ limit, ...(completePublications ? { completePublications: true } : {}) });
   }
 
   async ack(ids = []) {
