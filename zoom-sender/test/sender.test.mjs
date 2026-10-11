@@ -456,12 +456,13 @@ test("real-mode browser launch uses safe Zoom Web Client flags", () => {
   assert.ok(DEFAULT_BROWSER_ARGS.includes("--disable-blink-features=AutomationControlled"));
 });
 
-test("sender explicitly turns microphone and video off after joining", async () => {
+test("sender leaves microphone untouched and only turns video off after joining", async () => {
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("../src/adapters/playwright-zoom-sender.mjs", import.meta.url), "utf8");
-  assert.match(source, /mute my microphone/iu);
+  assert.doesNotMatch(source, /MUTE_MICROPHONE_PATTERNS|mute my microphone|microphone\?\.click/iu);
   assert.match(source, /stop my video/iu);
-  assert.match(source, /await ensureMeetingMediaOff\(this\.page\)/u);
+  assert.match(source, /await ensureMeetingVideoOff\(this\.page\)/u);
+  assert.doesNotMatch(source, /await ensureMeetingMediaOff\(this\.page\)/u);
 });
 
 test("chat input lookup does not wait on every obsolete Zoom selector", async () => {

@@ -6,7 +6,6 @@ const COOKIE_BUTTON_PATTERNS = [/decline cookies/i, /accept cookies/i, /\u043e\u
 const JOIN_FROM_BROWSER_PATTERNS = [/join from browser/i, /\u0432\u043e\u0439\u0442\u0438.*\u0431\u0440\u0430\u0443\u0437\u0435\u0440/iu];
 const CONTINUE_WITHOUT_MEDIA_PATTERNS = [/continue without microphone and camera/i, /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu];
 const JOIN_MEETING_PATTERNS = [/join/i, /join meeting/i, /\u0432\u043e\u0439\u0442\u0438/iu, /\u043f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d/iu];
-const MUTE_MICROPHONE_PATTERNS = [/mute my microphone/i, /^mute$/i, /\u0432\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu];
 const STOP_VIDEO_PATTERNS = [/stop my video/i, /^stop video$/i, /\u0432\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c.*\u0432\u0438\u0434\u0435\u043e/iu, /\u043e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c.*\u0432\u0438\u0434\u0435\u043e/iu];
 const DIAGNOSTIC_TEXT_LIMIT = 12000;
 const DIAGNOSTIC_BODY_TEXT_LIMIT = 2000;
@@ -244,14 +243,11 @@ async function fillMeetingName(page, name) {
   }, name).catch(() => false);
 }
 
-async function ensureMeetingMediaOff(page) {
-  let microphoneStopped = false;
+async function ensureMeetingVideoOff(page) {
   let videoStopped = false;
-  const microphonePatterns = MUTE_MICROPHONE_PATTERNS.map((pattern) => ({ source: pattern.source, flags: pattern.flags }));
   const videoPatterns = STOP_VIDEO_PATTERNS.map((pattern) => ({ source: pattern.source, flags: pattern.flags }));
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await page.evaluate(({ microphoneItems, videoItems }) => {
-      const microphoneRegexes = microphoneItems.map((item) => new RegExp(item.source, item.flags));
+    const result = await page.evaluate((videoItems) => {
       const videoRegexes = videoItems.map((item) => new RegExp(item.source, item.flags));
       const clean = (value) => String(value || "").replace(/\s+/gu, " ").trim();
       const isVisible = (element) => {
@@ -265,18 +261,15 @@ async function ensureMeetingMediaOff(page) {
         clean(element.getAttribute("title")),
         clean(element.innerText || element.textContent)
       ].filter(Boolean).join(" ");
-      const microphone = controls.find((element) => microphoneRegexes.some((regex) => regex.test(labelFor(element))));
       const video = controls.find((element) => videoRegexes.some((regex) => regex.test(labelFor(element))));
-      microphone?.click();
       video?.click();
-      return { microphoneStopped: Boolean(microphone), videoStopped: Boolean(video) };
-    }, { microphoneItems: microphonePatterns, videoItems: videoPatterns }).catch(() => ({ microphoneStopped: false, videoStopped: false }));
-    microphoneStopped ||= result.microphoneStopped;
+      return { videoStopped: Boolean(video) };
+    }, videoPatterns).catch(() => ({ videoStopped: false }));
     videoStopped ||= result.videoStopped;
-    if (microphoneStopped && videoStopped) break;
+    if (videoStopped) break;
     await page.waitForTimeout(500).catch(() => null);
   }
-  return { microphoneStopped, videoStopped };
+  return { videoStopped };
 }
 
 async function sendChatText(page, text) {
@@ -920,9 +913,9 @@ export class PlaywrightZoomSender {
       await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
     }
     await this.page.waitForTimeout(3000);
-    const mediaOff = await ensureMeetingMediaOff(this.page);
+    const mediaOff = await ensureMeetingVideoOff(this.page);
     await openChatPanel(this.page).catch(() => false);
-    await ensureMeetingMediaOff(this.page);
+    await ensureMeetingVideoOff(this.page);
     this.presence = await this.getPresence();
     this.lastDiagnosticsDir = await saveDiagnosticsSnapshot(this.page, this.presence, diagnosticsRun, "04-after-final-join", { mediaOff }, this.logger).catch((error) => {
       this.logger.warn?.(`Zoom Sender diagnostics failed: ${error?.message || String(error)}`);
@@ -1145,4 +1138,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingMediaOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };
+export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingVideoOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };
