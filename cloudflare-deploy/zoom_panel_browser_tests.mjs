@@ -90,10 +90,29 @@ try {
   await speaker.locator('[data-speaker-input]').fill('First question');await speaker.locator('[data-speaker-add]').click();
   const question=speaker.locator('.state-row').first();await question.waitFor();
   assert.deepEqual(await question.locator('button').allTextContents(),['✅','Редактировать','Удалить','Пропускает']);
+  await page.waitForFunction(()=>document.querySelector('[data-speaker-add]')?.textContent==='Добавить');
   await question.getByRole('button',{name:'Редактировать',exact:true}).click();await question.locator('input').fill('Corrected question');await question.getByRole('button',{name:'Сохранить',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .state-row>span')?.textContent.includes('Corrected question'));
+  assert.equal(await question.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true);
+  await speaker.locator('[data-speaker-draft-publish]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .check')?.disabled===false);
   await question.getByRole('button',{name:'Высказался',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .check')?.getAttribute('aria-pressed')==='true');
+  assert.equal(await speaker.locator('[data-speaker-draft-publish]').isDisabled(),true);
+  assert.equal(await day.locator('[data-board-publish]').isDisabled(),false,'Unpublished topic keeps the board send button available');
+  await page.waitForFunction(()=>![...document.querySelectorAll('.zoom-publish')].some(button=>button.classList.contains('is-success')||button.classList.contains('is-error')));
+  const sendButtons=await page.locator('.zoom-publish').evaluateAll(buttons=>buttons.map(button=>({label:button.textContent.trim(),font:getComputedStyle(button).fontFamily,size:getComputedStyle(button).fontSize,color:getComputedStyle(button).backgroundColor,disabled:button.disabled})));
+  assert.ok(sendButtons.length>=10);
+  assert.ok(sendButtons.every(button=>button.label==='Отправить в ZOOM'));
+  assert.equal(new Set(sendButtons.map(button=>button.font)).size,1);
+  assert.equal(new Set(sendButtons.map(button=>button.size)).size,1);
+  assert.equal(new Set(sendButtons.filter(button=>!button.disabled).map(button=>button.color)).size,1);
+  assert.equal(await page.locator('[data-daily]').first().isDisabled(),true,'Daily reading is unavailable without a reading for today');
+  assert.equal(await day.locator('[data-book]').first().isDisabled(),true);
+  await day.locator('[data-book]').first().locator('xpath=preceding-sibling::input').fill('1');
+  assert.equal(await day.locator('[data-book]').first().isDisabled(),false);
+  await day.locator('[data-book]').first().locator('xpath=preceding-sibling::input').fill('');
+  assert.equal(await day.locator('[data-book]').first().isDisabled(),true);
   for(const width of [340,420,1000]) {
     await page.setViewportSize({width,height:1100});
     for(const panel of await page.locator('.day-panel').all()) {

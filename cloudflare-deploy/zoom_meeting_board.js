@@ -32,7 +32,7 @@ export function createEmptyMeetingBoardState() {
 }
 
 export function createEmptySpeakerQuestionsState() {
-  return { sessionDate: "", version: 0, entries: [], lastMessages: [], processedRequestIds: [], updatedAt: 0 };
+  return { sessionDate: "", version: 0, entries: [], publishedEntries: [], draftPending: false, lastMessages: [], processedRequestIds: [], updatedAt: 0 };
 }
 
 function normalizeRequestIds(value) {
@@ -60,10 +60,14 @@ export function normalizeMeetingBoardState(value) {
 
 export function normalizeSpeakerQuestionsState(value) {
   const source = value && typeof value === "object" ? value : {};
+  const entries = (Array.isArray(source.entries) ? source.entries : []).filter((item) => item && item.id && item.text).map((item) => ({ ...item, status: item.status === "spoken" ? "spoken" : "waiting" }));
+  const publishedEntries = Array.isArray(source.publishedEntries) ? source.publishedEntries : (source.lastMessages?.length ? entries : []);
   return {
     ...createEmptySpeakerQuestionsState(),
     ...source,
-    entries: (Array.isArray(source.entries) ? source.entries : []).filter((item) => item && item.id && item.text),
+    entries,
+    publishedEntries: publishedEntries.filter((item) => item && item.id && item.text).map((item) => ({ ...item, status: item.status === "spoken" ? "spoken" : "waiting" })),
+    draftPending: source.draftPending === true,
     lastMessages: (Array.isArray(source.lastMessages) ? source.lastMessages : []).map(String).filter(Boolean),
     processedRequestIds: normalizeRequestIds(source.processedRequestIds)
   };

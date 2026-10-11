@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import worker, { AnnouncementStateDurableObject, ZoomMeetingStateDurableObject, ZoomSharedTimerStateDurableObject } from "./worker.mjs";
-import { splitBoardZoomMessages, unicodeLength } from "./zoom_meeting_board.js";
+import { normalizeSpeakerQuestionsState, splitBoardZoomMessages, unicodeLength } from "./zoom_meeting_board.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS } from "./zoom_meeting_texts.js";
 
 class MemoryStorage {
@@ -1085,7 +1085,9 @@ async function testQueuePausedLibraryPanelAndActions() {
   assert.equal(response.status, 401);
   response = await worker.fetch(panelRequest("/zoom-only/library/status"), env);
   assert.equal(response.status, 200);
-  assert.equal((await json(response)).available, false);
+  let libraryStatus = await json(response);
+  assert.equal(libraryStatus.available, false);
+  assert.equal(libraryStatus.dailyReflectionReady, false);
 
   const importPayload = { collections: { big_book: { entries: [
     { key: 1, text: "Первое длинное предложение закончено. ".repeat(30), sourcePath: "Большая книга/001.md" },
@@ -1131,6 +1133,9 @@ async function testQueuePausedLibraryPanelAndActions() {
     entries: { [todayKey]: { text: "Размышление на сегодня", sourcePath: `${todayKey}.md` } }
   };
   await env.ZOOM_LIBRARY.put("zoom-library/current.json", JSON.stringify(currentLibrary));
+  response = await worker.fetch(panelRequest("/zoom-only/library/status"), env);
+  libraryStatus = await json(response);
+  assert.equal(libraryStatus.dailyReflectionReady, true);
   response = await postPanelAction(env, { action: "daily_reflection" });
   assert.equal((await json(response)).ok, true);
   outbox = await pullOutbox(env);
@@ -1238,6 +1243,10 @@ async function testMeetingBoardAndSpeakerState() {
   response = await postPanelAction(env, { action: "speaker_questions_add", text: "\u0421\u0430\u0448\u0430: \u043a\u0430\u043a \u0442\u044b \u043f\u0440\u0438\u0448\u0451\u043b \u0432 \u0410\u0410?", requestId: "speaker-1" });
   data = await json(response);
   assert.equal(data.state.entries.length, 1);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  response = await postPanelAction(env, { action: "speaker_questions_publish", requestId: "speaker-publish-1" });
+  assert.equal((await json(response)).state.draftPending, false);
   outbox = await pullOutbox(env);
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].kind, undefined);
@@ -1850,6 +1859,8 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
     requestId: "coalesce-speaker-2"
   });
   assert.equal((await json(response)).ok, true);
+  assert.equal((await pullOutbox(env)).filter((item) => item.coalesceKey === "speaker_questions").length, 0);
+  await postPanelAction(env, { action: "speaker_questions_publish", requestId: "coalesce-speaker-publish" });
   outbox = await pullOutbox(env);
   const speakerMessages = outbox.filter((item) => item.coalesceKey === "speaker_questions");
   assert.equal(speakerMessages.length, 1, "Only the newest unsent speaker snapshot should remain");
@@ -1885,6 +1896,51 @@ async function testBoardDraftDoesNotLeakThroughSpokenUpdates() {
   assert.match(replacement[0].text,/\u2705 Edited draft/u);
   assert.match(replacement[0].text,/Draft topic/u);
   assert.equal(replacement[0].publication.key,"meeting_board");
+}
+
+async function testSpeakerDraftDoesNotLeakThroughSpokenUpdates() {
+  const env=makeEnv();
+  const act=async (action,more={})=>json(await postPanelAction(env,{action,requestId:crypto.randomUUID(),...more}));
+  const first=await act("speaker_questions_add",{text:"Original question"});
+  const id=first.state.entries[0].id;
+  assert.equal(first.state.draftPending,true);
+  assert.equal((await pullOutbox(env)).length,0);
+  const unpublishedMark=await postPanelAction(env,{action:"speaker_questions_mark_spoken",id,requestId:"speaker-unpublished-mark"});
+  assert.equal(unpublishedMark.status,400);
+  await act("speaker_questions_publish");
+  const firstPublication=await pullOutbox(env);
+  assert.equal(firstPublication.length,1);
+  await ackOutbox(env,firstPublication.map(item=>item.id));
+  await act("speaker_questions_edit",{id,expectedText:"Original question",text:"Edited question"});
+  await act("speaker_questions_add",{text:"Second question"});
+  assert.equal((await pullOutbox(env)).length,0);
+  await act("speaker_questions_mark_spoken",{id});
+  const spoken=await pullOutbox(env);
+  assert.equal(spoken.length,1);
+  assert.match(spoken[0].text,/\u2705 Original question/u);
+  assert.doesNotMatch(spoken[0].text,/Edited question|Second question/u);
+  await ackOutbox(env,spoken.map(item=>item.id));
+  const published=await act("speaker_questions_publish");
+  assert.equal(published.state.draftPending,false);
+  const replacement=await pullOutbox(env);
+  assert.equal(replacement.length,1);
+  assert.match(replacement[0].text,/\u2705 Edited question/u);
+  assert.match(replacement[0].text,/Second question/u);
+  assert.equal(replacement[0].publication.key,"speaker_questions");
+  const duplicate=await json(await postPanelAction(env,{action:"speaker_questions_publish",requestId:"duplicate-speaker-publish"}));
+  const repeated=await json(await postPanelAction(env,{action:"speaker_questions_publish",requestId:"duplicate-speaker-publish"}));
+  assert.equal(duplicate.ok,true);
+  assert.equal(repeated.duplicate,true);
+  assert.equal((await pullOutbox(env)).length,1);
+}
+
+function testLegacySpeakerStateRemainsPublished() {
+  const old={sessionDate:"2026-10-11",entries:[{id:"legacy-1",text:"Previously sent"}],lastMessages:["Previously sent"]};
+  const migrated=normalizeSpeakerQuestionsState(old);
+  assert.equal(migrated.publishedEntries.length,1);
+  assert.equal(migrated.publishedEntries[0].id,"legacy-1");
+  assert.equal(migrated.draftPending,false);
+  assert.equal(normalizeSpeakerQuestionsState({entries:[{id:"draft-1",text:"Unsent"}]}).publishedEntries.length,0);
 }
 
 testMeetingBoardUnicodeLimit();
@@ -1932,6 +1988,8 @@ async function testEditingAndCompactQueueActions() {
   ({ data } = await act({ action: 'speaker_questions_edit', id: speakerId, expectedText: 'First question', text: 'Corrected question' }));
   assert.equal(data.state.entries[0].id, speakerId);
   assert.equal(data.state.entries[0].text, 'Corrected question');
+  assert.equal((await pullOutbox(env)).filter(item=>item.coalesceKey==='speaker_questions').length,0);
+  await act({ action: 'speaker_questions_publish' });
   ({ data } = await act({ action: 'speaker_questions_mark_spoken', id: speakerId }));
   assert.equal(data.state.entries[0].status, 'spoken');
   assert.match((await pullOutbox(env)).at(-1).text, /\u2705 Corrected question/u);
@@ -2001,6 +2059,8 @@ await testQueuePausedLibraryPanelAndActions();
 await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
 await testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessages();
 await testBoardDraftDoesNotLeakThroughSpokenUpdates();
+await testSpeakerDraftDoesNotLeakThroughSpokenUpdates();
+testLegacySpeakerStateRemainsPublished();
 await testMeetingBoardAndSpeakerState();
 await testMeetingCongratulationsBuilder();
 await testGlobalClearRemovesYesterdayState();
