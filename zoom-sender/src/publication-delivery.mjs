@@ -1,10 +1,17 @@
 import { mkdir, open, readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { plainZoomMessageText } from './zoom-message-text.mjs';
 
-export const publicationTextHash = text => createHash('sha256').update(plainZoomMessageText(text).replace(/\s+/gu,' ').trim()).digest('hex');
+export const publicationTextHash = text => createHash('sha256').update(String(text || '').replace(/\s+/gu,' ').trim()).digest('hex');
 const ordinal = id => Number(String(id).split(':').at(-1)) || 0;
+function discardUnavailableCleanup(stream) {
+  const cleanup=Array.isArray(stream.cleanup)?stream.cleanup:[];
+  const unavailable=cleanup.filter(item=>item.lastReason==='message_not_found_or_not_own');
+  if(!unavailable.length)return false;
+  stream.cleanup=cleanup.filter(item=>item.lastReason!=='message_not_found_or_not_own');
+  stream.unavailableCleanupCount=(Number(stream.unavailableCleanupCount)||0)+unavailable.length;
+  return true;
+}
 export function isManagedPublication(item) {
   const p=item?.publication;
   return ['meeting_board','speaker_questions'].includes(p?.key) && /^\d{4}-\d{2}-\d{2}:\d+$/u.test(p.id)
@@ -22,6 +29,9 @@ export class PublicationDelivery {
     try {this.state=JSON.parse(await readFile(this.filePath,'utf8'));}
     catch(error){if(error.code!=='ENOENT')throw new Error('publication_state_unreadable');this.state={schema:1,streams:{}};}
     if(this.state.schema!==1||!this.state.streams||typeof this.state.streams!=='object')throw new Error('publication_state_invalid');
+    let changed=false;
+    for(const stream of Object.values(this.state.streams))changed=discardUnavailableCleanup(stream)||changed;
+    if(changed)await this.save();
   }
   async save() {
     await mkdir(path.dirname(this.filePath),{recursive:true,mode:0o700});
@@ -33,11 +43,7 @@ export class PublicationDelivery {
   report(code=null) {
     const pendingDeletes=Object.values(this.state?.streams||{}).reduce((n,s)=>n+(s.cleanup?.length||0),0);
     const pendingSends=Object.values(this.state?.streams||{}).some(s=>Object.values(s.groups||{}).some(g=>Object.keys(g.pending||{}).length));
-    const previousSessionUnavailable=Object.values(this.state?.streams||{}).some(s=>{
-      const currentPrefixes=new Set(Object.values(s.groups[s.active]?.parts||{}).map(p=>p.ref.match(/^(\d+)-\{/u)?.[1]).filter(Boolean));
-      return currentPrefixes.size && s.cleanup.some(p=>{const prefix=p.ref.match(/^(\d+)-\{/u)?.[1];return prefix&&p.lastReason==='message_not_found_or_not_own'&&!currentPrefixes.has(prefix)});
-    });
-    this.warning=(previousSessionUnavailable&&(!code||code==='publication_cleanup_pending'))?'publication_previous_session_unavailable':code||(pendingSends?'publication_send_uncertain':pendingDeletes?'publication_cleanup_pending':null);
+    this.warning=code||(pendingSends?'publication_send_uncertain':pendingDeletes?'publication_cleanup_pending':null);
     this.health?.updatePublication?.({warning:this.warning,pendingDeletes});
   }
   async recoverPending(stream) {
@@ -95,6 +101,7 @@ export class PublicationDelivery {
     return {ackIds,complete:true};
   }
   async cleanupStream(stream) {
+    if(discardUnavailableCleanup(stream))await this.save();
     const protectedRefs=new Set(Object.values(stream.groups[stream.active]?.parts||{}).map(p=>p.ref));
     let attempts=0;
     const due=[...stream.cleanup].sort((a,b)=>Number(a.nextAttemptAt!==0)-Number(b.nextAttemptAt!==0)
@@ -106,7 +113,12 @@ export class PublicationDelivery {
       attempts++;
       const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash,{evidence:receipt.deleteEvidence,onBeforeDelete:async evidence=>{receipt.deleteEvidence=evidence;await this.save();}}).catch(error=>({deleted:false,reason:'delete_failed',detail:String(error?.message||error).split('\n')[0].slice(0,250)}));
       if(result?.deleted)stream.cleanup=stream.cleanup.filter(item=>item.ref!==receipt.ref);
-      else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';receipt.lastError=result?.detail||null;this.report('publication_cleanup_pending');}
+      else if(result?.reason==='message_not_found_or_not_own') {
+        // A complete chat search already failed. Repeating it on every outbox poll
+        // can stall new messages for many seconds, especially after Zoom rejoins.
+        stream.cleanup=stream.cleanup.filter(item=>item.ref!==receipt.ref);
+        stream.unavailableCleanupCount=(Number(stream.unavailableCleanupCount)||0)+1;
+      } else {receipt.nextAttemptAt=this.now()+this.retryMs;receipt.lastReason=result?.reason||'delete_failed';receipt.lastError=result?.detail||null;this.report('publication_cleanup_pending');}
       await this.save();
     }
     this.report(stream.cleanup.length?'publication_cleanup_pending':null);
@@ -128,7 +140,7 @@ export class PublicationDelivery {
       }
       let controls=null;
       for(const receipt of stream.cleanup){controls=await this.adapter.inspectOwnControls(receipt.ref).catch(()=>null);if(controls)break;}
-      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,reasons:stream.cleanup.map(item=>({reason:item.lastReason||null,error:item.lastError||null})),controls});
+      publications.push({key:scope.split(':').at(-1),activeId:stream.active,current,pendingDeletes:stream.cleanup.length,unavailableCleanupCount:Number(stream.unavailableCleanupCount)||0,reasons:stream.cleanup.map(item=>({reason:item.lastReason||null,error:item.lastError||null})),controls});
     }
     return {publications,warning:this.warning};
   }

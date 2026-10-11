@@ -69,7 +69,6 @@ export class ZoomSenderService {
       this.health.markWorkerPoll();
       const messages = Array.isArray(pulled.messages) ? pulled.messages : [];
       if (!messages.length) {
-        await this.publicationDelivery?.retryCleanup().catch(()=>this.health.updatePublication?.({warning:'publication_state_unavailable',pendingDeletes:0}));
         const delay = this.backoff.onMessages(0);
         this.health.updateBackoff(this.backoff);
         this.health.clearError();

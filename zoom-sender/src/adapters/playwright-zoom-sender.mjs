@@ -1,5 +1,4 @@
 import { publicationTextHash } from '../publication-delivery.mjs';
-import { plainZoomMessageText } from '../zoom-message-text.mjs';
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
 const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435/iu, /\u0435\u0449\u0435/iu];
 const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
@@ -282,7 +281,7 @@ async function sendChatText(page, text) {
       element.focus();
       element.click();
     });
-    await page.keyboard.insertText(plainZoomMessageText(text));
+    await page.keyboard.insertText(String(text || ""));
     await page.keyboard.press("Enter");
     await page.waitForTimeout(700);
     return { sent: true, ack: true };
@@ -325,7 +324,7 @@ function isOwnIdentityChatRecord(record = {}) {
 }
 
 function exactOwnChatRecords(records, text, excludedRefs = new Set()) {
-  const expected = normalizeComparableChatText(plainZoomMessageText(text));
+  const expected = normalizeComparableChatText(text);
   return (Array.isArray(records) ? records : []).filter((record) => {
     if (!isOwnIdentityChatRecord(record)) return false;
     if (normalizeComparableChatText(record.text) !== expected) return false;
@@ -351,14 +350,13 @@ async function sendVerifiedChatText(page, text, { beforeRefs: suppliedRefs = nul
   const beforeRefs = new Set(suppliedRefs || before.filter(isOwnIdentityChatRecord).map((record) => String(record.sourceMessageId || record.itemDataId || "")).filter(Boolean));
   const sent = await sendChatText(page, text);
   if (!sent.sent) return sent;
-  const visibleText = plainZoomMessageText(text);
-  const record = await waitForOwnChatMessage(page, visibleText, beforeRefs);
+  const record = await waitForOwnChatMessage(page, text, beforeRefs);
   if (!record) return { sent: true, ack: false, reason: "message_not_verified" };
   return {
     sent: true,
     ack: true,
     messageRef: String(record.sourceMessageId || record.itemDataId || ""),
-    messageText: visibleText
+    messageText: String(text || "")
   };
 }
 
@@ -973,10 +971,10 @@ export class PlaywrightZoomSender {
     return result;
   }
   async ownMessageRefs(text) {
-    return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),plainZoomMessageText(text)).map(record=>record.sourceMessageId);
+    return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text).map(record=>record.sourceMessageId);
   }
   async findOwnSentMessage(text, beforeRefs = []) {
-    const matches=exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),plainZoomMessageText(text),new Set(beforeRefs));
+    const matches=exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text,new Set(beforeRefs));
     return matches.length===1?{messageRef:matches[0].sourceMessageId}:null;
   }
   async locateOwnMessage(ref) {

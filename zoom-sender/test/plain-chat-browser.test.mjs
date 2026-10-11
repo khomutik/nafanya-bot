@@ -39,7 +39,7 @@ async function createEditor(t) {
 test("Zoom sender sends normal chat text once without touching formatting controls", async (t) => {
   const page = await createEditor(t);
 
-  const result = await sendChatText(page, "**Ordinary title**");
+  const result = await sendChatText(page, "Ordinary title");
   assert.deepEqual(result, { sent: true, ack: true });
   assert.deepEqual(await page.evaluate(() => window.sent), ["Ordinary title"]);
 

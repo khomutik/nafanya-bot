@@ -202,11 +202,11 @@ test("sender acks only messages successfully sent to Zoom", async () => {
   assert.match(result.error.message, /send failed/u);
 });
 
-test("sender sends and acknowledges ordinary messages that used to request formatting", async () => {
+test("sender sends and acknowledges ordinary messages", async () => {
   const acked = [];
   const workerClient = {
     async pull() {
-      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "**two**" }] };
+      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "two" }] };
     },
     async ack(ids) {
       acked.push(...ids);
@@ -216,7 +216,7 @@ test("sender sends and acknowledges ordinary messages that used to request forma
   const zoomAdapter = {
     async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
     async sendMessage(text) {
-      return text === "one" || text === "**two**" ? { sent: true, ack: true } : { sent: false, ack: false };
+      return text === "one" || text === "two" ? { sent: true, ack: true } : { sent: false, ack: false };
     }
   };
   const service = new ZoomSenderService({
@@ -336,9 +336,11 @@ test("sender retries a failed initial browser launch instead of exiting", async 
 test("an admitted sender checks an empty outbox every second", async () => {
   const config = loadConfig({});
   const backoff = new Backoff(config);
+  let cleanupCalls = 0;
   const service = new ZoomSenderService({
     workerClient: { async pull() { return { messages: [] }; } },
     zoomAdapter: { async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; } },
+    publicationDelivery: { async retryCleanup() { cleanupCalls += 1; } },
     backoff,
     health: new HealthState(),
     logger: { info() {}, warn() {} }
@@ -347,6 +349,7 @@ test("an admitted sender checks an empty outbox every second", async () => {
   assert.equal((await service.runOnce()).delayMs, 1000);
   assert.equal((await service.runOnce()).delayMs, 1000);
   assert.equal((await service.runOnce()).delayMs, 1000);
+  assert.equal(cleanupCalls, 0, "idle polling must not scan old Zoom messages");
   assert.equal(backoff.onError(), 10000);
 });
 

@@ -71,12 +71,27 @@ test('inaccessible old receipts cannot starve deletion of a fresh previous snaps
   f.adapter.deleteOwnMessage=(ref,hash)=>ref.startsWith('gone-')?Promise.resolve({deleted:false,reason:'message_not_found_or_not_own'}):remove(ref,hash);
   await f.delivery.deliver(messages(2,['New']));assert.ok(![...f.adapter.messages.values()].includes('Old'));assert.ok([...f.adapter.messages.values()].includes('New'));
   await f.delivery.deliver(messages(3,['Speaker'],'speaker_questions'));
-  assert.equal(f.delivery.warning,'publication_cleanup_pending','Successful independent streams must not hide outstanding cleanup');
+  assert.equal(stream.cleanup.length,0,'Already unavailable messages must not be scanned again');
+  assert.equal(stream.unavailableCleanupCount,5);
 });
-test('a new Zoom participant session produces a specific history-unavailable warning',async()=>{
+test('a new Zoom participant session does not retry unavailable old messages',async()=>{
   const f=await fixture();let prefix='13';
   f.adapter.sendMessage=async()=>({sent:true,ack:true,messageRef:`${prefix}-{11111111-2222-3333-4444-555555555555}`});
   f.adapter.deleteOwnMessage=async()=>({deleted:false,reason:'message_not_found_or_not_own'});
   await f.delivery.deliver(messages(1,['Previous session']));prefix='14';await f.delivery.deliver(messages(2,['New session']));
-  assert.equal(f.delivery.warning,'publication_previous_session_unavailable');
+  const stream=f.delivery.state.streams['test-meeting:2026-10-08:meeting_board'];
+  assert.equal(stream.cleanup.length,0);
+  assert.equal(stream.unavailableCleanupCount,1);
+});
+test('restart discards old failed deletions without another Zoom search',async()=>{
+  const f=await fixture();await f.delivery.deliver(messages(1,['Old']));
+  const stream=f.delivery.state.streams['test-meeting:2026-10-08:meeting_board'];
+  stream.cleanup=[{ref:'gone',hash:publicationTextHash('Gone'),nextAttemptAt:0,lastReason:'message_not_found_or_not_own'}];
+  await f.delivery.save();
+  f.adapter.deleteOwnMessage=async()=>{throw new Error('stale cleanup was retried');};
+  const restarted=new PublicationDelivery(f.settings);
+  await restarted.retryCleanup();
+  const saved=JSON.parse(await readFile(f.settings.filePath,'utf8'));
+  assert.equal(saved.streams['test-meeting:2026-10-08:meeting_board'].cleanup.length,0);
+  assert.equal(saved.streams['test-meeting:2026-10-08:meeting_board'].unavailableCleanupCount,1);
 });
