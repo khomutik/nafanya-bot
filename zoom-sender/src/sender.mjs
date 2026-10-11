@@ -1,4 +1,5 @@
 import { isManagedPublication } from './publication-delivery.mjs';
+import { parseZoomRichText } from './rich-text.mjs';
 export class ZoomSenderService {
   constructor({ workerClient, zoomAdapter, publicationDelivery = null, backoff, health, logger = console, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), zoomRecoveryAfterMs = 180000 }) {
     this.workerClient = workerClient;
@@ -94,6 +95,9 @@ export class ZoomSenderService {
         const text = String(message.text || "").trim();
         if (!id || !text) continue;
         const result = await this.zoomAdapter.sendMessage(text);
+        if (result?.sent && parseZoomRichText(text).hasFormatting && !result.formattingApplied) {
+          this.logger.warn?.("Zoom Sender delivered a formatted message as plain text because Zoom rejected rich clipboard paste");
+        }
         this.health.updateZoom(await this.zoomAdapter.getPresence());
         if (result?.sent && result?.ack) {
           ackIds.push(id);

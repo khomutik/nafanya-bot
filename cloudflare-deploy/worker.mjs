@@ -1989,7 +1989,7 @@ function getAuthorLabel(message) {
 }
 __name(getAuthorLabel, "getAuthorLabel");
 function plainZoomText(text) {
-  return String(text || "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/<br\s*\/?>/giu, "\n").replace(/<\/p>/giu, "\n\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+  return String(text || "").replace(/<br\s*\/?>/giu, "\n").replace(/<\/p>/giu, "\n\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
 }
 __name(plainZoomText, "plainZoomText");
 function getZoomMeetingMessages(key) {

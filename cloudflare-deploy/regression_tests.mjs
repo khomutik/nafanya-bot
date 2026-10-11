@@ -326,9 +326,10 @@ function testWorkerStaticRules() {
   assert.doesNotMatch(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\*\*/u, "Zoom seventh tradition should not include Markdown bold markers");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\u0421\u0431\u0435\u0440 \(\u0421\u0411\u041F\)[\s\S]*\u043F\u0438\u0448\u0438\u0442\u0435 "7 \u0442\u0440\u0430\u0434\u0438\u0446\u0438\u044F"/u, "Zoom seventh tradition should use the requested Sber and comment text");
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.seventh_tradition[0], /\u0411\u043B\u0430\u0433\u043E\u0434\u0430\u0440\u0438\u043C \u0437\u0430 \u0443\u0447\u0430\u0441\u0442\u0438\u0435 \u0438 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0443! \uD83D\uDE4F$/u, "Zoom seventh tradition should use the requested ending");
+  assert.equal((ZOOM_MEETING_MESSAGE_TEXTS.free_services[0].match(/\*\*/gu) || []).length, 4, "Only the two requested free-services headings should be bold");
   for (const [key, messages] of Object.entries(ZOOM_MEETING_MESSAGE_TEXTS)) {
     for (const message of messages) {
-      assert.doesNotMatch(message, /\*\*/u, `Zoom meeting text ${key} should not include Markdown bold markers`);
+      if (key !== "free_services") assert.doesNotMatch(message, /\*\*/u, `Zoom meeting text ${key} should not include Markdown bold markers`);
     }
   }
   assert.match(ZOOM_MEETING_MESSAGE_TEXTS.telemost_link[0], /\u041D\u0410\u0428\u0418 \u0420\u0415\u0421\u0423\u0420\u0421\u042B \u0412 \u0418\u041D\u0422\u0415\u0420\u041D\u0415\u0422\u0415[\s\S]*https:\/\/pochtinormalnye\.ru\/[\s\S]*\u0421\u043E\u0431\u0440\u0430\u043D\u0438\u044F \u0432 Zoom:[\s\S]*https:\/\/us06web\.zoom\.us\/j\/5487249245/u, "Zoom links message should include the site and Zoom meeting");

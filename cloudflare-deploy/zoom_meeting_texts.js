@@ -68,6 +68,10 @@ export const ZOOM_MEETING_MESSAGE_TEXTS = {
   ]
 };
 
+ZOOM_MEETING_MESSAGE_TEXTS.free_services = ZOOM_MEETING_MESSAGE_TEXTS.free_services.map((text) => text
+  .replace(/^\u203C\uFE0F\u0421\u0412\u041E\u0411\u041E\u0414\u041D\u042B\u0415 \u0421\u041B\u0423\u0416\u0415\u041D\u0418\u042F\u203C\uFE0F$/mu, "**$&**")
+  .replace(/^\u0412 \u0433\u0440\u0443\u043F\u043F\u0435 \u0435\u0441\u0442\u044C \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F:$/mu, "**$&**"));
+
 export const ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY = {
   "0": "theme_sunday",
   "1": "theme_monday",

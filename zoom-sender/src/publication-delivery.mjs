@@ -1,8 +1,9 @@
 import { mkdir, open, readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { parseZoomRichText } from './rich-text.mjs';
 
-export const publicationTextHash = text => createHash('sha256').update(String(text || '').replace(/\s+/gu,' ').trim()).digest('hex');
+export const publicationTextHash = text => createHash('sha256').update(parseZoomRichText(text).plainText.replace(/\s+/gu,' ').trim()).digest('hex');
 const ordinal = id => Number(String(id).split(':').at(-1)) || 0;
 export function isManagedPublication(item) {
   const p=item?.publication;

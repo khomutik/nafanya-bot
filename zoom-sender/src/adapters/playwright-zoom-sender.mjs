@@ -1,4 +1,5 @@
 import { publicationTextHash } from '../publication-delivery.mjs';
+import { parseZoomRichText } from '../rich-text.mjs';
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
 const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435/iu, /\u0435\u0449\u0435/iu];
 const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
@@ -13,6 +14,7 @@ const DIAGNOSTIC_HTML_LIMIT = 5000;
 const CHAT_DIAGNOSTIC_TEXT_LIMIT = 1200;
 const CHAT_DIAGNOSTIC_DOM_LIMIT = 2500;
 const ZOOM_MESSAGE_REF_RE = /^\d+-\{[0-9a-f-]{20,}\}$/iu;
+const clipboardPermissionOrigins = new WeakMap();
 const CHAT_INPUT_SELECTORS = [
   'textarea[aria-label*="chat" i]',
   'textarea[placeholder*="chat" i]',
@@ -281,13 +283,79 @@ async function sendChatText(page, text) {
       element.focus();
       element.click();
     });
-    await page.keyboard.insertText(String(text || ""));
+    const richText = parseZoomRichText(text);
+    let formattingApplied = false;
+    if (richText.hasFormatting) {
+      formattingApplied = await pasteZoomRichText(page, input, richText);
+      if (!formattingApplied) {
+        const cleared = await clearChatInput(input);
+        if (!cleared) return { sent: false, ack: false, reason: "rich_paste_recovery_failed" };
+        await page.keyboard.insertText(richText.plainText);
+      }
+    } else {
+      await page.keyboard.insertText(richText.plainText);
+    }
     await page.keyboard.press("Enter");
     await page.waitForTimeout(700);
-    return { sent: true, ack: true };
+    return { sent: true, ack: true, formattingApplied };
   } finally {
     await input.dispose().catch(() => null);
   }
+}
+
+async function clearChatInput(input) {
+  await input.press("Control+A").catch(() => null);
+  await input.press("Backspace").catch(() => null);
+  return input.evaluate((element) => {
+    const value = "value" in element ? element.value : element.innerText || element.textContent || "";
+    return !String(value || "").trim();
+  }).catch(() => false);
+}
+
+async function pasteZoomRichText(page, input, richText) {
+  const origin = await page.evaluate(() => location.origin).catch(() => "");
+  if (!origin || !await input.evaluate((element) => element.isContentEditable).catch(() => false)) return false;
+  const context = page.context();
+  let grantedOrigins = clipboardPermissionOrigins.get(context);
+  if (!grantedOrigins) {
+    grantedOrigins = new Set();
+    clipboardPermissionOrigins.set(context, grantedOrigins);
+  }
+  if (!grantedOrigins.has(origin)) {
+    grantedOrigins.add(origin);
+    await context.grantPermissions(["clipboard-write"], { origin }).catch(() => null);
+  }
+  try {
+    await input.evaluate(async (element, payload) => {
+      if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem !== "function") {
+        throw new Error("rich_clipboard_unavailable");
+      }
+      const item = new ClipboardItem({
+        "text/plain": new Blob([payload.plainText], { type: "text/plain" }),
+        "text/html": new Blob([payload.html], { type: "text/html" })
+      });
+      await navigator.clipboard.write([item]);
+      element.focus();
+      element.click();
+    }, { plainText: richText.plainText, html: richText.html });
+    await input.press("Control+V");
+    const deadline = Date.now() + 900;
+    while (Date.now() < deadline) {
+      const state = await input.evaluate((element) => {
+        const value = "value" in element ? element.value : element.innerText || element.textContent || "";
+        const bold = [...element.querySelectorAll("strong, b, [style*='font-weight']")].some((node) => {
+          const weight = Number.parseInt(getComputedStyle(node).fontWeight, 10);
+          return node.tagName === "STRONG" || node.tagName === "B" || weight >= 600;
+        });
+        return { text: String(value || ""), bold };
+      }).catch(() => ({ text: "", bold: false }));
+      if (normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText)) return state.bold;
+      await page.waitForTimeout(25).catch(() => null);
+    }
+  } catch {
+    // The caller clears the editor before falling back to plain text.
+  }
+  return false;
 }
 
 function normalizeComparableChatText(value) {
@@ -324,7 +392,7 @@ function isOwnIdentityChatRecord(record = {}) {
 }
 
 function exactOwnChatRecords(records, text, excludedRefs = new Set()) {
-  const expected = normalizeComparableChatText(text);
+  const expected = normalizeComparableChatText(parseZoomRichText(text).plainText);
   return (Array.isArray(records) ? records : []).filter((record) => {
     if (!isOwnIdentityChatRecord(record)) return false;
     if (normalizeComparableChatText(record.text) !== expected) return false;
@@ -350,13 +418,15 @@ async function sendVerifiedChatText(page, text, { beforeRefs: suppliedRefs = nul
   const beforeRefs = new Set(suppliedRefs || before.filter(isOwnIdentityChatRecord).map((record) => String(record.sourceMessageId || record.itemDataId || "")).filter(Boolean));
   const sent = await sendChatText(page, text);
   if (!sent.sent) return sent;
-  const record = await waitForOwnChatMessage(page, text, beforeRefs);
+  const visibleText = parseZoomRichText(text).plainText;
+  const record = await waitForOwnChatMessage(page, visibleText, beforeRefs);
   if (!record) return { sent: true, ack: false, reason: "message_not_verified" };
   return {
     sent: true,
     ack: true,
     messageRef: String(record.sourceMessageId || record.itemDataId || ""),
-    messageText: String(text || "")
+    messageText: visibleText,
+    formattingApplied: sent.formattingApplied === true
   };
 }
 
@@ -971,10 +1041,10 @@ export class PlaywrightZoomSender {
     return result;
   }
   async ownMessageRefs(text) {
-    return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text).map(record=>record.sourceMessageId);
+    return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),parseZoomRichText(text).plainText).map(record=>record.sourceMessageId);
   }
   async findOwnSentMessage(text, beforeRefs = []) {
-    const matches=exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text,new Set(beforeRefs));
+    const matches=exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),parseZoomRichText(text).plainText,new Set(beforeRefs));
     return matches.length===1?{messageRef:matches[0].sourceMessageId}:null;
   }
   async locateOwnMessage(ref) {
@@ -1138,4 +1208,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingVideoOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendVerifiedChatText, shouldAttemptChatRecovery };
+export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingVideoOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendChatText, sendVerifiedChatText, shouldAttemptChatRecovery };
