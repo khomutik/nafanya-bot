@@ -871,7 +871,12 @@ async function testMessageButtonsAndOutbox() {
   assert.equal(data.ok, true);
   outbox = await pullOutbox(env);
   const traditionMessages = outbox.slice(beforeTraditions);
-  assert.equal(traditionMessages.length, ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length);
+  assert.ok(traditionMessages.length > 0 && traditionMessages.length <= ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length);
+  assert.equal(
+    traditionMessages.map((message) => message.text).join("\n").replace(/\s+/gu, " ").trim(),
+    ZOOM_MEETING_MESSAGE_TEXTS.traditions12.join("\n").replace(/\s+/gu, " ").trim(),
+    "Zoom should publish every tradition while packing the plain text into as few messages as possible"
+  );
   assert.match(traditionMessages[0].text, /12 ТРАДИЦИЙ АА/u);
   assert.ok(traditionMessages.every((message) => Array.from(message.text).length <= 950));
   assert.ok(traditionMessages.every((message) => !/Часть \d+\/\d+/u.test(message.text)));
@@ -1335,16 +1340,16 @@ async function testMeetingCongratulationsBuilder() {
   assert.equal(data.queued[0].coalesceKey, undefined, "Congratulation publication must not replace queue/topic messages");
   assert.equal(data.queued[0].publication, undefined, "It is a one-time end-of-meeting message, not a replaceable state snapshot");
   const expected = [
-    "**\ud83c\udf89\u041f\u041e\u0417\u0414\u0420\u0410\u0412\u041b\u042f\u0415\u041c**",
-    "**\u0442\u0435\u0445, \u043a\u0442\u043e \u043f\u043e\u0434\u0435\u043b\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0436\u0435\u043c \u0441\u0432\u043e\u0435\u0439 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438**:",
+    "\ud83c\udf89\u041f\u041e\u0417\u0414\u0420\u0410\u0412\u041b\u042f\u0415\u041c",
+    "\u0442\u0435\u0445, \u043a\u0442\u043e \u043f\u043e\u0434\u0435\u043b\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0436\u0435\u043c \u0441\u0432\u043e\u0435\u0439 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438:",
     "",
     "\ud83e\udd73 \u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 3 \u043c\u0435\u0441\u044f\u0446\u0430",
     "\ud83e\udd73 \u0421\u0430\u0448\u0430 3 \u0434\u043d\u044f",
     "\ud83e\udd73 \u0412\u0430\u0441\u044f 7 \u043c\u0435\u0441\u044f\u0446\u0435\u0432",
     "\ud83e\udd73 \u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440 27 \u043b\u0435\u0442",
     "",
-    "**\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430\u043c, \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c \u0438 \u0432\u0441\u0435\u043c, \u043a\u0442\u043e \u0431\u044b\u043b \u0441 \u043d\u0430\u043c\u0438 \ud83d\ude4f**",
-    "**\u0412\u0441\u0435\u0445 \u043f\u0440\u0438\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0441 \u0435\u0449\u0435 \u043e\u0434\u043d\u0438\u043c \u0442\u0440\u0435\u0437\u0432\u044b\u043c \u0434\u043d\u0435\u043c! \ud83e\udd29**"
+    "\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430\u043c, \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c \u0438 \u0432\u0441\u0435\u043c, \u043a\u0442\u043e \u0431\u044b\u043b \u0441 \u043d\u0430\u043c\u0438 \ud83d\ude4f",
+    "\u0412\u0441\u0435\u0445 \u043f\u0440\u0438\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0441 \u0435\u0449\u0435 \u043e\u0434\u043d\u0438\u043c \u0442\u0440\u0435\u0437\u0432\u044b\u043c \u0434\u043d\u0435\u043c! \ud83e\udd29"
   ].join("\n");
   assert.equal(data.queued[0].text, expected);
   assert.ok(Array.from(expected).length <= 950);
@@ -1896,8 +1901,6 @@ async function testEditingAndCompactQueueActions() {
   ({ data } = await act({ type: 'message', key: 'free_services' }));
   assert.equal(data.ok, true);
   const services = outboxTexts(await pullOutbox(env)).join('\n');
-  assert.ok(services.includes('**\u203C\uFE0F\u0421\u0412\u041E\u0411\u041E\u0414\u041D\u042B\u0415 \u0421\u041B\u0423\u0416\u0415\u041D\u0418\u042F\u203C\uFE0F**'));
-  assert.ok(services.includes('**\u0412 \u0433\u0440\u0443\u043F\u043F\u0435 \u0435\u0441\u0442\u044C \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0435 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F:**'));
   assert.ok(services.includes('\u203C\uFE0F\u0421\u0412\u041E\u0411\u041E\u0414\u041D\u042B\u0415 \u0421\u041B\u0423\u0416\u0415\u041D\u0418\u042F\u203C\uFE0F'));
   assert.ok(services.includes('\u0423 \u043D\u0430\u0441 \u0432\u0441\u0435\u0433\u0434\u0430 \u043D\u0430\u0439\u0434\u0435\u0442\u0441\u044F \u043C\u0435\u0441\u0442\u0435\u0447\u043A\u043E'));
   assert.ok(services.includes('\u041F\u043E \u043F\u043E\u0432\u043E\u0434\u0443 \u0441\u043B\u0443\u0436\u0435\u043D\u0438\u044F \u043C\u043E\u0436\u043D\u043E \u043E\u0431\u0440\u0430\u0442\u0438\u0442\u044C\u0441\u044F \u043A \u043B\u044E\u0431\u043E\u043C\u0443 \u0438\u0437 \u0430\u0434\u043C\u0438\u043D\u043E\u0432 \u0433\u0440\u0443\u043F\u043F\u044B.'));

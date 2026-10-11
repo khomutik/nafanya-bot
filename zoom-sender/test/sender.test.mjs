@@ -202,7 +202,7 @@ test("sender acks only messages successfully sent to Zoom", async () => {
   assert.match(result.error.message, /send failed/u);
 });
 
-test("sender does not ack a formatted message when native Zoom formatting is unavailable", async () => {
+test("sender sends and acknowledges ordinary messages that used to request formatting", async () => {
   const acked = [];
   const workerClient = {
     async pull() {
@@ -216,7 +216,7 @@ test("sender does not ack a formatted message when native Zoom formatting is una
   const zoomAdapter = {
     async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
     async sendMessage(text) {
-      return text === "one" ? { sent: true, ack: true } : { sent: false, ack: false, reason: "zoom_format_toolbar_unavailable" };
+      return text === "one" || text === "**two**" ? { sent: true, ack: true } : { sent: false, ack: false };
     }
   };
   const service = new ZoomSenderService({
@@ -228,8 +228,8 @@ test("sender does not ack a formatted message when native Zoom formatting is una
   });
 
   const result = await service.runOnce();
-  assert.deepEqual(acked, [1]);
-  assert.deepEqual(result.ackIds, [1]);
+  assert.deepEqual(acked, [1, 2]);
+  assert.deepEqual(result.ackIds, [1, 2]);
 });
 
 test("sender waits in the waiting room without polling Worker and resumes after admission", async () => {
