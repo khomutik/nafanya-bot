@@ -742,10 +742,31 @@ function createEmptyZoomMeetingRuntimeState() {
     zoomMeetingBoards: {},
     zoomMeetingClearRequestIds: [],
     zoomSpeakerQuestions: createEmptySpeakerQuestionsState(),
+    zoomMeetingCongratulations: createEmptyMeetingCongratulationsState(),
     zoomPanelActiveMode: null
   };
 }
 __name(createEmptyZoomMeetingRuntimeState, "createEmptyZoomMeetingRuntimeState");
+function createEmptyMeetingCongratulationsState() {
+  return { sessionDate: "", version: 0, entries: [], processedRequestIds: [], updatedAt: 0, lastPublishedAt: 0 };
+}
+__name(createEmptyMeetingCongratulationsState, "createEmptyMeetingCongratulationsState");
+function normalizeMeetingCongratulationsState(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    ...createEmptyMeetingCongratulationsState(),
+    ...source,
+    sessionDate: /^\d{4}-\d{2}-\d{2}$/u.test(String(source.sessionDate || "")) ? String(source.sessionDate) : "",
+    version: Math.max(0, Math.floor(Number(source.version) || 0)),
+    entries: (Array.isArray(source.entries) ? source.entries : []).filter((item) => item && item.id && item.text).map((item) => ({
+      id: String(item.id), text: String(item.text), createdAt: Math.max(0, Number(item.createdAt) || 0), updatedAt: Math.max(0, Number(item.updatedAt) || 0)
+    })),
+    processedRequestIds: Array.isArray(source.processedRequestIds) ? source.processedRequestIds.map((item) => String(item || "").trim()).filter(Boolean).slice(-100) : [],
+    updatedAt: Math.max(0, Number(source.updatedAt) || 0),
+    lastPublishedAt: Math.max(0, Number(source.lastPublishedAt) || 0)
+  };
+}
+__name(normalizeMeetingCongratulationsState, "normalizeMeetingCongratulationsState");
 function normalizeZoomMeetingBoards(value, legacyBoard) {
   const source = value && typeof value === "object" ? value : {};
   const boards = {};
@@ -791,6 +812,7 @@ function normalizeZoomMeetingRuntimeState(value) {
     zoomMeetingBoards,
     zoomMeetingClearRequestIds: Array.isArray(source.zoomMeetingClearRequestIds) ? source.zoomMeetingClearRequestIds.map((item) => String(item || "").trim()).filter(Boolean).slice(-100) : [],
     zoomSpeakerQuestions: normalizeSpeakerQuestionsState(source.zoomSpeakerQuestions),
+    zoomMeetingCongratulations: normalizeMeetingCongratulationsState(source.zoomMeetingCongratulations),
     zoomPanelActiveMode: source.zoomPanelActiveMode === "meeting" || source.zoomPanelActiveMode === "speaker" ? source.zoomPanelActiveMode : null
   };
   const maxOutboxId = normalized.zoomOnlyOutbox.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
@@ -1392,6 +1414,61 @@ var ZoomMeetingStateDurableObject = class {
     await this.saveState(runtimeState);
     return { ok: true, duplicate: false, state: speaker, activeMode: "speaker", queued, deliveryMessages };
   }
+  async runMeetingCongratulationsAction(runtimeState, payload) {
+    const sessionDate = String(payload.sessionDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(sessionDate)) throw new Error("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f.");
+    let state = normalizeMeetingCongratulationsState(runtimeState.zoomMeetingCongratulations);
+    if (state.sessionDate !== sessionDate) state = { ...createEmptyMeetingCongratulationsState(), sessionDate };
+    runtimeState.zoomMeetingCongratulations = state;
+    const congratulationsAction = String(payload.congratulationsAction || "").trim();
+    if (!["add", "edit", "remove", "publish"].includes(congratulationsAction)) {
+      throw new Error("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0431\u043b\u043e\u043a\u0430 \u00ab\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0430\u00bb.");
+    }
+    if (this.rememberRequest(state, payload.requestId)) {
+      return { ok: true, duplicate: true, congratulations: state, queued: [] };
+    }
+    const now = Date.now();
+    if (congratulationsAction === "add") {
+      const text = sanitizeBoardText(payload.text);
+      state.entries.push({ id: crypto.randomUUID(), text, createdAt: now, updatedAt: now });
+    } else if (congratulationsAction === "edit" || congratulationsAction === "remove") {
+      const id = String(payload.id || "").trim();
+      const index = state.entries.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error("\u0421\u0442\u0440\u043e\u043a\u0430 \u00ab\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0438\u00bb \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0430\u0441\u044c.");
+      if (congratulationsAction === "edit") {
+        if (payload.expectedText !== state.entries[index].text) throw new Error("\u0421\u0442\u0440\u043e\u043a\u0443 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0438. \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u0435 \u0441\u043f\u0438\u0441\u043e\u043a.");
+        state.entries[index] = { ...state.entries[index], text: sanitizeBoardText(payload.text), updatedAt: now };
+      } else state.entries.splice(index, 1);
+    } else {
+      if (!state.entries.length) throw new Error("\u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u0443 \u0441\u0442\u0440\u043e\u043a\u0443 \u0432 \u00ab\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0443\u00bb.");
+      const lines = state.entries.map((item) => `\ud83e\udd73 ${item.text}`);
+      const message = [
+        "**\ud83c\udf89\u041f\u041e\u0417\u0414\u0420\u0410\u0412\u041b\u042f\u0415\u041c**",
+        "**\u0442\u0435\u0445, \u043a\u0442\u043e \u043f\u043e\u0434\u0435\u043b\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0436\u0435\u043c \u0441\u0432\u043e\u0435\u0439 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438**:",
+        "",
+        ...lines,
+        "",
+        "**\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430\u043c, \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c \u0438 \u0432\u0441\u0435\u043c, \u043a\u0442\u043e \u0431\u044b\u043b \u0441 \u043d\u0430\u043c\u0438 \ud83d\ude4f**",
+        "**\u0412\u0441\u0435\u0445 \u043f\u0440\u0438\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0441 \u0435\u0449\u0435 \u043e\u0434\u043d\u0438\u043c \u0442\u0440\u0435\u0437\u0432\u044b\u043c \u0434\u043d\u0435\u043c! \ud83e\udd29**"
+      ].join("\n");
+      if (Array.from(message).length > ZOOM_MESSAGE_SAFE_LIMIT) {
+        throw new Error("\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0430 \u0434\u043b\u0438\u043d\u043d\u0435\u0435 \u043b\u0438\u043c\u0438\u0442\u0430 Zoom \u0432 950 \u0441\u0438\u043c\u0432\u043e\u043b\u043e\u0432. \u0423\u0434\u0430\u043b\u0438\u0442\u0435 \u0438\u043b\u0438 \u0443\u043a\u043e\u0440\u043e\u0442\u0438\u0442\u0435 \u0447\u0430\u0441\u0442\u044c \u0441\u0442\u0440\u043e\u043a.");
+      }
+      const queued = this.appendMessages(runtimeState, [message]);
+      state.entries = [];
+      state.lastPublishedAt = now;
+      state.version += 1;
+      state.updatedAt = now;
+      runtimeState.zoomMeetingCongratulations = state;
+      await this.saveState(runtimeState);
+      return { ok: true, duplicate: false, congratulations: state, queued };
+    }
+    state.version += 1;
+    state.updatedAt = now;
+    runtimeState.zoomMeetingCongratulations = state;
+    await this.saveState(runtimeState);
+    return { ok: true, duplicate: false, congratulations: state, queued: [] };
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const action = url.pathname.replace("/", "");
@@ -1453,6 +1530,7 @@ var ZoomMeetingStateDurableObject = class {
       }
       if (action === "meeting_board_action") return Response.json(await this.runMeetingBoardAction(runtimeState, payload));
       if (action === "speaker_questions_action") return Response.json(await this.runSpeakerQuestionsAction(runtimeState, payload));
+      if (action === "meeting_congratulations_action") return Response.json(await this.runMeetingCongratulationsAction(runtimeState, payload));
       if (action === "record_panel_action") {
         const key = String(payload.key || payload.command || "").trim();
         runtimeState.zoomOnlyPanelLastAction = {
@@ -1465,6 +1543,11 @@ var ZoomMeetingStateDurableObject = class {
         return Response.json({ ok: true, lastAction: runtimeState.zoomOnlyPanelLastAction });
       }
       if (action === "status") {
+        const storedCongratulations = normalizeMeetingCongratulationsState(runtimeState.zoomMeetingCongratulations);
+        const currentSessionDate = getMoscowSessionDate();
+        const congratulations = storedCongratulations.sessionDate === currentSessionDate
+          ? storedCongratulations
+          : { ...createEmptyMeetingCongratulationsState(), sessionDate: currentSessionDate };
         return Response.json({
           ok: true,
           queue: { isOpen: false, mode: null, entriesCount: 0, entries: [], historyCount: 0 },
@@ -1475,6 +1558,7 @@ var ZoomMeetingStateDurableObject = class {
           meetingBoard: { ...runtimeState.zoomMeetingBoard, boards: runtimeState.zoomMeetingBoards },
           meetingBoards: runtimeState.zoomMeetingBoards,
           speakerQuestions: runtimeState.zoomSpeakerQuestions,
+          congratulations,
           activeMode: runtimeState.zoomPanelActiveMode
         });
       }
@@ -3129,6 +3213,12 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     speaker_questions_remove: "remove",
     speaker_questions_clear: "clear"
   };
+  const congratulationsActions = {
+    meeting_congratulations_add: "add",
+    meeting_congratulations_edit: "edit",
+    meeting_congratulations_remove: "remove",
+    meeting_congratulations_publish: "publish"
+  };
   if (meetingBoardActions[payload.action]) {
     try {
       const result = await callZoomMeetingState(env, "meeting_board_action", {
@@ -3158,6 +3248,25 @@ async function handleZoomOnlyAppActionRequest(request, env) {
         message: result.duplicate
           ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e."
           : "\u0412\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u044b \u0432 \u0447\u0430\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438."
+      });
+    } catch (error) {
+      return Response.json({ ok: false, error: String(error?.message || error).slice(0, 300) }, { status: 400 });
+    }
+  }
+  if (congratulationsActions[payload.action]) {
+    try {
+      const result = await callZoomMeetingState(env, "meeting_congratulations_action", {
+        ...payload,
+        congratulationsAction: congratulationsActions[payload.action],
+        sessionDate: getMoscowSessionDate()
+      });
+      return Response.json({
+        ...result,
+        message: result.duplicate
+          ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e."
+          : congratulationsActions[payload.action] === "publish"
+            ? "\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430 \u0432 \u0447\u0430\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438."
+            : "\u0421\u0442\u0440\u043e\u043a\u0430 \u043f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0438 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430."
       });
     } catch (error) {
       return Response.json({ ok: false, error: String(error?.message || error).slice(0, 300) }, { status: 400 });
@@ -3505,7 +3614,7 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
   };
   const dayHtml = dayDefinitions.map(([dayKey, label, books]) => {
     const buttons = messageGroups(dayKey);
-    return `<details class="day-panel" data-day="${dayKey}"><summary>${label}</summary><div class="day-body"><section><h2>\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f</h2><div class="grid">${buttons}</div></section><section class="publications"><h2>\u041b\u0438\u0442\u0435\u0440\u0430\u0442\u0443\u0440\u0430</h2>${books.map((book) => publicationRow(dayKey, book)).join("")}</section><section class="board-editor"><h2>\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0442\u0435\u043c\u044b</h2><div class="board-part queue-part"><h3>\u041e\u0447\u0435\u0440\u0435\u0434\u044c</h3><div class="input-action"><input data-entry-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c"><button class="action primary" data-add-entry type="button">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c</button></div><div class="state-list" data-entry-list>\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.</div></div><div class="board-part topics-part"><h3>\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0442\u0435\u043c\u044b</h3><div class="input-action"><input data-topic-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0434\u043e\u043f. \u0442\u0435\u043c\u0443"><button class="action primary" data-add-topic type="button">\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c</button></div><div class="state-list" data-topic-list>\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.</div></div></section></div></details>`;
+    return `<details class="day-panel" data-day="${dayKey}"><summary>${label}</summary><div class="day-body"><section><h2>\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0441\u043e\u0431\u0440\u0430\u043d\u0438\u044f</h2><div class="grid">${buttons}</div></section><section class="publications"><h2>\u041b\u0438\u0442\u0435\u0440\u0430\u0442\u0443\u0440\u0430</h2>${books.map((book) => publicationRow(dayKey, book)).join("")}</section><section class="board-editor"><h2>\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0442\u0435\u043c\u044b</h2><div class="board-part queue-part"><h3>\u041e\u0447\u0435\u0440\u0435\u0434\u044c</h3><div class="input-action"><input data-entry-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c"><button class="action primary" data-add-entry type="button">\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043e\u0447\u0435\u0440\u0435\u0434\u044c</button></div><div class="state-list" data-entry-list>\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.</div></div><div class="board-part topics-part"><h3>\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0442\u0435\u043c\u044b</h3><div class="input-action"><input data-topic-input maxlength="300" placeholder="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0434\u043e\u043f. \u0442\u0435\u043c\u0443"><button class="action primary" data-add-topic type="button">\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c</button></div><div class="state-list" data-topic-list>\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.</div></div></section><section class="congratulations-part"><h2>\u041f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\u043b\u043a\u0430</h2><div class="input-action"><input data-congratulations-input maxlength="300" placeholder="\u0418\u043c\u044f \u0438 \u0441\u0442\u0430\u0436 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438"><button class="action primary" data-congratulations-add type="button">\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c</button></div><div class="state-list" data-congratulations-list>\u0421\u0442\u0440\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div><button class="action congratulations-publish" data-congratulations-publish type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM</button></section></div></details>`;
   }).join("");
   const speakerButtons = messageGroups("", true);
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\u041f\u0443\u043b\u044c\u0442 \u0442\u0435\u0445\u0432\u0435\u0434\u0430</title><style>
@@ -3539,8 +3648,13 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
     smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",b=>run({action:"speaker_questions_remove",id:item.id},b),"danger rare"),
     smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",b=>run({action:"speaker_questions_defer",id:item.id},b),"defer rare")
   ];buttons[3].dataset.unavailable=String(spoken||index===state.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";list.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))})}
+  function renderCongratulations(state){document.querySelectorAll("[data-day]").forEach(panel=>{const list=panel.querySelector("[data-congratulations-list]");if(!list||list.querySelector("[data-editing]"))return;list.replaceChildren();if(!state?.entries?.length){list.textContent="\u0421\u0442\u0440\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442."}else state.entries.forEach(item=>list.append(row("\ud83e\udd73 "+item.text,[smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",button=>editRow(button,item,{action:"meeting_congratulations_edit"}),"edit rare"),smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",button=>run({action:"meeting_congratulations_remove",id:item.id},button),"danger rare")])));const publish=panel.querySelector("[data-congratulations-publish]");if(publish){publish.style.width="100%";publish.style.marginTop="8px";publish.style.background="#dff3e4";publish.style.borderColor="#5d9b6e";publish.dataset.unavailable=String(!state?.entries?.length);publish.disabled=publish.dataset.unavailable==="true"}})}
+  renderCongratulations({entries:[]});
+  const originalRenderActionState=renderActionState;renderActionState=function(data,body){if(body.action==="meeting_congratulations_edit")document.querySelectorAll("[data-editing]").forEach(el=>delete el.dataset.editing);originalRenderActionState(data,body);if(data.congratulations)renderCongratulations(data.congratulations)};
   function statusRequestPath(){const url=new URL(statusPath,location.href);if(timerClient){url.searchParams.set("includeTimer","1");url.searchParams.set("instanceId",timerClient.instanceId);url.searchParams.set("product",timerClient.product);url.searchParams.set("indicatorSupported",timerClient.indicatorSupported?"1":"0")}return url.toString()}async function refreshState(){if(refreshPromise)return refreshPromise;refreshPromise=(async()=>{try{const data=await requestJson(statusRequestPath());renderBoard(data.meetingBoard);renderSpeaker(data.speakerQuestions);if(data.sharedTimer&&parent!==window)parent.postMessage({type:"nafanya-worker-state",sharedTimer:data.sharedTimer},location.origin);return data}catch(error){log("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435: "+error.message);return null}})();try{return await refreshPromise}finally{refreshPromise=null}}
+  const originalRefreshState=refreshState;refreshState=async function(){const data=await originalRefreshState();if(data)renderCongratulations(data.congratulations);return data};
   document.querySelectorAll("[data-message-key]").forEach(button=>button.onclick=()=>run({type:"message",key:button.dataset.messageKey},button));document.querySelectorAll("[data-publish-day]").forEach(button=>button.onclick=()=>run({action:"meeting_board_publish",dayKey:button.dataset.publishDay,requestId:requestId()},button));document.querySelectorAll("[data-book]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1){log("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0439 \u043d\u043e\u043c\u0435\u0440.");return}run({action:"book_excerpt",collectionId:button.dataset.book,number},button).then(data=>{if(data)input.value=""})});document.querySelectorAll("[data-daily]").forEach(button=>button.onclick=()=>run({action:"daily_reflection"},button));document.querySelectorAll("[data-game]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1||number>500){log("\u041d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430: \u043e\u0442 1 \u0434\u043e 500.");return}run({action:"game_question",number},button).then(data=>{if(data)input.value=""})});
+  document.querySelectorAll("[data-day]").forEach(panel=>{const input=panel.querySelector("[data-congratulations-input]"),add=panel.querySelector("[data-congratulations-add]"),publish=panel.querySelector("[data-congratulations-publish]");add.onclick=()=>run({action:"meeting_congratulations_add",text:input.value,requestId:requestId()},add).then(data=>{if(data)input.value=""});publish.onclick=()=>run({action:"meeting_congratulations_publish",requestId:requestId()},publish)});
   document.querySelectorAll("[data-day]").forEach(panel=>{const dayKey=panel.dataset.day;panel.querySelector("[data-add-entry]").onclick=()=>{const input=panel.querySelector("[data-entry-input]");run({action:"meeting_board_add_entry",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-entry]")).then(data=>{if(data)input.value=""})};panel.querySelector("[data-add-topic]").onclick=()=>{const input=panel.querySelector("[data-topic-input]");run({action:"meeting_board_add_topic",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-topic]")).then(data=>{if(data)input.value=""})}});document.querySelector("[data-speaker-publish]").onclick=event=>run({action:"speaker_questions_publish",requestId:requestId()},event.currentTarget);document.querySelector("[data-speaker-add]").onclick=()=>{const input=document.querySelector("[data-speaker-input]");run({action:"speaker_questions_add",text:input.value,requestId:requestId()},document.querySelector("[data-speaker-add]")).then(data=>{if(data)input.value=""})}
   const weekday=new Intl.DateTimeFormat("en-US",{timeZone:"Europe/Moscow",weekday:"short"}).format(new Date()).toLowerCase(),map={mon:"monday",tue:"tuesday",thu:"thursday",fri:"friday",sun:"sunday"};const todayPanel=document.querySelector('[data-day="'+map[weekday]+'"]');if(todayPanel)todayPanel.open=true;
   const fullClearButton=document.querySelector("[data-board-clear]");if(fullClearButton){fullClearButton.onclick=event=>{const selected=document.querySelector("[data-day][open]")||document.querySelector("[data-day]");run({action:"meeting_board_clear_all",dayKey:selected?.dataset.day||"monday",requestId:requestId()},event.currentTarget)};}

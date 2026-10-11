@@ -1,5 +1,5 @@
 export class Backoff {
-  constructor({ minIntervalMs = 1500, maxIntervalMs = 1500, errorIntervalMs = 10000 } = {}) {
+  constructor({ minIntervalMs = 1000, maxIntervalMs = 1000, errorIntervalMs = 10000 } = {}) {
     this.minIntervalMs = minIntervalMs;
     this.maxIntervalMs = Math.max(maxIntervalMs, minIntervalMs);
     this.errorIntervalMs = Math.max(errorIntervalMs, minIntervalMs);

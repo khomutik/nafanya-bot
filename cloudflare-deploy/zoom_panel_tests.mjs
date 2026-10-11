@@ -163,6 +163,10 @@ async function testAccess() {
   assert.match(html, /data-speaker/u);
   assert.match(html, /data-add-entry/u);
   assert.match(html, /data-board-clear/u);
+  assert.ok([...html.matchAll(/data-congratulations-input/g)].length >= 5,
+    "Every weekday panel should expose the shared congratulation builder");
+  assert.match(html, /data-congratulations-publish[^>]*type="button">Отправить в ZOOM/u);
+  assert.match(html, /meeting_congratulations_publish/u);
   assert.match(html, /meeting_board_clear_all/u);
   assert.match(html, /\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0432\u0441\u0451/u);
   assert.doesNotMatch(html, /confirm\(/u, "Zoom panel must not rely on browser confirmation dialogs");
@@ -1289,6 +1293,80 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal((await pullOutbox(env)).length, 0);
 }
 
+async function testMeetingCongratulationsBuilder() {
+  const env = makeEnv();
+  const add = async (text, requestId) => postPanelAction(env, { action: "meeting_congratulations_add", text, requestId });
+  let response = await add("\u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 2 \u043c\u0435\u0441\u044f\u0446\u0430", "congrat-add-1");
+  let data = await json(response);
+  assert.equal(response.status, 200);
+  assert.deepEqual(data.queued, [], "Draft rows must not be sent to Zoom before the publish button");
+  assert.equal((await pullOutbox(env)).length, 0);
+  const firstId = data.congratulations.entries[0].id;
+
+  response = await postPanelAction(env, { action: "meeting_congratulations_add", text: "\u0421\u0430\u0448\u0430 3 \u0434\u043d\u044f", requestId: "congrat-add-2" });
+  data = await json(response);
+  const secondId = data.congratulations.entries[1].id;
+  const status = await getZoomOnlyStatus(env);
+  assert.equal(status.congratulations.entries.length, 2,
+    "The builder is shared, not separately stored under the weekday panels");
+
+  response = await postPanelAction(env, {
+    action: "meeting_congratulations_edit", id: firstId,
+    expectedText: "\u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 2 \u043c\u0435\u0441\u044f\u0446\u0430",
+    text: "\u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 3 \u043c\u0435\u0441\u044f\u0446\u0430", requestId: "congrat-edit-1"
+  });
+  data = await json(response);
+  assert.equal(data.congratulations.entries[0].text, "\u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 3 \u043c\u0435\u0441\u044f\u0446\u0430");
+  response = await postPanelAction(env, { action: "meeting_congratulations_remove", id: secondId, requestId: "congrat-remove-1" });
+  data = await json(response);
+  assert.equal(data.congratulations.entries.length, 1);
+  assert.equal((await pullOutbox(env)).length, 0, "Edit and remove operate on the draft only");
+
+  response = await add("\u0421\u0430\u0448\u0430 3 \u0434\u043d\u044f", "congrat-add-3");
+  data = await json(response);
+  response = await add("\u0412\u0430\u0441\u044f 7 \u043c\u0435\u0441\u044f\u0446\u0435\u0432", "congrat-add-4");
+  data = await json(response);
+  response = await add("\u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440 27 \u043b\u0435\u0442", "congrat-add-5");
+  data = await json(response);
+  response = await postPanelAction(env, { action: "meeting_congratulations_publish", requestId: "congrat-publish-1" });
+  data = await json(response);
+  assert.equal(response.status, 200);
+  assert.equal(data.queued.length, 1, "The assembled message is one independent outbox item");
+  assert.equal(data.queued[0].coalesceKey, undefined, "Congratulation publication must not replace queue/topic messages");
+  assert.equal(data.queued[0].publication, undefined, "It is a one-time end-of-meeting message, not a replaceable state snapshot");
+  const expected = [
+    "**\ud83c\udf89\u041f\u041e\u0417\u0414\u0420\u0410\u0412\u041b\u042f\u0415\u041c**",
+    "**\u0442\u0435\u0445, \u043a\u0442\u043e \u043f\u043e\u0434\u0435\u043b\u0438\u043b\u0441\u044f \u0441\u0442\u0430\u0436\u0435\u043c \u0441\u0432\u043e\u0435\u0439 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438**:",
+    "",
+    "\ud83e\udd73 \u041c\u0430\u043d\u044f 1 \u0433\u043e\u0434 3 \u043c\u0435\u0441\u044f\u0446\u0430",
+    "\ud83e\udd73 \u0421\u0430\u0448\u0430 3 \u0434\u043d\u044f",
+    "\ud83e\udd73 \u0412\u0430\u0441\u044f 7 \u043c\u0435\u0441\u044f\u0446\u0435\u0432",
+    "\ud83e\udd73 \u0412\u043b\u0430\u0434\u0438\u043c\u0438\u0440 27 \u043b\u0435\u0442",
+    "",
+    "**\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430\u043c, \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c \u0438 \u0432\u0441\u0435\u043c, \u043a\u0442\u043e \u0431\u044b\u043b \u0441 \u043d\u0430\u043c\u0438 \ud83d\ude4f**",
+    "**\u0412\u0441\u0435\u0445 \u043f\u0440\u0438\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0441 \u0435\u0449\u0435 \u043e\u0434\u043d\u0438\u043c \u0442\u0440\u0435\u0437\u0432\u044b\u043c \u0434\u043d\u0435\u043c! \ud83e\udd29**"
+  ].join("\n");
+  assert.equal(data.queued[0].text, expected);
+  assert.ok(Array.from(expected).length <= 950);
+  assert.deepEqual(data.congratulations.entries, [], "Published draft rows should clear to prevent accidental repost");
+
+  const duplicate = await postPanelAction(env, { action: "meeting_congratulations_publish", requestId: "congrat-publish-1" });
+  assert.equal((await json(duplicate)).duplicate, true);
+  assert.equal((await pullOutbox(env)).length, 1, "Retrying the same request cannot duplicate the message");
+  response = await postPanelAction(env, { action: "meeting_congratulations_publish", requestId: "congrat-publish-2" });
+  assert.equal(response.status, 400, "A fresh click after successful publish cannot send an empty duplicate");
+  assert.equal((await pullOutbox(env)).length, 1);
+
+  for (let index = 0; index < 4; index += 1) {
+    response = await add("x".repeat(300), `congrat-long-${index}`);
+    assert.equal(response.status, 200);
+  }
+  response = await postPanelAction(env, { action: "meeting_congratulations_publish", requestId: "congrat-too-long" });
+  assert.equal(response.status, 400, "One assembled message must stay within Zoom's 950-character limit");
+  assert.equal((await json(response)).ok, false);
+  assert.equal((await pullOutbox(env)).length, 1, "An overlong draft must not partially publish");
+}
+
 async function testOneShotActionUsesOneAtomicDurableObjectWrite() {
   const env = makeEnv();
   await getZoomOnlyStatus(env);
@@ -1865,6 +1943,7 @@ await testQueuePausedLibraryPanelAndActions();
 await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
 await testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessages();
 await testMeetingBoardAndSpeakerState();
+await testMeetingCongratulationsBuilder();
 await testGlobalClearRemovesYesterdayState();
 await testSharedZoomTimerState();
 await testZoomStateMigrationAndIsolation();

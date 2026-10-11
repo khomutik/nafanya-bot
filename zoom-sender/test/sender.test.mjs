@@ -20,7 +20,7 @@ function makeConfig() {
     workerBaseUrl: "https://worker.example",
     zoomBridgeSecret: "secret",
     outboxLimit: 20,
-    minIntervalMs: 1500,
+    minIntervalMs: 1000,
     maxIntervalMs: 30000,
     errorIntervalMs: 10000
   };
@@ -130,13 +130,13 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
     ZOOM_SENDER_MAX_POLL_MS: "-10",
     ZOOM_SENDER_ERROR_POLL_MS: "also-bad"
   });
-  assert.equal(fallback.minIntervalMs, 1500);
-  assert.equal(fallback.maxIntervalMs, 1500);
+  assert.equal(fallback.minIntervalMs, 1000);
+  assert.equal(fallback.maxIntervalMs, 1000);
   assert.equal(fallback.errorIntervalMs, 10000);
   assert.equal(fallback.zoomRecoveryAfterMs, 180000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
   assert.equal(fallback.outboxMeetingId, "");
-  assert.equal(loadConfig({}).maxIntervalMs, 1500);
+  assert.equal(loadConfig({}).maxIntervalMs, 1000);
 });
 
 test("replacement safety matches only exact messages owned by Nafanya", () => {
@@ -333,7 +333,7 @@ test("sender retries a failed initial browser launch instead of exiting", async 
   assert.ok(stops >= 2);
 });
 
-test("an admitted sender checks an empty outbox every 1.5 seconds", async () => {
+test("an admitted sender checks an empty outbox every second", async () => {
   const config = loadConfig({});
   const backoff = new Backoff(config);
   const service = new ZoomSenderService({
@@ -344,9 +344,9 @@ test("an admitted sender checks an empty outbox every 1.5 seconds", async () => 
     logger: { info() {}, warn() {} }
   });
 
-  assert.equal((await service.runOnce()).delayMs, 1500);
-  assert.equal((await service.runOnce()).delayMs, 1500);
-  assert.equal((await service.runOnce()).delayMs, 1500);
+  assert.equal((await service.runOnce()).delayMs, 1000);
+  assert.equal((await service.runOnce()).delayMs, 1000);
+  assert.equal((await service.runOnce()).delayMs, 1000);
   assert.equal(backoff.onError(), 10000);
 });
 
@@ -354,8 +354,8 @@ test("messages reset backoff to minimum and errors use the configured retry dela
   const backoff = new Backoff(makeConfig());
   backoff.onMessages(0);
   backoff.onMessages(0);
-  assert.equal(backoff.currentDelayMs, 6000);
-  assert.equal(backoff.onMessages(1), 1500);
+  assert.equal(backoff.currentDelayMs, 4000);
+  assert.equal(backoff.onMessages(1), 1000);
   assert.equal(backoff.onError(), 10000);
   assert.equal(backoff.onError(), 10000);
 });
@@ -543,7 +543,7 @@ test("auth setup uses server env credentials without hardcoded secrets or artifa
 test("health reports warning/unhealthy unless Zoom page and chat are ready", () => {
   const health = new HealthState();
   health.markWorkerPoll();
-  health.updateBackoff({ currentDelayMs: 1500 });
+  health.updateBackoff({ currentDelayMs: 1000 });
   let snapshot = health.snapshot();
   assert.equal(snapshot.ok, false);
   assert.equal(snapshot.status, "unhealthy");
