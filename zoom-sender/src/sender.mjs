@@ -14,6 +14,7 @@ export class ZoomSenderService {
     this.stopped = false;
     this.started = false;
     this.zoomUnreadySince = null;
+    this.richFormattingWarnings = new Set();
   }
 
   async start() {
@@ -95,11 +96,13 @@ export class ZoomSenderService {
         const text = String(message.text || "").trim();
         if (!id || !text) continue;
         const result = await this.zoomAdapter.sendMessage(text);
-        if (result?.sent && parseZoomRichText(text).hasFormatting && !result.formattingApplied) {
-          this.logger.warn?.("Zoom Sender delivered a formatted message as plain text because Zoom rejected rich clipboard paste");
+        if (!result?.sent && parseZoomRichText(text).hasFormatting && !this.richFormattingWarnings.has(id)) {
+          this.richFormattingWarnings.add(id);
+          this.logger.warn?.(`Zoom Sender kept formatted outbox message ${id} unacknowledged: native Zoom formatting was not available`);
         }
         this.health.updateZoom(await this.zoomAdapter.getPresence());
         if (result?.sent && result?.ack) {
+          this.richFormattingWarnings.delete(id);
           ackIds.push(id);
           this.health.markSend();
         } else {

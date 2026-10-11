@@ -202,11 +202,11 @@ test("sender acks only messages successfully sent to Zoom", async () => {
   assert.match(result.error.message, /send failed/u);
 });
 
-test("sender does not ack failed individual sends that return no ack", async () => {
+test("sender does not ack a formatted message when native Zoom formatting is unavailable", async () => {
   const acked = [];
   const workerClient = {
     async pull() {
-      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "two" }] };
+      return { messages: [{ id: 1, text: "one" }, { id: 2, text: "**two**" }] };
     },
     async ack(ids) {
       acked.push(...ids);
@@ -216,7 +216,7 @@ test("sender does not ack failed individual sends that return no ack", async () 
   const zoomAdapter = {
     async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
     async sendMessage(text) {
-      return text === "one" ? { sent: true, ack: true } : { sent: false, ack: false };
+      return text === "one" ? { sent: true, ack: true } : { sent: false, ack: false, reason: "zoom_format_toolbar_unavailable" };
     }
   };
   const service = new ZoomSenderService({

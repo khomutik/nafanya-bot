@@ -3,6 +3,8 @@ import { parseZoomRichText } from '../rich-text.mjs';
 const CHAT_BUTTON_PATTERNS = [/chat/i, /\u0447\u0430\u0442/iu];
 const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435/iu, /\u0435\u0449\u0435/iu];
 const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
+const CHAT_FORMAT_PATTERNS = [/format/i, /\u0444\u043e\u0440\u043c\u0430\u0442/iu];
+const CHAT_BOLD_PATTERNS = [/\bbold\b/i, /\u0436\u0438\u0440\u043d/iu];
 const COOKIE_BUTTON_PATTERNS = [/decline cookies/i, /accept cookies/i, /\u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c/iu, /\u043f\u0440\u0438\u043d\u044f\u0442\u044c/iu];
 const JOIN_FROM_BROWSER_PATTERNS = [/join from browser/i, /\u0432\u043e\u0439\u0442\u0438.*\u0431\u0440\u0430\u0443\u0437\u0435\u0440/iu];
 const CONTINUE_WITHOUT_MEDIA_PATTERNS = [/continue without microphone and camera/i, /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu];
@@ -14,7 +16,6 @@ const DIAGNOSTIC_HTML_LIMIT = 5000;
 const CHAT_DIAGNOSTIC_TEXT_LIMIT = 1200;
 const CHAT_DIAGNOSTIC_DOM_LIMIT = 2500;
 const ZOOM_MESSAGE_REF_RE = /^\d+-\{[0-9a-f-]{20,}\}$/iu;
-const clipboardPermissionOrigins = new WeakMap();
 const CHAT_INPUT_SELECTORS = [
   'textarea[aria-label*="chat" i]',
   'textarea[placeholder*="chat" i]',
@@ -286,16 +287,10 @@ async function sendChatText(page, text) {
     const richText = parseZoomRichText(text);
     let formattingApplied = false;
     if (richText.hasFormatting) {
-      formattingApplied = await pasteZoomRichText(page, input, richText);
+      formattingApplied = await typeZoomRichTextWithToolbar(page, input, richText);
       if (!formattingApplied) {
         const cleared = await clearChatInput(input);
-        if (!cleared) return { sent: false, ack: false, reason: "rich_paste_recovery_failed" };
-        formattingApplied = await typeZoomRichText(page, input, richText);
-        if (!formattingApplied) {
-          const clearedAgain = await clearChatInput(input);
-          if (!clearedAgain) return { sent: false, ack: false, reason: "rich_shortcut_recovery_failed" };
-          await page.keyboard.insertText(richText.plainText);
-        }
+        return { sent: false, ack: false, reason: cleared ? "zoom_format_toolbar_unavailable" : "rich_format_recovery_failed" };
       }
     } else {
       await page.keyboard.insertText(richText.plainText);
@@ -317,88 +312,102 @@ async function clearChatInput(input) {
   }).catch(() => false);
 }
 
-async function pasteZoomRichText(page, input, richText) {
-  const origin = await page.evaluate(() => location.origin).catch(() => "");
-  if (!origin || !await input.evaluate((element) => element.isContentEditable).catch(() => false)) return false;
-  const context = page.context();
-  let grantedOrigins = clipboardPermissionOrigins.get(context);
-  if (!grantedOrigins) {
-    grantedOrigins = new Set();
-    clipboardPermissionOrigins.set(context, grantedOrigins);
-  }
-  if (!grantedOrigins.has(origin)) {
-    grantedOrigins.add(origin);
-    await context.grantPermissions(["clipboard-write"], { origin }).catch(() => null);
-  }
-  try {
-    await input.evaluate(async (element, payload) => {
-      if (!window.isSecureContext || !navigator.clipboard?.write || typeof ClipboardItem !== "function") {
-        throw new Error("rich_clipboard_unavailable");
-      }
-      const item = new ClipboardItem({
-        "text/plain": new Blob([payload.plainText], { type: "text/plain" }),
-        "text/html": new Blob([payload.html], { type: "text/html" })
-      });
-      await navigator.clipboard.write([item]);
-      element.focus();
-      element.click();
-    }, { plainText: richText.plainText, html: richText.html });
-    await input.press("Control+V");
-    const deadline = Date.now() + 900;
-    while (Date.now() < deadline) {
-      const state = await input.evaluate((element) => {
-        const value = "value" in element ? element.value : element.innerText || element.textContent || "";
-        const bold = [...element.querySelectorAll("strong, b, [style*='font-weight']")].some((node) => {
-          const weight = Number.parseInt(getComputedStyle(node).fontWeight, 10);
-          return node.tagName === "STRONG" || node.tagName === "B" || weight >= 600;
-        });
-        return { text: String(value || ""), bold };
-      }).catch(() => ({ text: "", bold: false }));
-      if (normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText) && state.bold) return true;
-      await page.waitForTimeout(25).catch(() => null);
-    }
-  } catch {
-    // The caller clears the editor before falling back to plain text.
-  }
-  return false;
+async function clickZoomEditorControl(page, patterns) {
+  const serialized = patterns.map((pattern) => ({ source: pattern.source, flags: pattern.flags }));
+  const clicked = await page.evaluate((items) => {
+    const regexes = items.map((item) => new RegExp(item.source, item.flags));
+    const clean = (value) => String(value || "").replace(/\s+/gu, " ").trim();
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 1 && rect.height > 1;
+    };
+    const candidates = [...document.querySelectorAll("button, [role='button']")].filter(isVisible);
+    const target = candidates.find((element) => {
+      const label = [
+        clean(element.getAttribute("aria-label")),
+        clean(element.getAttribute("title")),
+        clean(element.getAttribute("data-tooltip")),
+        clean(element.innerText || element.textContent)
+      ].filter(Boolean).join(" ");
+      return regexes.some((regex) => regex.test(label));
+    });
+    if (!target) return false;
+    target.click();
+    return true;
+  }, serialized).catch(() => false);
+  if (clicked) await page.waitForTimeout(40).catch(() => null);
+  return clicked;
 }
 
-async function typeZoomRichText(page, input, richText) {
+async function inspectBoldToolbar(page, input) {
+  const serialized = CHAT_BOLD_PATTERNS.map((pattern) => ({ source: pattern.source, flags: pattern.flags }));
+  return input.evaluate((element, patterns) => {
+    const regexes = patterns.map((item) => new RegExp(item.source, item.flags));
+    const clean = (value) => String(value || "").replace(/\s+/gu, " ").trim();
+    const visible = (node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 1 && rect.height > 1;
+    };
+    const toolbar = [...document.querySelectorAll("button, [role='button']")].find((node) => {
+      if (!visible(node)) return false;
+      const label = [node.getAttribute("aria-label"), node.getAttribute("title"), node.getAttribute("data-tooltip"), node.innerText || node.textContent].map(clean).filter(Boolean).join(" ");
+      return regexes.some((regex) => regex.test(label));
+    });
+    if (!toolbar) return { available: false, active: false };
+    const className = typeof toolbar.className === "string" ? toolbar.className : "";
+    const pressed = toolbar.getAttribute("aria-pressed") === "true"
+      || toolbar.getAttribute("aria-checked") === "true"
+      || toolbar.getAttribute("data-state") === "on"
+      || /(?:active|selected|pressed|is-active)/i.test(className);
+    let commandState = false;
+    try {
+      element.focus();
+      commandState = document.queryCommandState("bold");
+    } catch {}
+    return { available: true, active: pressed || commandState };
+  }, serialized).catch(() => ({ available: false, active: false }));
+}
+
+async function typeZoomRichTextWithToolbar(page, input, richText) {
   if (!await input.evaluate((element) => element.isContentEditable).catch(() => false)) return false;
   const expectedBold = normalizeComparableChatText(richText.fragments.filter(({ bold }) => bold).map(({ text }) => text).join(""));
   if (!expectedBold) return false;
-  let boldActive = false;
   try {
+    let toolbarState = await inspectBoldToolbar(page, input);
+    if (!toolbarState.available) {
+      await clickZoomEditorControl(page, CHAT_FORMAT_PATTERNS);
+      toolbarState = await inspectBoldToolbar(page, input);
+    }
+    if (!toolbarState.available) return false;
+    if (toolbarState.active && !await clickZoomEditorControl(page, CHAT_BOLD_PATTERNS)) return false;
+    let boldActive = false;
     for (const fragment of richText.fragments) {
       if (fragment.bold !== boldActive) {
-        await input.press("Control+B");
+        if (!await clickZoomEditorControl(page, CHAT_BOLD_PATTERNS)) return false;
         boldActive = fragment.bold;
       }
       if (fragment.text) await page.keyboard.insertText(fragment.text);
     }
     if (boldActive) {
-      await input.press("Control+B");
-      boldActive = false;
+      if (!await clickZoomEditorControl(page, CHAT_BOLD_PATTERNS)) return false;
     }
-    const state = await input.evaluate((element) => {
+    const editorState = await input.evaluate((element) => {
       const value = "value" in element ? element.value : element.innerText || element.textContent || "";
-      const isBold = (node) => {
-        const weight = getComputedStyle(node).fontWeight;
-        return node.tagName === "STRONG" || node.tagName === "B" || weight === "bold" || Number.parseInt(weight, 10) >= 600;
-      };
-      const nodes = [...element.querySelectorAll("strong, b, [style*='font-weight'], [class]")].filter((node) => {
-        if (!isBold(node)) return false;
-        for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
-          if (isBold(parent)) return false;
-        }
-        return true;
-      });
-      return { text: String(value || ""), boldText: nodes.map((node) => node.innerText || node.textContent || "").join("") };
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const boldText = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent) continue;
+        const weight = getComputedStyle(parent).fontWeight;
+        if (parent.closest("strong, b") || weight === "bold" || Number.parseInt(weight, 10) >= 600) boldText.push(node.nodeValue || "");
+      }
+      return { text: String(value || ""), boldText: boldText.join("") };
     }).catch(() => ({ text: "", boldText: "" }));
-    return normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText)
-      && normalizeComparableChatText(state.boldText) === expectedBold;
+    return normalizeComparableChatText(editorState.text) === normalizeComparableChatText(richText.plainText)
+      && normalizeComparableChatText(editorState.boldText) === expectedBold;
   } catch {
-    if (boldActive) await input.press("Control+B").catch(() => null);
     return false;
   }
 }
