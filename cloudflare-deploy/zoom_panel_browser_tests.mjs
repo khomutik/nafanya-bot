@@ -45,6 +45,9 @@ try {
   assert.equal(await row.locator('input').inputValue(),'111 corrected','Polling must preserve an unfinished edit');
   await row.getByRole('button',{name:'Сохранить',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .state-row>span')?.textContent.includes('111 corrected'));
+  assert.equal(await row.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true,'An unpublished draft cannot be marked in the Zoom chat');
+  await day.locator('[data-board-publish]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.disabled===false);
   await row.getByRole('button',{name:'Высказался',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.getAttribute('aria-pressed')==='true');
   assert.equal(await row.getByRole('button',{name:'Пропускает',exact:true}).isDisabled(),true);
@@ -81,7 +84,7 @@ try {
   await day.locator('[data-congratulations-publish]').click();
   await page.waitForFunction(()=>document.querySelectorAll('[data-day="thursday"] [data-congratulations-list] .state-row').length===0);
   const congratsOutbox=(await readOutbox()).at(-1);
-  assert.match(congratsOutbox.text,/\*\*🎉ПОЗДРАВЛЯЕМ\*\*[\s\S]*🥳 Маня 1 год 3 месяца[\s\S]*🥳 Вася 7 месяцев[\s\S]*\*\*Спасибо участникам/u);
+  assert.match(congratsOutbox.text,/🎉ПОЗДРАВЛЯЕМ[\s\S]*🥳 Маня 1 год 3 месяца[\s\S]*🥳 Вася 7 месяцев[\s\S]*Спасибо участникам/u);
   assert.equal(congratsOutbox.coalesceKey,undefined,'Congratulation message is not a replaceable queue snapshot');
   const speaker=page.locator('[data-speaker]');await speaker.evaluate(el=>el.open=true);
   await speaker.locator('[data-speaker-input]').fill('First question');await speaker.locator('[data-speaker-add]').click();

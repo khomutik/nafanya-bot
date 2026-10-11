@@ -28,7 +28,7 @@ export function unicodeLength(value) {
 }
 
 export function createEmptyMeetingBoardState() {
-  return { sessionDate: "", dayKey: "", version: 0, entries: [], additionalTopics: [], lastMessages: [], processedRequestIds: [], updatedAt: 0 };
+  return { sessionDate: "", dayKey: "", version: 0, entries: [], additionalTopics: [], publishedEntries: [], publishedAdditionalTopics: [], draftPending: false, lastMessages: [], processedRequestIds: [], updatedAt: 0 };
 }
 
 export function createEmptySpeakerQuestionsState() {
@@ -41,11 +41,18 @@ function normalizeRequestIds(value) {
 
 export function normalizeMeetingBoardState(value) {
   const source = value && typeof value === "object" ? value : {};
+  const entries = (Array.isArray(source.entries) ? source.entries : []).filter((item) => item && item.id && item.text).map((item) => ({ ...item, status: item.status === "spoken" ? "spoken" : "waiting" }));
+  const additionalTopics = (Array.isArray(source.additionalTopics) ? source.additionalTopics : []).filter((item) => item && item.id && item.text);
+  const publishedEntries = Array.isArray(source.publishedEntries) ? source.publishedEntries : (source.lastMessages?.length ? entries : []);
+  const publishedAdditionalTopics = Array.isArray(source.publishedAdditionalTopics) ? source.publishedAdditionalTopics : (source.lastMessages?.length ? additionalTopics : []);
   return {
     ...createEmptyMeetingBoardState(),
     ...source,
-    entries: (Array.isArray(source.entries) ? source.entries : []).filter((item) => item && item.id && item.text).map((item) => ({ ...item, status: item.status === "spoken" ? "spoken" : "waiting" })),
-    additionalTopics: (Array.isArray(source.additionalTopics) ? source.additionalTopics : []).filter((item) => item && item.id && item.text),
+    entries,
+    additionalTopics,
+    publishedEntries: publishedEntries.filter((item) => item && item.id && item.text).map((item) => ({ ...item, status: item.status === "spoken" ? "spoken" : "waiting" })),
+    publishedAdditionalTopics: publishedAdditionalTopics.filter((item) => item && item.id && item.text),
+    draftPending: source.draftPending === true,
     lastMessages: (Array.isArray(source.lastMessages) ? source.lastMessages : []).map(String).filter(Boolean),
     processedRequestIds: normalizeRequestIds(source.processedRequestIds)
   };

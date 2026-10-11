@@ -353,6 +353,31 @@ test("an admitted sender checks an empty outbox every second", async () => {
   assert.equal(backoff.onError(), 10000);
 });
 
+test("new publications are acknowledged before deletion, and a busy outbox postpones cleanup", async () => {
+  let now=0,cleanupCalls=0,pulls=0;
+  const acked=[];
+  const publication={key:"meeting_board",id:"2026-10-08:2",sessionDate:"2026-10-08",partIndex:0,partCount:1};
+  const batches=[{messages:[{id:2,text:"Board v2",publication}]},{messages:[{id:3,text:"Prayer"}]},{messages:[]}];
+  const delivery={
+    async deliver(items,options){assert.equal(options.deferCleanup,true);return {ackIds:items.map(item=>item.id),complete:true};},
+    hasPendingCleanup(){return true;},pendingCleanupCount(){return 1;},nextCleanupAt(){return 0;},
+    async retryCleanup({maxAttempts}){assert.equal(maxAttempts,1);cleanupCalls++;return 1;}
+  };
+  const service=new ZoomSenderService({
+    workerClient:{async pull(){pulls++;return batches.shift()||{messages:[]};},async ack(ids){acked.push(...ids);}},
+    zoomAdapter:{async getPresence(){return {zoomPageOpen:true,zoomJoined:true,chatOpen:true};},async sendMessage(){return {sent:true,ack:true};}},
+    publicationDelivery:delivery,backoff:new Backoff(makeConfig()),health:new HealthState(),
+    logger:{info(){},warn(){}},now:()=>now
+  });
+  await service.runOnce();
+  assert.deepEqual(acked,[2]);assert.equal(cleanupCalls,0);
+  now=2900;await service.runOnce();
+  assert.deepEqual(acked,[2,3]);assert.equal(cleanupCalls,0);
+  now=3000;await service.runOnce();assert.equal(cleanupCalls,0);
+  now=5900;await service.runOnce();assert.equal(cleanupCalls,1);
+  assert.equal(pulls,4);
+});
+
 test("messages reset backoff to minimum and errors use the configured retry delay", async () => {
   const backoff = new Backoff(makeConfig());
   backoff.onMessages(0);

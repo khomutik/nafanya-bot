@@ -13,6 +13,9 @@ export class ZoomSenderService {
     this.stopped = false;
     this.started = false;
     this.zoomUnreadySince = null;
+    this.cleanupDueAt = null;
+    this.cleanupDebounceMs = 3000;
+    this.cleanupPassesRemaining = 0;
   }
 
   async start() {
@@ -69,6 +72,18 @@ export class ZoomSenderService {
       this.health.markWorkerPoll();
       const messages = Array.isArray(pulled.messages) ? pulled.messages : [];
       if (!messages.length) {
+        if (this.cleanupDueAt !== null && this.now() >= this.cleanupDueAt && this.cleanupPassesRemaining > 0) {
+          try {
+            const attempts = await this.publicationDelivery.retryCleanup({ maxAttempts: 1 });
+            this.cleanupPassesRemaining -= attempts;
+            const nextAt = this.publicationDelivery.nextCleanupAt();
+            this.cleanupDueAt = this.cleanupPassesRemaining > 0 && nextAt !== null
+              ? Math.max(this.now() + this.cleanupDebounceMs, nextAt) : null;
+          } catch {
+            this.health.updatePublication?.({ warning: 'publication_state_unavailable', pendingDeletes: 0 });
+            this.cleanupDueAt = null;
+          }
+        }
         const delay = this.backoff.onMessages(0);
         this.health.updateBackoff(this.backoff);
         this.health.clearError();
@@ -83,9 +98,13 @@ export class ZoomSenderService {
           if(handledPublications.has(publicationId))continue;
           handledPublications.add(publicationId);
           try {
-            const result=await this.publicationDelivery.deliver(messages.filter(item=>item.publication?.id===publicationId));
+            const result=await this.publicationDelivery.deliver(messages.filter(item=>item.publication?.id===publicationId),{deferCleanup:true});
             ackIds.push(...result.ackIds);
             if(result.ackIds.length)this.health.markSend();
+            if(result.complete && this.publicationDelivery.hasPendingCleanup()) {
+              this.cleanupPassesRemaining = Math.max(4, this.publicationDelivery.pendingCleanupCount() * 2);
+              this.cleanupDueAt = this.now() + this.cleanupDebounceMs;
+            }
           } catch {this.health.updatePublication?.({warning:'publication_state_unavailable',pendingDeletes:0});}
           continue;
         }
@@ -106,6 +125,7 @@ export class ZoomSenderService {
         await this.workerClient.ack(ackIds);
         this.logger.info?.(`Zoom Sender acknowledged ${ackIds.length} outbox message(s)`);
       }
+      if(this.cleanupDueAt!==null)this.cleanupDueAt=this.now()+this.cleanupDebounceMs;
       const delay = this.backoff.onMessages(messages.length);
       this.health.updateBackoff(this.backoff);
       this.health.clearError();

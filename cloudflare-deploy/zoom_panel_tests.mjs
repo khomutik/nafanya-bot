@@ -1161,6 +1161,9 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal(data.state.entries[0].status, "waiting");
   const entryId = data.state.entries[0].id;
   let outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  response = await postPanelAction(env, { action: "meeting_board_publish", dayKey: "tuesday", requestId: "request-publish-1" });
+  outbox = await pullOutbox(env);
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].kind, undefined,
     "The production meeting board must use ordinary outbox messages");
@@ -1178,6 +1181,9 @@ async function testMeetingBoardAndSpeakerState() {
   data = await json(response);
   const secondEntryId = data.state.entries[1].id;
   outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  response = await postPanelAction(env, { action: "meeting_board_publish", dayKey: "tuesday", requestId: "request-publish-2" });
+  outbox = await pullOutbox(env);
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].kind, undefined);
   assert.equal(typeof outbox[0].text, "string");
@@ -1188,12 +1194,18 @@ async function testMeetingBoardAndSpeakerState() {
   assert.equal(data.state.entries[0].id, secondEntryId);
   assert.equal(data.state.entries[1].id, entryId);
   outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  await postPanelAction(env, { action: "meeting_board_publish", dayKey: "tuesday", requestId: "request-defer-publish-1" });
+  outbox = await pullOutbox(env);
   await ackOutbox(env, outbox.map((item) => item.id));
 
   response = await postPanelAction(env, { action: "meeting_board_defer_entry", dayKey: "tuesday", id: secondEntryId, requestId: "request-defer-2" });
   data = await json(response);
   assert.equal(data.state.entries[0].id, entryId);
   assert.equal(data.state.entries[1].id, secondEntryId);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  await postPanelAction(env, { action: "meeting_board_publish", dayKey: "tuesday", requestId: "request-defer-publish-2" });
   outbox = await pullOutbox(env);
   await ackOutbox(env, outbox.map((item) => item.id));
 
@@ -1217,6 +1229,9 @@ async function testMeetingBoardAndSpeakerState() {
   });
   data = await json(response);
   assert.equal(data.state.additionalTopics[0].text.startsWith("1."), false);
+  outbox = await pullOutbox(env);
+  assert.equal(outbox.length, 0);
+  await postPanelAction(env, { action: "meeting_board_publish", dayKey: "tuesday", requestId: "request-topic-publish" });
   outbox = await pullOutbox(env);
   await ackOutbox(env, outbox.map((item) => item.id));
 
@@ -1810,6 +1825,9 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
     requestId: "coalesce-board-2"
   });
   assert.equal((await json(response)).ok, true);
+  assert.equal((await pullOutbox(env)).filter(item=>item.coalesceKey==="meeting_board").length,0);
+  response = await postPanelAction(env, {action:"meeting_board_publish",dayKey:"sunday",requestId:"coalesce-board-publish"});
+  assert.equal((await json(response)).ok,true);
 
   let outbox = await pullOutbox(env);
   const prayerMessages = outbox.filter((item) => !item.coalesceKey);
@@ -1818,7 +1836,7 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
   assert.equal(boardMessages.length, 1, "Only the newest unsent board snapshot should remain");
   assert.match(boardMessages[0].text, /\u041c\u0430\u043d\u044f 111/u);
   assert.match(boardMessages[0].text, /\u041c\u0430\u043d\u044f 333/u);
-  assert.equal(boardMessages[0].coalesceVersion, 2);
+  assert.equal(boardMessages[0].coalesceVersion, 3);
 
   response = await postPanelAction(env, {
     action: "speaker_questions_add",
@@ -1839,6 +1857,36 @@ async function testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessag
   assert.match(speakerMessages[0].text, /\u0412\u0442\u043e\u0440\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441/u);
 }
 
+async function testBoardDraftDoesNotLeakThroughSpokenUpdates() {
+  const env=makeEnv();
+  const act=async (action,more={})=>json(await postPanelAction(env,{action,dayKey:"monday",requestId:crypto.randomUUID(),...more}));
+  const first=await act("meeting_board_add_entry",{text:"Original"});
+  const id=first.state.entries[0].id;
+  assert.equal(first.state.draftPending,true);
+  assert.equal((await pullOutbox(env)).length,0);
+  const unpublishedMark=await postPanelAction(env,{action:"meeting_board_mark_spoken",dayKey:"monday",id,requestId:"unpublished-mark"});
+  assert.equal(unpublishedMark.status,400);
+  await act("meeting_board_publish");
+  await ackOutbox(env,(await pullOutbox(env)).map(item=>item.id));
+  const edited=await act("meeting_board_edit_entry",{id,expectedText:"Original",text:"Edited draft"});
+  assert.equal(edited.state.draftPending,true);
+  await act("meeting_board_add_topic",{text:"Draft topic"});
+  assert.equal((await pullOutbox(env)).length,0);
+  await act("meeting_board_mark_spoken",{id});
+  const spoken=await pullOutbox(env);
+  assert.equal(spoken.length,1);
+  assert.match(spoken[0].text,/\u2705 Original/u);
+  assert.doesNotMatch(spoken[0].text,/Edited draft|Draft topic/u);
+  await ackOutbox(env,spoken.map(item=>item.id));
+  const published=await act("meeting_board_publish");
+  assert.equal(published.state.draftPending,false);
+  const replacement=await pullOutbox(env);
+  assert.equal(replacement.length,1);
+  assert.match(replacement[0].text,/\u2705 Edited draft/u);
+  assert.match(replacement[0].text,/Draft topic/u);
+  assert.equal(replacement[0].publication.key,"meeting_board");
+}
+
 testMeetingBoardUnicodeLimit();
 async function testEditingAndCompactQueueActions() {
   const env = makeEnv();
@@ -1850,12 +1898,17 @@ async function testEditingAndCompactQueueActions() {
   let { data } = await act({ action: 'meeting_board_add_entry', dayKey: 'thursday', text: '111' });
   const id = data.state.entries[0].id;
   await act({ action: 'meeting_board_add_entry', dayKey: 'thursday', text: '222' });
+  assert.equal((await pullOutbox(env)).length,0);
+  await act({ action: 'meeting_board_publish', dayKey: 'thursday' });
   await act({ action: 'meeting_board_mark_spoken', dayKey: 'thursday', id });
+  await ackOutbox(env,(await pullOutbox(env)).map(item=>item.id));
   ({ data } = await act({ action: 'meeting_board_edit_entry', dayKey: 'thursday', id, expectedText: '111', text: '111 corrected' }));
   assert.equal(data.state.entries[0].id, id);
   assert.equal(data.state.entries[0].text, '111 corrected');
   assert.equal(data.state.entries[0].status, 'spoken');
   assert.equal(data.state.entries[1].text, '222');
+  assert.equal((await pullOutbox(env)).length,0,'Edits remain in the draft');
+  await act({ action: 'meeting_board_publish', dayKey: 'thursday' });
   assert.match((await pullOutbox(env)).at(-1).text, /111 corrected/u);
   let result = await act({ action: 'meeting_board_edit_entry', dayKey: 'thursday', id, expectedText: '111', text: 'stale overwrite' });
   assert.equal(result.response.status, 400, 'Reject a stale edit from a second host');
@@ -1913,6 +1966,8 @@ async function testCompletePublicationBatches() {
     const response=await postPanelAction(env,{action:'meeting_board_add_entry',dayKey:'thursday',text:`${i} ${'x'.repeat(280)}`,requestId:`publication-${i}`});
     assert.equal(response.status,200);
   }
+  assert.equal((await pullOutbox(env)).length,0,'Draft additions do not publish before the button is pressed');
+  await postPanelAction(env,{action:'meeting_board_publish',dayKey:'thursday',requestId:'publication-send'});
   let response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1})}),env);
   assert.equal((await json(response)).messages.length,1,'Legacy limit remains unchanged');
   response=await worker.fetch(bridgeRequest('/zoom-only/outbox',{body:JSON.stringify({limit:1,completePublications:true})}),env);
@@ -1945,6 +2000,7 @@ await testYozhikBillAndGameActions();
 await testQueuePausedLibraryPanelAndActions();
 await testMeetingBoardAllowsRepeatedTextButDeduplicatesClicks();
 await testMeetingBoardCoalescesPendingStateWithoutDroppingOneShotMessages();
+await testBoardDraftDoesNotLeakThroughSpokenUpdates();
 await testMeetingBoardAndSpeakerState();
 await testMeetingCongratulationsBuilder();
 await testGlobalClearRemovesYesterdayState();

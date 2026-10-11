@@ -21,6 +21,20 @@ test('new snapshot is verified before deletion; history and other streams surviv
   assert.equal(f.adapter.messages.get('historic'),'Old history');assert.equal(f.adapter.messages.get('participant'),'Participant message');assert.ok([...f.adapter.messages.values()].includes('Speaker v1'));
   assert.ok(![...f.adapter.messages.values()].includes('Queue v1'));assert.ok(f.adapter.events.indexOf('send:own-3')<f.adapter.events.indexOf('delete:own-1'));
 });
+test('deferred replacement acknowledges the new snapshot before bounded old-message cleanup',async()=>{
+  const f=await fixture();
+  await f.delivery.deliver(messages(1,['Old one','Old two']));
+  const result=await f.delivery.deliver(messages(3,['New']),{deferCleanup:true});
+  assert.deepEqual(result.ackIds,[3]);
+  assert.equal(result.complete,true);
+  assert.deepEqual(f.adapter.deleted,[]);
+  assert.equal(f.delivery.pendingCleanupCount(),2);
+  assert.equal(await f.delivery.retryCleanup({maxAttempts:1}),1);
+  assert.equal(f.delivery.pendingCleanupCount(),1);
+  assert.equal(await f.delivery.retryCleanup({maxAttempts:1}),1);
+  assert.equal(f.delivery.pendingCleanupCount(),0);
+  assert.deepEqual([...f.adapter.messages.values()],['Old history','Participant message','New']);
+});
 test('all parts must arrive before old publication is removed, including after restart',async()=>{
   const f=await fixture();await f.delivery.deliver(messages(1,['Old']));f.adapter.failSendAt=3;
   let result=await f.delivery.deliver(messages(2,['Part one','Part two']));assert.equal(result.complete,undefined);assert.ok([...f.adapter.messages.values()].includes('Old'));assert.deepEqual(result.ackIds,[2]);

@@ -59,8 +59,8 @@ export class PublicationDelivery {
     const result=(this.serialTail||Promise.resolve()).then(operation);
     this.serialTail=result.catch(()=>{});return result;
   }
-  deliver(items) {return this.serial(()=>this.deliverCore(items));}
-  async deliverCore(items) {
+  deliver(items,{deferCleanup=false}={}) {return this.serial(()=>this.deliverCore(items,{deferCleanup}));}
+  async deliverCore(items,{deferCleanup=false}={}) {
     if(!items.length)return {ackIds:[]};
     await this.load();
     const p=items[0].publication;
@@ -97,10 +97,21 @@ export class PublicationDelivery {
       if(!Object.keys(oldGroup.pending||{}).length)delete stream.groups[id];
     }
     await this.save();this.report();
-    await this.cleanupStream(stream);
+    if(!deferCleanup)await this.cleanupStream(stream);
     return {ackIds,complete:true};
   }
-  async cleanupStream(stream) {
+  hasPendingCleanup() {
+    return this.pendingCleanupCount()>0;
+  }
+  pendingCleanupCount() {
+    return Object.entries(this.state?.streams||{}).reduce((count,[scope,stream])=>count+(scope.startsWith(this.meetingScope+':')?(stream.cleanup?.length||0):0),0);
+  }
+  nextCleanupAt() {
+    const due=Object.entries(this.state?.streams||{}).filter(([scope])=>scope.startsWith(this.meetingScope+':'))
+      .flatMap(([,stream])=>stream.cleanup||[]).map(item=>Number(item.nextAttemptAt)||0);
+    return due.length?Math.min(...due):null;
+  }
+  async cleanupStream(stream,{maxAttempts=4}={}) {
     if(discardUnavailableCleanup(stream))await this.save();
     const protectedRefs=new Set(Object.values(stream.groups[stream.active]?.parts||{}).map(p=>p.ref));
     let attempts=0;
@@ -108,7 +119,7 @@ export class PublicationDelivery {
       || Number(a.lastReason==='message_not_found_or_not_own')-Number(b.lastReason==='message_not_found_or_not_own')
       || a.nextAttemptAt-b.nextAttemptAt);
     for(const receipt of due) {
-      if(receipt.nextAttemptAt>this.now()||attempts>=4)continue;
+      if(receipt.nextAttemptAt>this.now()||attempts>=maxAttempts)continue;
       if(protectedRefs.has(receipt.ref))throw new Error('publication_cleanup_targets_current');
       attempts++;
       const result=await this.adapter.deleteOwnMessage(receipt.ref,receipt.hash,{evidence:receipt.deleteEvidence,onBeforeDelete:async evidence=>{receipt.deleteEvidence=evidence;await this.save();}}).catch(error=>({deleted:false,reason:'delete_failed',detail:String(error?.message||error).split('\n')[0].slice(0,250)}));
@@ -122,11 +133,14 @@ export class PublicationDelivery {
       await this.save();
     }
     this.report(stream.cleanup.length?'publication_cleanup_pending':null);
+    return attempts;
   }
-  retryCleanup() {return this.serial(()=>this.retryCleanupCore());}
-  async retryCleanupCore() {
+  retryCleanup(options={}) {return this.serial(()=>this.retryCleanupCore(options));}
+  async retryCleanupCore({maxAttempts=4}={}) {
     await this.load();
-    for(const [scope,stream] of Object.entries(this.state.streams))if(scope.startsWith(this.meetingScope+':'))await this.cleanupStream(stream);
+    let remaining=maxAttempts;
+    for(const [scope,stream] of Object.entries(this.state.streams))if(scope.startsWith(this.meetingScope+':')&&remaining>0)remaining-=await this.cleanupStream(stream,{maxAttempts:remaining});
+    return maxAttempts-remaining;
   }
   inspect() {return this.serial(()=>this.inspectCore());}
   async inspectCore() {

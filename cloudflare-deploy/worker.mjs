@@ -1272,6 +1272,9 @@ var ZoomMeetingStateDurableObject = class {
         }
         board.entries = [];
         board.additionalTopics = [];
+        board.publishedEntries = [];
+        board.publishedAdditionalTopics = [];
+        board.draftPending = false;
         board.version += 1;
         board.updatedAt = now;
         board.lastMessages = [];
@@ -1337,7 +1340,12 @@ var ZoomMeetingStateDurableObject = class {
         }
         [board.entries[index], board.entries[index + 1]] = [board.entries[index + 1], { ...board.entries[index], updatedAt: now }];
       } else {
+        const publishedIndex = board.publishedEntries.findIndex((item) => item.id === id);
+        if (publishedIndex < 0) {
+          throw new Error("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c \u0432 Zoom.");
+        }
         board.entries[index] = { ...board.entries[index], status: boardAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
+        board.publishedEntries[publishedIndex] = { ...board.publishedEntries[publishedIndex], status: board.entries[index].status, updatedAt: now };
       }
     } else if (["edit_topic", "remove_topic"].includes(boardAction)) {
       const index = board.additionalTopics.findIndex((item) => item.id === id);
@@ -1353,7 +1361,18 @@ var ZoomMeetingStateDurableObject = class {
     }
     board.version += 1;
     board.updatedAt = now;
-    board.lastMessages = splitBoardZoomMessages(buildMeetingBoardText(board, ZOOM_MEETING_MESSAGE_TEXTS));
+    const stagedAction = ["add_entry", "add_topic", "edit_entry", "edit_topic", "remove_entry", "remove_topic", "defer_entry"].includes(boardAction);
+    if (stagedAction) {
+      board.draftPending = true;
+      await this.saveState(runtimeState);
+      return { ok: true, duplicate: false, state: board, meetingBoards: runtimeState.zoomMeetingBoards, activeMode: runtimeState.zoomPanelActiveMode, queued: [], deliveryMessages: [] };
+    }
+    if (boardAction === "publish") {
+      board.publishedEntries = board.entries.map((item) => ({ ...item }));
+      board.publishedAdditionalTopics = board.additionalTopics.map((item) => ({ ...item }));
+      board.draftPending = false;
+    }
+    board.lastMessages = splitBoardZoomMessages(buildMeetingBoardText({ ...board, entries: board.publishedEntries, additionalTopics: board.publishedAdditionalTopics }, ZOOM_MEETING_MESSAGE_TEXTS));
     runtimeState.zoomPanelActiveMode = "meeting";
     const { queued, deliveryMessages } = this.deliverBoardMessages(runtimeState, board.lastMessages, payload, {
       key: "meeting_board",
@@ -3230,6 +3249,8 @@ async function handleZoomOnlyAppActionRequest(request, env) {
         ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e."
         : payload.action === "meeting_board_clear_all"
           ? "\u041e\u0447\u0438\u0449\u0435\u043d\u044b \u0432\u0441\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u0438, \u0434\u043e\u043f. \u0442\u0435\u043c\u044b \u0438 \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u0430\u044f."
+          : result.state?.draftPending && !result.queued?.length
+            ? "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e \u0432 \u043f\u0443\u043b\u044c\u0442\u0435. \u0414\u043b\u044f \u043f\u0443\u0431\u043b\u0438\u043a\u0430\u0446\u0438\u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 Zoom\u00bb."
           : "\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0435 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u0447\u0430\u0442 \u043a\u043e\u043d\u0444\u0435\u0440\u0435\u043d\u0446\u0438\u0438.";
       return Response.json({ ...result, message });
     } catch (error) {
@@ -3629,13 +3650,14 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
   function checkButton(item,body){const spoken=item.status==="spoken",button=smallButton("\u2705",b=>run({...body,action:spoken?body.restoreAction:body.action},b),"check rare",spoken?"\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c":"\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f");button.setAttribute("aria-pressed",String(spoken));return button}
   function renderBoard(activeBoard){const boards=activeBoard?.boards||(activeBoard?.dayKey?{[activeBoard.dayKey]:activeBoard}:{});document.querySelectorAll("[data-day]").forEach(panel=>{
     if(panel.querySelector("[data-editing]"))return;const board=boards[panel.dataset.day],entries=panel.querySelector("[data-entry-list]"),topics=panel.querySelector("[data-topic-list]");entries.replaceChildren();topics.replaceChildren();
+    const draftNote=panel.querySelector("[data-board-draft-note]");if(draftNote){draftNote.style.display=board?.draftPending?"block":"none";draftNote.textContent=board?.draftPending?"\u0415\u0441\u0442\u044c \u043d\u0435\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u043a\u0438. \u0427\u0430\u0442 Zoom \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u043f\u0440\u043e\u0448\u043b\u0443\u044e \u0432\u0435\u0440\u0441\u0438\u044e.":""}
     if(!board?.entries?.length)entries.textContent="\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.";
     (board?.entries||[]).forEach((item,index)=>{const dayKey=panel.dataset.day,spoken=item.status==="spoken",buttons=[
       checkButton(item,{action:"meeting_board_mark_spoken",restoreAction:"meeting_board_restore_waiting",dayKey,id:item.id}),
       smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",b=>editRow(b,item,{action:"meeting_board_edit_entry",dayKey}),"edit rare"),
       smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",b=>run({action:"meeting_board_remove_entry",dayKey,id:item.id},b),"danger rare"),
       smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",b=>run({action:"meeting_board_defer_entry",dayKey,id:item.id},b),"defer rare")
-    ];buttons[3].dataset.unavailable=String(spoken||index===board.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";entries.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))});
+    ];const published=(board.publishedEntries||[]).some(entry=>entry.id===item.id);buttons[0].dataset.unavailable=String(!published);buttons[0].disabled=!published;if(!published)buttons[0].title="\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0432 Zoom";buttons[3].dataset.unavailable=String(spoken||index===board.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";entries.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))});
     if(!board?.additionalTopics?.length)topics.textContent="\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.";
     (board?.additionalTopics||[]).forEach((item,index)=>topics.append(row((index+1)+". "+item.text,[
       smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",b=>editRow(b,item,{action:"meeting_board_edit_topic",dayKey:panel.dataset.day}),"edit rare"),
@@ -3655,6 +3677,7 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
   const originalRefreshState=refreshState;refreshState=async function(){const data=await originalRefreshState();if(data)renderCongratulations(data.congratulations);return data};
   document.querySelectorAll("[data-message-key]").forEach(button=>button.onclick=()=>run({type:"message",key:button.dataset.messageKey},button));document.querySelectorAll("[data-publish-day]").forEach(button=>button.onclick=()=>run({action:"meeting_board_publish",dayKey:button.dataset.publishDay,requestId:requestId()},button));document.querySelectorAll("[data-book]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1){log("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0439 \u043d\u043e\u043c\u0435\u0440.");return}run({action:"book_excerpt",collectionId:button.dataset.book,number},button).then(data=>{if(data)input.value=""})});document.querySelectorAll("[data-daily]").forEach(button=>button.onclick=()=>run({action:"daily_reflection"},button));document.querySelectorAll("[data-game]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1||number>500){log("\u041d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430: \u043e\u0442 1 \u0434\u043e 500.");return}run({action:"game_question",number},button).then(data=>{if(data)input.value=""})});
   document.querySelectorAll("[data-day]").forEach(panel=>{const input=panel.querySelector("[data-congratulations-input]"),add=panel.querySelector("[data-congratulations-add]"),publish=panel.querySelector("[data-congratulations-publish]");add.onclick=()=>run({action:"meeting_congratulations_add",text:input.value,requestId:requestId()},add).then(data=>{if(data)input.value=""});publish.onclick=()=>run({action:"meeting_congratulations_publish",requestId:requestId()},publish)});
+  document.querySelectorAll("[data-day]").forEach(panel=>{const editor=panel.querySelector(".board-editor"),add=panel.querySelector("[data-add-entry]");add.textContent="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c";const note=document.createElement("p");note.dataset.boardDraftNote="";note.style.margin="8px 0";note.style.display="none";editor.append(note);const publish=document.createElement("button");publish.type="button";publish.className="action congratulations-publish";publish.dataset.boardPublish="";publish.style.width="100%";publish.style.marginTop="8px";publish.style.background="#dff3e4";publish.style.borderColor="#5d9b6e";publish.textContent="\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM";publish.onclick=()=>run({action:"meeting_board_publish",dayKey:panel.dataset.day,requestId:requestId()},publish);editor.append(publish)});
   document.querySelectorAll("[data-day]").forEach(panel=>{const dayKey=panel.dataset.day;panel.querySelector("[data-add-entry]").onclick=()=>{const input=panel.querySelector("[data-entry-input]");run({action:"meeting_board_add_entry",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-entry]")).then(data=>{if(data)input.value=""})};panel.querySelector("[data-add-topic]").onclick=()=>{const input=panel.querySelector("[data-topic-input]");run({action:"meeting_board_add_topic",dayKey,text:input.value,requestId:requestId()},panel.querySelector("[data-add-topic]")).then(data=>{if(data)input.value=""})}});document.querySelector("[data-speaker-publish]").onclick=event=>run({action:"speaker_questions_publish",requestId:requestId()},event.currentTarget);document.querySelector("[data-speaker-add]").onclick=()=>{const input=document.querySelector("[data-speaker-input]");run({action:"speaker_questions_add",text:input.value,requestId:requestId()},document.querySelector("[data-speaker-add]")).then(data=>{if(data)input.value=""})}
   const weekday=new Intl.DateTimeFormat("en-US",{timeZone:"Europe/Moscow",weekday:"short"}).format(new Date()).toLowerCase(),map={mon:"monday",tue:"tuesday",thu:"thursday",fri:"friday",sun:"sunday"};const todayPanel=document.querySelector('[data-day="'+map[weekday]+'"]');if(todayPanel)todayPanel.open=true;
   const fullClearButton=document.querySelector("[data-board-clear]");if(fullClearButton){fullClearButton.onclick=event=>{const selected=document.querySelector("[data-day][open]")||document.querySelector("[data-day]");run({action:"meeting_board_clear_all",dayKey:selected?.dataset.day||"monday",requestId:requestId()},event.currentTarget)};}
