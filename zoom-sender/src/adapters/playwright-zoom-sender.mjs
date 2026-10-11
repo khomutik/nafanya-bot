@@ -290,7 +290,12 @@ async function sendChatText(page, text) {
       if (!formattingApplied) {
         const cleared = await clearChatInput(input);
         if (!cleared) return { sent: false, ack: false, reason: "rich_paste_recovery_failed" };
-        await page.keyboard.insertText(richText.plainText);
+        formattingApplied = await typeZoomRichText(page, input, richText);
+        if (!formattingApplied) {
+          const clearedAgain = await clearChatInput(input);
+          if (!clearedAgain) return { sent: false, ack: false, reason: "rich_shortcut_recovery_failed" };
+          await page.keyboard.insertText(richText.plainText);
+        }
       }
     } else {
       await page.keyboard.insertText(richText.plainText);
@@ -349,13 +354,53 @@ async function pasteZoomRichText(page, input, richText) {
         });
         return { text: String(value || ""), bold };
       }).catch(() => ({ text: "", bold: false }));
-      if (normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText)) return state.bold;
+      if (normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText) && state.bold) return true;
       await page.waitForTimeout(25).catch(() => null);
     }
   } catch {
     // The caller clears the editor before falling back to plain text.
   }
   return false;
+}
+
+async function typeZoomRichText(page, input, richText) {
+  if (!await input.evaluate((element) => element.isContentEditable).catch(() => false)) return false;
+  const expectedBold = normalizeComparableChatText(richText.fragments.filter(({ bold }) => bold).map(({ text }) => text).join(""));
+  if (!expectedBold) return false;
+  let boldActive = false;
+  try {
+    for (const fragment of richText.fragments) {
+      if (fragment.bold !== boldActive) {
+        await input.press("Control+B");
+        boldActive = fragment.bold;
+      }
+      if (fragment.text) await page.keyboard.insertText(fragment.text);
+    }
+    if (boldActive) {
+      await input.press("Control+B");
+      boldActive = false;
+    }
+    const state = await input.evaluate((element) => {
+      const value = "value" in element ? element.value : element.innerText || element.textContent || "";
+      const isBold = (node) => {
+        const weight = getComputedStyle(node).fontWeight;
+        return node.tagName === "STRONG" || node.tagName === "B" || weight === "bold" || Number.parseInt(weight, 10) >= 600;
+      };
+      const nodes = [...element.querySelectorAll("strong, b, [style*='font-weight'], [class]")].filter((node) => {
+        if (!isBold(node)) return false;
+        for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
+          if (isBold(parent)) return false;
+        }
+        return true;
+      });
+      return { text: String(value || ""), boldText: nodes.map((node) => node.innerText || node.textContent || "").join("") };
+    }).catch(() => ({ text: "", boldText: "" }));
+    return normalizeComparableChatText(state.text) === normalizeComparableChatText(richText.plainText)
+      && normalizeComparableChatText(state.boldText) === expectedBold;
+  } catch {
+    if (boldActive) await input.press("Control+B").catch(() => null);
+    return false;
+  }
 }
 
 function normalizeComparableChatText(value) {

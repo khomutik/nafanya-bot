@@ -28,10 +28,26 @@ test("Zoom rich clipboard paste preserves bold, sends once, and falls back safel
   await page.goto(`http://127.0.0.1:${address.port}`);
   await page.context().grantPermissions(["clipboard-write"], { origin: `http://127.0.0.1:${address.port}` });
 
+  await page.evaluate(() => {
+    const editor = document.querySelector("#chat");
+    editor.addEventListener("paste", (event) => {
+      event.preventDefault();
+      editor.innerText = event.clipboardData.getData("text/plain");
+      setTimeout(() => { editor.innerHTML = "<strong>Delayed bold</strong>"; }, 100);
+    }, { once: true });
+  });
+  const delayed = await sendChatText(page, "**Delayed bold**");
+  assert.equal(delayed.sent, true);
+  assert.equal(delayed.formattingApplied, true, "Wait for Zoom to finish applying rich text before falling back");
+  assert.deepEqual(await page.evaluate(() => window.sent[0]), {
+    text: "Delayed bold",
+    html: "<strong>Delayed bold</strong>"
+  });
+
   const rich = await sendChatText(page, "**Bold heading**\n\nNormal text");
   assert.equal(rich.sent, true);
   assert.equal(rich.formattingApplied, true);
-  assert.deepEqual(await page.evaluate(() => window.sent[0]), {
+  assert.deepEqual(await page.evaluate(() => window.sent[1]), {
     text: "Bold heading\n\nNormal text",
     html: "<strong>Bold heading</strong><br><br>Normal text"
   });
@@ -44,11 +60,19 @@ test("Zoom rich clipboard paste preserves bold, sends once, and falls back safel
   });
   const fallback = await sendChatText(page, "**Bold fallback**");
   assert.equal(fallback.sent, true);
-  assert.equal(fallback.formattingApplied, false);
-  assert.equal(await page.evaluate(() => window.sent.length), 2, "Fallback must not send twice");
-  assert.deepEqual(await page.evaluate(() => window.sent[1]), {
+  assert.equal(fallback.formattingApplied, true);
+  assert.equal(await page.evaluate(() => window.sent.length), 3, "Fallback must not send twice");
+  assert.deepEqual(await page.evaluate(() => window.sent[2]), {
     text: "Bold fallback",
-    html: "Bold fallback"
+    html: "<b>Bold fallback</b>"
+  });
+
+  const mixed = await sendChatText(page, "**Bold one** normal **bold two**");
+  assert.equal(mixed.sent, true);
+  assert.equal(mixed.formattingApplied, true);
+  assert.deepEqual(await page.evaluate(() => window.sent[3]), {
+    text: "Bold one normal bold two",
+    html: "<b>Bold one</b> normal <b>bold two</b>"
   });
 
   const clipboardWritesBeforePlain = await page.evaluate(() => {
@@ -61,6 +85,6 @@ test("Zoom rich clipboard paste preserves bold, sends once, and falls back safel
   const plain = await sendChatText(page, "Ordinary queue update");
   assert.equal(plain.sent, true);
   assert.equal(plain.formattingApplied, false);
-  assert.equal(await page.evaluate(() => window.sent.length), 3, "Plain messages must still send once");
+  assert.equal(await page.evaluate(() => window.sent.length), 5, "Plain messages must still send once");
   assert.equal(await page.evaluate(() => window.clipboardWriteCalls || 0), clipboardWritesBeforePlain, "Plain messages must bypass clipboard work");
 });

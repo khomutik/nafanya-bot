@@ -32,5 +32,5 @@ export function parseZoomRichText(value) {
     return bold ? `<strong>${safe}</strong>` : safe;
   }).join("");
 
-  return { plainText, html, hasFormatting };
+  return { plainText, html, hasFormatting, fragments };
 }
