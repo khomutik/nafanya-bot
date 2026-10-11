@@ -8,6 +8,8 @@ This folder keeps only the live Cloudflare Worker deploy surface.
 - `.gitignore` - local deploy-folder ignores.
 - `package.json` - marks the folder as ESM for local tooling.
 - `speaker_questions.json` - local copy of game questions that are also stored externally.
+- `message_zoom.md` - the only editable source for Zoom meeting messages and their Markdown formatting.
+- `zoom_meeting_texts.js` - generated Worker module; do not edit directly.
 
 ## Important
 - Cloudflare deploys `worker.mjs` directly via `main` in `wrangler.jsonc`.
@@ -15,6 +17,8 @@ This folder keeps only the live Cloudflare Worker deploy surface.
 - Historical files, local caches, and disabled generated data live in `BACKUPS`, not in the active deploy path.
 - Google knowledge reads three live spreadsheets by file id: `FAQ`, `График служений`, and `Список служащих/ротация`.
 - Program/Big Book answers are intentionally disabled for now, so those files are not part of the active deploy surface.
+- After editing `message_zoom.md`, run `npm run generate:zoom-texts`; production preflight verifies the generated module is current.
+- Zoom queue state and formatting remain separate: queue behavior is implemented in `core/queue-engine.js` and tested independently.
 
 ## Secrets
 Set the Google service-account JSON as a Wrangler secret:
@@ -33,3 +37,4 @@ wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 - `wrangler dev`
 - `npm run test:addressing`
 - `npm run test:quality`
+- `npm run test:zoom-source`

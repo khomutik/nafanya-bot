@@ -4,6 +4,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 const dir=fileURLToPath(new URL('../',import.meta.url));
 const git=(...args)=>execFileSync('git',args,{cwd:dir,encoding:'utf8'}).trim();
+execFileSync(process.execPath,['scripts/generate-zoom-meeting-texts.mjs','--check'],{cwd:dir,stdio:'inherit'});
 assert.equal(git('branch','--show-current'),'main','Production must use the unified main branch');
 for(const baseline of ['3d24c5616af770980218cd297a8bb594976d3360','30e1c5e']) {
   git('merge-base','--is-ancestor',baseline,'HEAD');

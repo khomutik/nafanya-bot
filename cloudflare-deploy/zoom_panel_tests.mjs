@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import worker, { AnnouncementStateDurableObject, ZoomMeetingStateDurableObject, ZoomSharedTimerStateDurableObject } from "./worker.mjs";
 import { splitBoardZoomMessages, unicodeLength } from "./zoom_meeting_board.js";
+import { ZOOM_MEETING_MESSAGE_TEXTS } from "./zoom_meeting_texts.js";
 
 class MemoryStorage {
   constructor() {
@@ -866,10 +867,19 @@ async function testMessageButtonsAndOutbox() {
   assert.equal(data.ok, true);
   outbox = await pullOutbox(env);
   const traditionMessages = outbox.slice(beforeTraditions);
-  assert.equal(traditionMessages.length, 2);
+  assert.equal(traditionMessages.length, ZOOM_MEETING_MESSAGE_TEXTS.traditions12.length);
   assert.match(traditionMessages[0].text, /12 ТРАДИЦИЙ АА/u);
   assert.ok(traditionMessages.every((message) => Array.from(message.text).length <= 950));
   assert.ok(traditionMessages.every((message) => !/Часть \d+\/\d+/u.test(message.text)));
+
+  const beforeScamWarning = outbox.length;
+  response = await postPanelAction(env, { type: "message", key: "scam_warning" });
+  data = await json(response);
+  assert.equal(data.ok, true);
+  outbox = await pullOutbox(env);
+  const scamWarningMessages = outbox.slice(beforeScamWarning);
+  assert.equal(scamWarningMessages.length, ZOOM_MEETING_MESSAGE_TEXTS.scam_warning.length);
+  assert.match(scamWarningMessages[0].text, /АА - это сообщество/u);
 }
 
 async function testStatusAndQueueActions() {
