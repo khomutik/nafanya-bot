@@ -40,6 +40,28 @@ export class WorkerOutboxClient {
     return this.postOutbox({ ackIds, limit: this.config.outboxLimit });
   }
 
+  async fetchMedalImage(assetKey) {
+    const key = String(assetKey || "").trim();
+    if (!/^(?:24-hours|today|month-(?:0[1-9]|1[01])|year-(?:0[1-9]|1[0-9]|2[0-9]|30))$/u.test(key)) {
+      throw new WorkerRequestError("Worker medal image request failed: invalid asset key", { reason: "client" });
+    }
+    const response = await this.requestWorker(`${this.config.workerBaseUrl}/zoom-only/medal-image/${key}`, {
+      method: "GET",
+      headers: { "x-nafanya-zoom-secret": this.config.zoomBridgeSecret }
+    }, "medal image");
+    if (!response.ok) {
+      throw new WorkerRequestError(`Worker medal image request failed with HTTP ${response.status}`, {
+        reason: classifyWorkerHttpStatus(response.status),
+        httpStatus: response.status
+      });
+    }
+    const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("image/png")) {
+      throw new WorkerRequestError("Worker medal image request failed: invalid content type", { reason: "client" });
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   async requestWorker(url, init, label) {
     if (!this.config.workerBaseUrl) {
       throw new WorkerRequestError(`Worker ${label} request failed: missing config`, { reason: "missing_config" });

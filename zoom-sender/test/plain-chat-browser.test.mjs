@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
-import { sendChatText } from "../src/adapters/playwright-zoom-sender.mjs";
+import { sendChatImage, sendChatText } from "../src/adapters/playwright-zoom-sender.mjs";
 
 async function createEditor(t) {
   const server = createServer((_request, response) => {
@@ -11,12 +11,16 @@ async function createEditor(t) {
       <button id="format" type="button" aria-label="Format">T</button>
       <button id="bold" type="button" aria-label="Bold">B</button>
       <div id="chat" contenteditable="true" aria-label="chat"></div>
+      <input id="file" type="file" accept="image/*">
+      <button id="send-image" type="button" aria-label="Send">Send</button>
       </form><script>
         window.sent = [];
+        window.imageSends = [];
         window.formatClicks = 0;
         window.boldClicks = 0;
         document.querySelector('#format').addEventListener('click', () => window.formatClicks++);
         document.querySelector('#bold').addEventListener('click', () => window.boldClicks++);
+        document.querySelector('#send-image').addEventListener('click', () => window.imageSends.push(document.querySelector('#file').files[0]?.name || ''));
         document.addEventListener('keydown', event => {
           if (event.key !== 'Enter') return;
           event.preventDefault();
@@ -47,4 +51,11 @@ test("Zoom sender sends normal chat text once without touching formatting contro
   assert.deepEqual(ordinary, { sent: true, ack: true });
   assert.deepEqual(await page.evaluate(() => window.sent), ["Ordinary title", "Ordinary queue update"]);
   assert.equal(await page.evaluate(() => window.formatClicks + window.boldClicks), 0);
+});
+
+test("Zoom sender attaches and submits a PNG through the chat file input", async (t) => {
+  const page = await createEditor(t);
+  const result = await sendChatImage(page, Buffer.from("png-bytes"), "year-21.png");
+  assert.deepEqual(result, { sent: true, ack: true });
+  assert.deepEqual(await page.evaluate(() => window.imageSends), ["year-21.png"]);
 });

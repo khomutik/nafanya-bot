@@ -161,6 +161,12 @@ async function testAccess() {
   assert.match(html, /data-day="monday"/u);
   assert.match(html, /data-day="tuesday"/u);
   assert.match(html, /data-speaker/u);
+  assert.match(html, /\u041c\u0435\u0434\u0430\u043b\u0438 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438/u);
+  assert.match(html, /20–30 \u043b\u0435\u0442/u);
+  assert.equal([...html.matchAll(/data-medal="year-\d+"/gu)].length, 30);
+  assert.equal([...html.matchAll(/data-medal="month-\d+"/gu)].length, 11);
+  assert.match(html, /data-medal="year-30"/u);
+  assert.match(html, /data-medal="today"/u);
   assert.match(html, /data-add-entry/u);
   assert.match(html, /data-board-clear/u);
   assert.ok([...html.matchAll(/data-congratulations-input/g)].length >= 5,
@@ -189,6 +195,32 @@ async function testAccess() {
   const allowedAction = await postPanelAction(env, { type: "message", key: "prayer" });
   assert.equal(allowedAction.status, 200);
   assert.equal((await json(allowedAction)).ok, true);
+}
+
+async function testSobrietyMedals() {
+  const env = makeEnv({ ZOOM_LIBRARY: new MemoryR2() });
+  const invalid = await postPanelAction(env, { action: "sobriety_medal", medalKey: "../../secrets" });
+  assert.equal(invalid.status, 400);
+  const accepted = await postPanelAction(env, { action: "sobriety_medal", medalKey: "year-21", requestId: "medal-test-1" });
+  assert.equal(accepted.status, 200);
+  const result = await json(accepted);
+  assert.equal(result.ok, true);
+  assert.equal(result.queued[0].imageAsset, "year-21");
+  assert.equal(result.queued[0].text, "");
+
+  await env.ZOOM_LIBRARY.put("sobriety-medals/year-21.png", "fake-png");
+  const image = await worker.fetch(new Request("https://example.com/zoom-only/medal-image/year-21", {
+    headers: { "x-nafanya-zoom-secret": "bridge-token" }
+  }), env);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get("content-type"), "image/png");
+  assert.equal(await image.text(), "fake-png");
+  const denied = await worker.fetch(new Request("https://example.com/zoom-only/medal-image/year-21"), env);
+  assert.equal(denied.status, 401);
+  const unknown = await worker.fetch(new Request("https://example.com/zoom-only/medal-image/year-31", {
+    headers: { "x-nafanya-zoom-secret": "bridge-token" }
+  }), env);
+  assert.equal(unknown.status, 404);
 }
 
 async function testRetiredLegacyZoomSurface() {
@@ -2049,6 +2081,7 @@ async function testCompletePublicationBatches() {
 await testCompletePublicationBatches();
 await testEditingAndCompactQueueActions();
 await testAccess();
+await testSobrietyMedals();
 await testRetiredLegacyZoomSurface();
 await testSafeTestMessageAction();
 await testOneShotActionUsesOneAtomicDurableObjectWrite();

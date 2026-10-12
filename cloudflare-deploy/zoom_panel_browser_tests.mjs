@@ -65,6 +65,15 @@ try {
     assert.equal(response.status,200);
     return (await response.json()).messages;
   };
+  const sobriety=page.locator('.sobriety-medals');
+  assert.equal(await sobriety.locator('[data-medal^="year-"]').count(),30);
+  await sobriety.evaluate(el=>el.open=true);
+  const yearPanel=sobriety.locator('.medal-subgroup').nth(2);
+  await yearPanel.evaluate(el=>el.open=true);
+  assert.equal(await yearPanel.locator('[data-medal]').count(),11);
+  await yearPanel.locator('[data-medal="year-21"]').click();
+  await page.waitForFunction(()=>document.querySelector('#log')?.textContent.includes('Медаль добавлена в Zoom outbox'));
+  assert.ok((await readOutbox()).some(item=>item.imageAsset==='year-21'),'The UI action should leave the image attachment in Worker outbox');
   const outboxBeforeCongrats=await readOutbox();
   const congratsAdd=async text=>{await day.locator('[data-congratulations-input]').fill(text);await day.locator('[data-congratulations-add]').click();};
   await congratsAdd('Маня 1 год 2 месяца');
@@ -115,7 +124,7 @@ try {
   assert.equal(await day.locator('[data-book]').first().isDisabled(),true);
   for(const width of [340,420,1000]) {
     await page.setViewportSize({width,height:1100});
-    for(const panel of await page.locator('.day-panel').all()) {
+    for(const panel of await page.locator('.day-panel[data-day]').all()) {
       await panel.evaluate(el=>el.open=true);
       assert.equal(await panel.locator('[data-message-key="group_sponsors"]').count(),1);
       const labels=await panel.locator('[data-message-group]').allTextContents();

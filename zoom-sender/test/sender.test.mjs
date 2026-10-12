@@ -66,6 +66,19 @@ test("outbox client pulls zoom-only messages and sends ackIds", async () => {
   assert.deepEqual(calls[1].body.ackIds, [1, 2]);
 });
 
+test("outbox client fetches medal PNGs with bridge authorization", async () => {
+  const calls = [];
+  const client = new WorkerOutboxClient(makeConfig(), async (url, init) => {
+    calls.push({ url, init });
+    return new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
+  });
+  const bytes = await client.fetchMedalImage("year-21");
+  assert.equal(bytes.toString(), "png");
+  assert.equal(calls[0].url, "https://worker.example/zoom-only/medal-image/year-21");
+  assert.equal(calls[0].init.headers["x-nafanya-zoom-secret"], "secret");
+  await assert.rejects(() => client.fetchMedalImage("../secret"), /invalid asset key/u);
+});
+
 test("worker errors are classified for health without exposing secrets", async () => {
   assert.equal(classifyWorkerHttpStatus(401), "auth");
   assert.equal(classifyWorkerHttpStatus(403), "auth");
@@ -230,6 +243,25 @@ test("sender sends and acknowledges ordinary messages", async () => {
   const result = await service.runOnce();
   assert.deepEqual(acked, [1, 2]);
   assert.deepEqual(result.ackIds, [1, 2]);
+});
+
+test("sender fetches and sends queued medal images before acknowledging them", async () => {
+  const acked = [];
+  const sent = [];
+  const workerClient = {
+    async pull() { return { messages: [{ id: 17, text: "", imageAsset: "year-21" }] }; },
+    async fetchMedalImage(key) { assert.equal(key, "year-21"); return Buffer.from("png"); },
+    async ack(ids) { acked.push(...ids); return { ok: true }; }
+  };
+  const zoomAdapter = {
+    async getPresence() { return { zoomPageOpen: true, zoomJoined: true, chatOpen: true }; },
+    async sendImage(bytes, filename) { sent.push([bytes.toString(), filename]); return { sent: true, ack: true }; }
+  };
+  const service = new ZoomSenderService({ workerClient, zoomAdapter, backoff: new Backoff(makeConfig()), health: new HealthState(), logger: { info() {}, warn() {} } });
+  const result = await service.runOnce();
+  assert.deepEqual(sent, [["png", "year-21.png"]]);
+  assert.deepEqual(acked, [17]);
+  assert.deepEqual(result.ackIds, [17]);
 });
 
 test("sender waits in the waiting room without polling Worker and resumes after admission", async () => {

@@ -290,6 +290,31 @@ async function sendChatText(page, text) {
   }
 }
 
+async function sendChatImage(page, buffer, filename = "medal.png") {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return { sent: false, ack: false };
+  if (!await openChatPanel(page)) return { sent: false, ack: false };
+  const fileInput = page.locator('input[type="file"]').first();
+  if (!await fileInput.count().catch(() => 0)) return { sent: false, ack: false };
+  try {
+    await fileInput.setInputFiles({ name: filename, mimeType: "image/png", buffer });
+    await page.waitForTimeout(900);
+    const sendButtons = page.locator("button,[role='button']");
+    const count = await sendButtons.count().catch(() => 0);
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const button = sendButtons.nth(index);
+      const label = await button.evaluate((element) => [element.getAttribute("aria-label"), element.getAttribute("title"), element.innerText, element.textContent].filter(Boolean).join(" ").replace(/\s+/gu, " ").trim()).catch(() => "");
+      if (!/^(?:send|отправить)(?:\b|\s|$)/iu.test(label)) continue;
+      if (!await button.isVisible().catch(() => false) || !await button.isEnabled().catch(() => false)) continue;
+      await button.click();
+      await page.waitForTimeout(900);
+      return { sent: true, ack: true };
+    }
+    return { sent: false, ack: false };
+  } catch {
+    return { sent: false, ack: false };
+  }
+}
+
 function normalizeComparableChatText(value) {
   return String(value || "").replace(/\s+/gu, " ").trim();
 }
@@ -970,6 +995,12 @@ export class PlaywrightZoomSender {
     this.presence = await this.getPresence();
     return result;
   }
+  async sendImage(buffer, filename) {
+    if (!this.page) return { sent: false, ack: false };
+    const result = await sendChatImage(this.page, buffer, filename);
+    this.presence = await this.getPresence();
+    return result;
+  }
   async ownMessageRefs(text) {
     return exactOwnChatRecords(await collectVisibleChatMessages(this.page,{textLimit:4000,domLimit:10000}),text).map(record=>record.sourceMessageId);
   }
@@ -1138,4 +1169,4 @@ export class PlaywrightZoomSender {
   }
 }
 
-export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingVideoOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendChatText, sendVerifiedChatText, shouldAttemptChatRecovery };
+export { CHAT_INPUT_SELECTORS, DEFAULT_BROWSER_ARGS, buildChatMessageFingerprint, buildZoomWebClientUrl, classifyZoomPresenceText, collectVisibleChatMessages, collectVisibleControls, ensureMeetingVideoOff, exactOwnChatRecords, findVisibleChatInput, hasChatInput, isOwnIdentityChatRecord, normalizeComparableChatText, openChatPanel, sanitizeDiagnosticText, sanitizePageUrl, saveDiagnosticsSnapshot, sendChatImage, sendChatText, sendVerifiedChatText, shouldAttemptChatRecovery };

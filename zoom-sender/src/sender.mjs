@@ -110,8 +110,11 @@ export class ZoomSenderService {
         }
         const id = Number(message.id);
         const text = String(message.text || "").trim();
-        if (!id || !text) continue;
-        const result = await this.zoomAdapter.sendMessage(text);
+        const imageAsset = String(message.imageAsset || "").trim();
+        if (!id || (!text && !imageAsset)) continue;
+        const result = imageAsset
+          ? await this.zoomAdapter.sendImage(await this.workerClient.fetchMedalImage(imageAsset), `${imageAsset}.png`)
+          : await this.zoomAdapter.sendMessage(text);
         this.health.updateZoom(await this.zoomAdapter.getPresence());
         if (result?.sent && result?.ack) {
           ackIds.push(id);
