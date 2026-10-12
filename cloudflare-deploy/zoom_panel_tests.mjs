@@ -161,12 +161,7 @@ async function testAccess() {
   assert.match(html, /data-day="monday"/u);
   assert.match(html, /data-day="tuesday"/u);
   assert.match(html, /data-speaker/u);
-  assert.match(html, /\u041c\u0435\u0434\u0430\u043b\u0438 \u0442\u0440\u0435\u0437\u0432\u043e\u0441\u0442\u0438/u);
-  assert.match(html, /20–30 \u043b\u0435\u0442/u);
-  assert.equal([...html.matchAll(/data-medal="year-\d+"/gu)].length, 30);
-  assert.equal([...html.matchAll(/data-medal="month-\d+"/gu)].length, 11);
-  assert.match(html, /data-medal="year-30"/u);
-  assert.match(html, /data-medal="today"/u);
+  assert.doesNotMatch(html, /data-medal=/u, "Medal buttons belong in their own top-level section, not inside the tech panel");
   assert.match(html, /data-add-entry/u);
   assert.match(html, /data-board-clear/u);
   assert.ok([...html.matchAll(/data-congratulations-input/g)].length >= 5,
@@ -180,6 +175,21 @@ async function testAccess() {
   assert.match(html, /data-message-key="prayer"/u);
   assert.match(html, /async function requestAction\(body\)[\s\S]*attempt<2/u,
     "Every panel action should reuse one idempotency key for one delayed retry after a transient 5xx");
+
+  const deniedMedals = await worker.fetch(new Request("https://example.com/zoom-only/medals"), env);
+  assert.equal(deniedMedals.status, 401);
+  const allowedMedals = await worker.fetch(panelRequest("/zoom-only/medals?token=panel-token"), env);
+  assert.equal(allowedMedals.status, 200);
+  const medalsHtml = await allowedMedals.text();
+  assert.match(medalsHtml, /<title>\u041c\u0435\u0434\u0430\u043b\u0438<\/title>/u);
+  assert.match(medalsHtml, /<summary>0 \u043b\u0435\u0442 - \u041c\u0435\u0441\u044f\u0446\u044b<\/summary>/u);
+  assert.match(medalsHtml, /<summary>1-19 \u0413\u043e\u0434\u044b<\/summary>/u);
+  assert.match(medalsHtml, /<summary>20-30 \u043b\u0435\u0442<\/summary>/u);
+  assert.doesNotMatch(medalsHtml, /\u041f\u0435\u0440\u0432\u044b\u0435 \u0448\u0430\u0433\u0438|20–30/u);
+  assert.equal([...medalsHtml.matchAll(/data-medal="year-\d+"/gu)].length, 30);
+  assert.equal([...medalsHtml.matchAll(/data-medal="month-\d+"/gu)].length, 11);
+  assert.match(medalsHtml, /data-medal="year-30"/u);
+  assert.match(medalsHtml, /data-medal="today"/u);
   assert.match(html, /if\(refreshPromise\)return refreshPromise/u,
     "Concurrent panel refreshes must share one Worker request");
   assert.match(html, /startupRefreshTimer=setTimeout/u,

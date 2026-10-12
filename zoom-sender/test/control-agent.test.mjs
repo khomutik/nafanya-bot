@@ -251,6 +251,11 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /body\{margin:0;min-height:100vh;overflow:auto;background:#f5f6fa\}/u);
   assert.match(html, /\.control\{position:static/u);
   assert.match(html, /new ResizeObserver\(resizeWorkerPanel\)/u);
+  assert.match(html, /new ResizeObserver\(resizeMedalsPanel\)/u);
+  assert.match(html, /<details class="workspace-section" id="medalsPanel" open>[\s\S]*<summary>Медали<\/summary>[\s\S]*<iframe id="medalsPanelFrame"/u);
+  assert.match(html, /<\/details>\s*<details class="workspace-section" id="medalsPanel"/u,
+    "The medals panel must be a sibling of the tech panel, not nested inside it");
+  assert.match(html, /medalsPanelFrame"\)\.src="\.\/medals-panel"/u);
   assert.doesNotMatch(html, /ZOOM_CONTROL_TOKEN|ZOOM_PANEL_TOKEN|ZOOM_MEETING_URL/u);
   const inlineScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1];
   assert.ok(inlineScript);
@@ -259,9 +264,10 @@ test("control page exposes human buttons and statuses without secrets", () => {
 
 test("control page has a configurable shared host timer and collapsible tech panel", () => {
   const html = buildControlHtml({ zoomApp: true });
-  assert.match(html, /<section class="control">[\s\S]*id="timerPanel"[\s\S]*id="techPanel"/u);
+  assert.match(html, /<section class="control">[\s\S]*id="timerPanel"[\s\S]*id="techPanel"[\s\S]*id="medalsPanel"/u);
   assert.match(html, /id="timerPanel" open>[\s\S]*Таймер ведущего/u);
   assert.match(html, /id="techPanel" open>[\s\S]*Пульт техведа/u);
+  assert.match(html, /id="medalsPanel" open>[\s\S]*<summary>Медали<\/summary>/u);
   assert.match(html, /id="timerDisplay"[^>]*>5:00</u);
   assert.match(html, /id="timerMinutes"[^>]*value="5"/u);
   assert.match(html, /id="timerStart">Старт</u);
@@ -381,6 +387,7 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.match(source, /url\.pathname === "\/zoom-only\/library\/import" && access !== "admin"/u);
   assert.match(source, /\/api\/auth-setup\/stop/u);
   assert.ok(source.includes(`.replaceAll('\"/zoom-only/app/action\"', '\"./zoom-only/app/action\"')`));
+  assert.match(source, /url\.pathname === "\/medals-panel"[\s\S]*"\/zoom-only\/medals"/u);
   assert.ok(source.includes(`.replaceAll('\"/zoom-only/library/status\"', '\"./zoom-only/library/status\"')`));
   assert.match(source, /"\/zoom-only\/library\/import"/u);
   assert.match(source, /new URLSearchParams\(search\)/u);

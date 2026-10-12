@@ -154,6 +154,7 @@ const server = http.createServer(async (request, res) => {
     if (request.method === "GET" && url.pathname === "/app") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(buildControlHtml()); }
     if (url.pathname === "/zoom-only/timer") return proxyTimer(request, res, access);
     if (request.method === "GET" && url.pathname === "/worker-panel") return proxyWorkerOnlyWhileSenderRuns(request, res, "/zoom-only/app", url.search, access);
+    if (request.method === "GET" && url.pathname === "/medals-panel") return proxyWorkerOnlyWhileSenderRuns(request, res, "/zoom-only/medals", url.search, access);
     if (["/zoom-only/status", "/zoom-only/app/action", "/zoom-only/library/status", "/zoom-only/library/import"].includes(url.pathname)) {
       if (request.method === "POST" && url.pathname === "/zoom-only/library/import" && access !== "admin") return json(res, 403, { ok: false, error: "admin_required" });
       return proxyWorkerOnlyWhileSenderRuns(request, res, url.pathname, url.search, access);
