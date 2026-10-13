@@ -741,6 +741,7 @@ function createEmptyZoomMeetingRuntimeState() {
     initialized: false,
     zoomOnlyOutbox: [],
     zoomOnlyOutboxNextId: 1,
+    zoomLiteratureProgress: createDefaultZoomLiteratureProgress(),
     zoomOnlyPanelLastAction: null,
     zoomOnlyPanelRequestIds: [],
     zoomMeetingBoard: createEmptyMeetingBoardState(),
@@ -752,6 +753,40 @@ function createEmptyZoomMeetingRuntimeState() {
   };
 }
 __name(createEmptyZoomMeetingRuntimeState, "createEmptyZoomMeetingRuntimeState");
+const ZOOM_READING_COLLECTIONS = Object.freeze({
+  big_book: Object.freeze({ initialNumber: 173, intervalDays: 7 }),
+  as_bill_sees_it: Object.freeze({ initialNumber: 22, intervalDays: 7 }),
+  twelve_twelve: Object.freeze({ initialNumber: 87, intervalDays: 14 }),
+  living_sober: Object.freeze({ initialNumber: 130, intervalDays: 7 })
+});
+function createDefaultZoomLiteratureProgress() {
+  return Object.fromEntries(Object.entries(ZOOM_READING_COLLECTIONS).map(([collectionId, config]) => [collectionId, {
+    nextNumber: config.initialNumber,
+    intervalDays: config.intervalDays,
+    lastPublishedNumber: null,
+    lastPublishedAt: 0,
+    pending: null
+  }]));
+}
+__name(createDefaultZoomLiteratureProgress, "createDefaultZoomLiteratureProgress");
+function normalizeZoomLiteratureProgress(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const defaults = createDefaultZoomLiteratureProgress();
+  return Object.fromEntries(Object.entries(ZOOM_READING_COLLECTIONS).map(([collectionId, config]) => {
+    const item = source[collectionId] && typeof source[collectionId] === "object" ? source[collectionId] : {};
+    const pending = item.pending && typeof item.pending === "object" ? item.pending : null;
+    return [collectionId, {
+      nextNumber: Math.max(1, Math.floor(Number(item.nextNumber) || defaults[collectionId].nextNumber)),
+      intervalDays: config.intervalDays,
+      lastPublishedNumber: Number.isInteger(Number(item.lastPublishedNumber)) && Number(item.lastPublishedNumber) > 0 ? Number(item.lastPublishedNumber) : null,
+      lastPublishedAt: Math.max(0, Number(item.lastPublishedAt) || 0),
+      pending: pending && Number.isInteger(Number(pending.number)) && Array.isArray(pending.itemIds)
+        ? { number: Math.max(1, Math.floor(Number(pending.number))), itemIds: pending.itemIds.map(Number).filter(id => Number.isInteger(id) && id > 0), ackedIds: Array.isArray(pending.ackedIds) ? pending.ackedIds.map(Number).filter(id => Number.isInteger(id) && id > 0) : [] }
+        : null
+    }];
+  }));
+}
+__name(normalizeZoomLiteratureProgress, "normalizeZoomLiteratureProgress");
 function createEmptyMeetingCongratulationsState() {
   return { sessionDate: "", version: 0, entries: [], processedRequestIds: [], updatedAt: 0, lastPublishedAt: 0 };
 }
@@ -800,7 +835,12 @@ function normalizeZoomOutboxItem(value) {
     && typeof publication.id === "string" && /^\d{4}-\d{2}-\d{2}:\d+$/u.test(publication.id)
     && Number.isInteger(publication.partIndex) && Number.isInteger(publication.partCount)
     && publication.partCount > 0 && publication.partCount <= 300 && publication.partIndex >= 0 && publication.partIndex < publication.partCount;
-  return { id, text, createdAt, ...(ZOOM_SOBRIETY_MEDAL_ASSETS[imageAsset] ? { imageAsset } : {}), ...(coalesceKey ? { coalesceKey, coalesceVersion } : {}), ...(validPublication ? { publication } : {}) };
+  const reading = source.readingExcerpt;
+  const validReading = reading && Object.hasOwn(ZOOM_READING_COLLECTIONS, reading.collectionId)
+    && Number.isInteger(reading.number) && reading.number > 0
+    && Number.isInteger(reading.partIndex) && Number.isInteger(reading.partCount)
+    && reading.partCount > 0 && reading.partCount <= 300 && reading.partIndex >= 0 && reading.partIndex < reading.partCount;
+  return { id, text, createdAt, ...(ZOOM_SOBRIETY_MEDAL_ASSETS[imageAsset] ? { imageAsset } : {}), ...(coalesceKey ? { coalesceKey, coalesceVersion } : {}), ...(validPublication ? { publication } : {}), ...(validReading ? { readingExcerpt: { ...reading } } : {}) };
 }
 __name(normalizeZoomOutboxItem, "normalizeZoomOutboxItem");
 function normalizeZoomMeetingRuntimeState(value) {
@@ -812,6 +852,7 @@ function normalizeZoomMeetingRuntimeState(value) {
     initialized: source.initialized === true,
     zoomOnlyOutbox: Array.isArray(source.zoomOnlyOutbox) ? source.zoomOnlyOutbox.map(normalizeZoomOutboxItem).filter(Boolean) : [],
     zoomOnlyOutboxNextId: Number(source.zoomOnlyOutboxNextId) || 1,
+    zoomLiteratureProgress: normalizeZoomLiteratureProgress(source.zoomLiteratureProgress),
     zoomOnlyPanelLastAction: source.zoomOnlyPanelLastAction && typeof source.zoomOnlyPanelLastAction === "object" ? source.zoomOnlyPanelLastAction : null,
     zoomOnlyPanelRequestIds: Array.isArray(source.zoomOnlyPanelRequestIds) ? source.zoomOnlyPanelRequestIds.map((item) => String(item || "").trim()).filter(Boolean).slice(-100) : [],
     zoomMeetingBoard: isMeetingBoardDay(selectedBoard.dayKey) && zoomMeetingBoards[selectedBoard.dayKey] ? zoomMeetingBoards[selectedBoard.dayKey] : selectedBoard,
@@ -1194,7 +1235,7 @@ var ZoomMeetingStateDurableObject = class {
   async saveState(runtimeState) {
     await this.state.storage.put("zoom-meeting-state", normalizeZoomMeetingRuntimeState(runtimeState));
   }
-  appendMessages(runtimeState, messages, { coalesceKey = "", coalesceVersion = 0, replaceCoalescePrefixes = [], publication = null } = {}) {
+  appendMessages(runtimeState, messages, { coalesceKey = "", coalesceVersion = 0, replaceCoalescePrefixes = [], publication = null, readingExcerpt = null } = {}) {
     const createdAt = Date.now();
     const texts = (Array.isArray(messages) ? messages : []).map((message) => String(message || "").trim()).filter(Boolean);
     if (publication && texts.length > 300) throw new Error("zoom_publication_too_large");
@@ -1210,7 +1251,8 @@ var ZoomMeetingStateDurableObject = class {
     const queued = texts.map((text, partIndex) => {
         const item = { id: runtimeState.zoomOnlyOutboxNextId, text, createdAt,
           ...(normalizedCoalesceKey ? { coalesceKey: normalizedCoalesceKey, coalesceVersion: Math.max(0, Math.floor(Number(coalesceVersion) || 0)) } : {}),
-          ...(publication ? { publication: { ...publication, partIndex, partCount: texts.length } } : {}) };
+          ...(publication ? { publication: { ...publication, partIndex, partCount: texts.length } } : {}),
+          ...(readingExcerpt ? { readingExcerpt: { ...readingExcerpt, partIndex, partCount: texts.length } } : {}) };
         runtimeState.zoomOnlyOutboxNextId += 1;
         return item;
       });
@@ -1564,6 +1606,35 @@ var ZoomMeetingStateDurableObject = class {
         await this.saveState(runtimeState);
         return Response.json({ ok: true, duplicate: false, queued, lastAction: runtimeState.zoomOnlyPanelLastAction });
       }
+      if (action === "enqueue_literature_excerpt") {
+        const collectionId = String(payload.collectionId || "").trim();
+        const number = Number(payload.number);
+        const config = ZOOM_READING_COLLECTIONS[collectionId];
+        if (!config || !Number.isInteger(number) || number < 1 || !Array.isArray(payload.messages) || !payload.messages.length) {
+          return Response.json({ ok: false, error: "invalid_literature_excerpt" }, { status: 400 });
+        }
+        const progress = runtimeState.zoomLiteratureProgress[collectionId];
+        const requestId = String(payload.requestId || "").trim().slice(0, 128);
+        if (requestId && runtimeState.zoomOnlyPanelRequestIds.includes(requestId)) {
+          return Response.json({ ok: true, duplicate: true, queued: [], lastAction: runtimeState.zoomOnlyPanelLastAction, progress: runtimeState.zoomLiteratureProgress });
+        }
+        if (progress.pending) return Response.json({ ok: false, error: "literature_excerpt_pending", progress: runtimeState.zoomLiteratureProgress }, { status: 409 });
+        const expectedNumber = payload.expectedNumber == null ? null : Number(payload.expectedNumber);
+        if (expectedNumber != null && (expectedNumber !== progress.nextNumber || number !== expectedNumber)) {
+          return Response.json({ ok: false, error: "literature_progress_changed", progress: runtimeState.zoomLiteratureProgress }, { status: 409 });
+        }
+        const label = String(payload.label || collectionId).trim().slice(0, 300);
+        const queued = this.appendMessages(runtimeState, payload.messages, { readingExcerpt: { collectionId, number } });
+        if (!queued.length) return Response.json({ ok: false, error: "empty_literature_excerpt" }, { status: 400 });
+        progress.pending = { number, itemIds: queued.map(item => item.id), ackedIds: [] };
+        runtimeState.zoomOnlyPanelLastAction = { key: `${collectionId}:${number}`, label, ok: true, createdAt: Date.now() };
+        if (requestId) {
+          runtimeState.zoomOnlyPanelRequestIds.push(requestId);
+          runtimeState.zoomOnlyPanelRequestIds = runtimeState.zoomOnlyPanelRequestIds.slice(-100);
+        }
+        await this.saveState(runtimeState);
+        return Response.json({ ok: true, duplicate: false, queued, lastAction: runtimeState.zoomOnlyPanelLastAction, progress: runtimeState.zoomLiteratureProgress });
+      }
       if (action === "pull_messages") {
         const limit = Math.max(1, Math.min(50, Number(payload.limit) || 20));
         const minId = Number(payload.minId) || 0;
@@ -1579,6 +1650,19 @@ var ZoomMeetingStateDurableObject = class {
       if (action === "ack_messages") {
         const ids = new Set((Array.isArray(payload.ids) ? payload.ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
         if (ids.size) {
+          for (const item of runtimeState.zoomOnlyOutbox) {
+            const reading = item.readingExcerpt;
+            if (!ids.has(Number(item.id)) || !reading) continue;
+            const progress = runtimeState.zoomLiteratureProgress[reading.collectionId];
+            if (!progress?.pending || progress.pending.number !== reading.number) continue;
+            if (!progress.pending.ackedIds.includes(Number(item.id))) progress.pending.ackedIds.push(Number(item.id));
+            if (progress.pending.itemIds.every(id => progress.pending.ackedIds.includes(id))) {
+              progress.lastPublishedNumber = progress.pending.number;
+              progress.lastPublishedAt = Date.now();
+              progress.nextNumber = progress.pending.number + 1;
+              progress.pending = null;
+            }
+          }
           runtimeState.zoomOnlyOutbox = runtimeState.zoomOnlyOutbox.filter((item) => !ids.has(Number(item.id)));
           await this.saveState(runtimeState);
         }
@@ -1615,6 +1699,7 @@ var ZoomMeetingStateDurableObject = class {
           meetingBoards: runtimeState.zoomMeetingBoards,
           speakerQuestions: runtimeState.zoomSpeakerQuestions,
           congratulations,
+          literatureProgress: runtimeState.zoomLiteratureProgress,
           activeMode: runtimeState.zoomPanelActiveMode
         });
       }
@@ -3384,6 +3469,9 @@ async function handleZoomOnlyAppActionRequest(request, env) {
   if (payload.action === "book_excerpt" || payload.type === "book_excerpt") {
     return Response.json(await handleZoomV2PanelLibraryEntryAction(env, String(payload.collectionId || "").trim(), payload.number, oneShotOptions));
   }
+  if (payload.action === "next_book_excerpt" || payload.type === "next_book_excerpt") {
+    return Response.json(await handleZoomV2PanelNextLibraryEntryAction(env, String(payload.collectionId || "").trim(), oneShotOptions));
+  }
   if (payload.action === "daily_reflection" || payload.type === "daily_reflection") {
     return Response.json(await handleZoomV2PanelDailyReflectionAction(env, oneShotOptions));
   }
@@ -3409,21 +3497,29 @@ async function handleZoomV2PanelTestMessageAction(env, options = {}) {
   });
 }
 __name(handleZoomV2PanelTestMessageAction, "handleZoomV2PanelTestMessageAction");
-async function enqueueZoomV2GeneratedAction(env, { key, label, messages, alreadyLimited = false, requestId = "", meetingStateOptions = {} }) {
+async function enqueueZoomV2GeneratedAction(env, { key, label, messages, alreadyLimited = false, requestId = "", meetingStateOptions = {}, readingExcerpt = null, expectedNumber = null }) {
   const preparedMessages = (alreadyLimited ? messages : messages.flatMap((message) => splitZoomText(message)))
     .map((message) => String(message || "").trim())
     .filter(Boolean);
-  const result = await callZoomMeetingState(env, "enqueue_panel_action", {
+  const action = readingExcerpt ? "enqueue_literature_excerpt" : "enqueue_panel_action";
+  const result = await callZoomMeetingState(env, action, {
     key,
     label,
     messages: preparedMessages,
-    requestId
+    requestId,
+    ...(readingExcerpt ? { ...readingExcerpt, expectedNumber } : {})
   }, meetingStateOptions);
+  const errorMessage = result.error === "literature_excerpt_pending"
+    ? "\u041f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439 \u043e\u0442\u0440\u044b\u0432\u043e\u043a \u0435\u0449\u0451 \u043e\u0436\u0438\u0434\u0430\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f Zoom."
+    : result.error === "literature_progress_changed"
+      ? "\u041d\u043e\u043c\u0435\u0440 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f. \u041e\u0431\u043d\u043e\u0432\u0438\u043b \u043f\u0443\u043b\u044c\u0442; \u043d\u0430\u0436\u043c\u0438 \u0435\u0449\u0451 \u0440\u0430\u0437."
+      : result.error || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0440\u044b\u0432\u043e\u043a.";
   return {
     ...result,
-    ok: true,
+    ok: result.ok === true,
+    ...(result.ok === false ? { error: errorMessage } : {}),
     key,
-    message: result.duplicate ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e." : `${label} \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d \u0432 Zoom outbox`,
+    message: result.duplicate ? "\u042d\u0442\u043e \u043d\u0430\u0436\u0430\u0442\u0438\u0435 \u0443\u0436\u0435 \u0443\u0447\u0442\u0435\u043d\u043e." : result.ok === false ? errorMessage : `${label} \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d ${readingExcerpt ? "\u0432 Zoom outbox; \u043e\u0436\u0438\u0434\u0430\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f" : "\u0432 Zoom outbox"}`,
     queued: Array.isArray(result.queued) ? result.queued : []
   };
 }
@@ -3442,12 +3538,26 @@ async function handleZoomV2PanelLibraryEntryAction(env, collectionId, rawKey, op
     const entry = getLibraryEntry(library, collectionId, number);
     if (!entry) return { ok: false, key: collectionId, error: `${definition.label}: \u043e\u0442\u0440\u044b\u0432\u043e\u043a \u2116${number} \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d.` };
     const messages = buildLibraryZoomMessages(collectionId, number, entry.text);
-    return await enqueueZoomV2GeneratedAction(env, { key: `${collectionId}:${number}`, label: `${definition.label}, \u2116${number}`, messages, alreadyLimited: true, ...options });
+    const readingExcerpt = Object.hasOwn(ZOOM_READING_COLLECTIONS, collectionId) ? { collectionId, number } : null;
+    return await enqueueZoomV2GeneratedAction(env, { key: `${collectionId}:${number}`, label: `${definition.label}, \u2116${number}`, messages, alreadyLimited: true, ...(readingExcerpt ? { readingExcerpt } : {}), ...options });
   } catch (error) {
     return { ok: false, key: collectionId, error: String(error?.message || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u043e\u0442\u0440\u044b\u0432\u043e\u043a.").slice(0, 300) };
   }
 }
 __name(handleZoomV2PanelLibraryEntryAction, "handleZoomV2PanelLibraryEntryAction");
+async function handleZoomV2PanelNextLibraryEntryAction(env, collectionId, options = {}) {
+  if (!Object.hasOwn(ZOOM_READING_COLLECTIONS, collectionId)) return { ok: false, key: collectionId, error: "\u0414\u043b\u044f \u044d\u0442\u043e\u0439 \u043a\u043d\u0438\u0433\u0438 \u043d\u0435\u0442 \u0430\u0432\u0442\u043e\u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430." };
+  try {
+    const status = await callZoomMeetingState(env, "status");
+    const progress = status.literatureProgress?.[collectionId];
+    if (!progress) return { ok: false, key: collectionId, error: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043e\u0442\u0440\u044b\u0432\u043a\u043e\u0432." };
+    if (progress.pending) return { ok: false, key: collectionId, error: "\u041f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439 \u043e\u0442\u0440\u044b\u0432\u043e\u043a \u0435\u0449\u0451 \u043e\u0436\u0438\u0434\u0430\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f Zoom." };
+    return await handleZoomV2PanelLibraryEntryAction(env, collectionId, progress.nextNumber, { ...options, expectedNumber: progress.nextNumber });
+  } catch (error) {
+    return { ok: false, key: collectionId, error: String(error?.message || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u043e\u0442\u0440\u044b\u0432\u043e\u043a.").slice(0, 300) };
+  }
+}
+__name(handleZoomV2PanelNextLibraryEntryAction, "handleZoomV2PanelNextLibraryEntryAction");
 async function handleZoomV2PanelDailyReflectionAction(env, options = {}) {
   const dateKey = getMoscowDateKey();
   try {
@@ -3695,7 +3805,10 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
     if (collectionId === "daily_reflections") return `<div class="publication-row publication-${collectionId}"><label>${label}</label><button class="action wide" data-daily type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u0430 \u0441\u0435\u0433\u043e\u0434\u043d\u044f</button></div>`;
     const max = collectionId === "game_questions" ? 500 : 9999;
     const attr = collectionId === "game_questions" ? `data-game` : `data-book="${collectionId}"`;
-    return `<div class="publication-row publication-${collectionId}"><label for="number-${dayKey}-${collectionId}">${label}</label><input id="number-${dayKey}-${collectionId}" type="number" min="1" max="${max}" inputmode="numeric" placeholder="\u2116"><button class="action" ${attr} data-input="number-${dayKey}-${collectionId}" type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 Zoom</button></div>`;
+    const readingControls = Object.hasOwn(ZOOM_READING_COLLECTIONS, collectionId)
+      ? `<div class="reading-progress" data-reading-progress="${collectionId}"></div><button class="action next-excerpt" data-next-book="${collectionId}" type="button">\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u043e\u0442\u0440\u044b\u0432\u043e\u043a</button>`
+      : "";
+    return `<div class="publication-row publication-${collectionId}"><label for="number-${dayKey}-${collectionId}">${label}</label><input id="number-${dayKey}-${collectionId}" type="number" min="1" max="${max}" inputmode="numeric" placeholder="\u2116"><button class="action" ${attr} data-input="number-${dayKey}-${collectionId}" type="button">\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 Zoom</button>${readingControls}</div>`;
   };
   let dayHtml = dayDefinitions.map(([dayKey, label, books]) => {
     const buttons = messageGroups(dayKey);
@@ -3712,6 +3825,8 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
   visualStyles.textContent+=".medal-subgroup{border:1px solid #d9dfe8;border-radius:9px;background:#fff;overflow:hidden}.medal-subgroup>summary{cursor:pointer;padding:10px 12px;font-size:16px;font-weight:850;list-style:none}.medal-subgroup>summary:before{content:'\\25b6';display:inline-block;margin-right:8px;font-size:11px;transition:transform .15s}.medal-subgroup[open]>summary:before{transform:rotate(90deg)}.sobriety-medal-button{min-height:46px;background:#fff8e7;border-color:#d9b85e}.sobriety-medals>.day-body{padding-top:8px}";
   document.querySelectorAll("[data-medal]").forEach(button=>button.addEventListener("click",()=>run({action:"sobriety_medal",medalKey:button.dataset.medal},button)));
   visualStyles.textContent+="@media(min-width:760px){.publication-row.publication-daily_reflections{grid-template-columns:minmax(0,1fr) minmax(160px,210px)}}";
+  visualStyles.textContent+=".publication-row .reading-progress,.publication-row .next-excerpt{grid-column:1/-1}.publication-row .reading-progress{font-size:12px;color:#586176}.publication-row .next-excerpt{width:100%;background:#e9f7ed;border-color:#77a889}.publication-row .next-excerpt:disabled{opacity:.65;cursor:wait}@media(min-width:760px){.publication-row .next-excerpt,.publication-row .reading-progress{grid-column:1/-1}}";
+  visualStyles.textContent+=".publication-row.publication-big_book,.publication-row.publication-twelve_twelve,.publication-row.publication-living_sober,.publication-row.publication-as_bill_sees_it{grid-template-columns:minmax(0,1fr) minmax(112px,auto)}.publication-row.publication-big_book label,.publication-row.publication-twelve_twelve label,.publication-row.publication-living_sober label,.publication-row.publication-as_bill_sees_it label{grid-column:1/-1}.publication-row.publication-big_book button[data-book],.publication-row.publication-twelve_twelve button[data-book],.publication-row.publication-living_sober button[data-book],.publication-row.publication-as_bill_sees_it button[data-book]{grid-column:2;min-width:0;padding-inline:5px}@media(min-width:760px){.publication-row.publication-big_book,.publication-row.publication-twelve_twelve,.publication-row.publication-living_sober,.publication-row.publication-as_bill_sees_it{grid-template-columns:minmax(180px,1fr) 90px minmax(160px,210px)}.publication-row.publication-big_book label,.publication-row.publication-twelve_twelve label,.publication-row.publication-living_sober label,.publication-row.publication-as_bill_sees_it label{grid-column:auto}.publication-row.publication-big_book button[data-book],.publication-row.publication-twelve_twelve button[data-book],.publication-row.publication-living_sober button[data-book],.publication-row.publication-as_bill_sees_it button[data-book]{grid-column:auto}}}";
   function setPublishAvailable(button,available){if(!button)return;button.dataset.unavailable=String(!available);button.disabled=busy||!available}
   function row(text,buttons,spoken=false){const el=document.createElement("div");el.className="state-row"+(spoken?" is-spoken":"");const label=document.createElement("span");label.textContent=text;const controls=document.createElement("div");controls.className="row-actions";controls.append(...buttons);el.append(label,controls);return el}
   function smallButton(label,action,className="",title=""){const button=document.createElement("button");button.type="button";button.className="action "+className;button.textContent=label;if(title){button.title=title;button.setAttribute("aria-label",title)}button.onclick=()=>{button.focus();action(button)};return button}
@@ -3741,14 +3856,16 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
     smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",b=>run({action:"speaker_questions_defer",id:item.id},b),"defer rare")
   ];const published=(state.publishedEntries||[]).some(entry=>entry.id===item.id);buttons[0].dataset.unavailable=String(!published);buttons[0].disabled=!published;if(!published)buttons[0].title="\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0432 Zoom";buttons[3].dataset.unavailable=String(spoken||index===state.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";list.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))})}
   function renderCongratulations(state){document.querySelectorAll("[data-day]").forEach(panel=>{const list=panel.querySelector("[data-congratulations-list]");if(!list||list.querySelector("[data-editing]"))return;list.replaceChildren();if(!state?.entries?.length){list.textContent="\u0421\u0442\u0440\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442."}else state.entries.forEach(item=>list.append(row("\ud83e\udd73 "+item.text,[smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",button=>editRow(button,item,{action:"meeting_congratulations_edit"}),"edit rare"),smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",button=>run({action:"meeting_congratulations_remove",id:item.id},button),"danger rare")])));setPublishAvailable(panel.querySelector("[data-congratulations-publish]"),Boolean(state?.entries?.length))})}
+  function renderLiteratureProgress(progress){if(!progress)return;document.querySelectorAll("[data-reading-progress]").forEach(note=>{const collectionId=note.dataset.readingProgress,item=progress[collectionId];if(!item)return;const row=note.closest(".publication-row"),button=row?.querySelector("[data-next-book]"),interval=item.intervalDays||7;const last=item.lastPublishedAt?new Intl.DateTimeFormat("ru-RU",{dateStyle:"short",timeStyle:"short",timeZone:"Europe/Moscow"}).format(new Date(item.lastPublishedAt)):"\u0435\u0449\u0451 \u043d\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u043b\u0438";note.textContent=item.pending?"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f Zoom: \u2116"+item.pending.number:"\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439: \u2116"+item.nextNumber+" · \u0438\u043d\u0442\u0435\u0440\u0432\u0430\u043b "+interval+" \u0434\u043d. · \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439: "+(item.lastPublishedNumber?"\u2116"+item.lastPublishedNumber+", "+last:last);if(button){button.dataset.unavailable=String(Boolean(item.pending));button.disabled=busy||Boolean(item.pending)}})}
   document.querySelectorAll("[data-daily],[data-book],[data-game],[data-congratulations-publish]").forEach(button=>{button.classList.add("zoom-publish");if(button.matches("[data-daily]")){button.textContent="\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM";setPublishAvailable(button,true)}if(button.matches("[data-book],[data-game]")){button.textContent="\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM";const input=document.getElementById(button.dataset.input),max=button.matches("[data-game]")?500:9999,update=()=>setPublishAvailable(button,/^\\d+$/u.test(input.value.trim())&&Number(input.value)>=1&&Number(input.value)<=max);input.addEventListener("input",update);update()}});
   renderCongratulations({entries:[]});
-  const originalRenderActionState=renderActionState;renderActionState=function(data,body){if(body.action==="meeting_congratulations_edit")document.querySelectorAll("[data-editing]").forEach(el=>delete el.dataset.editing);originalRenderActionState(data,body);if(data.congratulations)renderCongratulations(data.congratulations)};
-  function statusRequestPath(){const url=new URL(statusPath,location.href);if(timerClient){url.searchParams.set("includeTimer","1");url.searchParams.set("instanceId",timerClient.instanceId);url.searchParams.set("product",timerClient.product);url.searchParams.set("indicatorSupported",timerClient.indicatorSupported?"1":"0")}return url.toString()}async function refreshState(){if(refreshPromise)return refreshPromise;refreshPromise=(async()=>{try{const data=await requestJson(statusRequestPath());renderBoard(data.meetingBoard);renderSpeaker(data.speakerQuestions);if(data.sharedTimer&&parent!==window)parent.postMessage({type:"nafanya-worker-state",sharedTimer:data.sharedTimer},location.origin);return data}catch(error){log("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435: "+error.message);return null}})();try{return await refreshPromise}finally{refreshPromise=null}}
-  const originalRefreshState=refreshState;refreshState=async function(){const data=await originalRefreshState();if(data)renderCongratulations(data.congratulations);return data};
+  const originalRenderActionState=renderActionState;renderActionState=function(data,body){if(body.action==="meeting_congratulations_edit")document.querySelectorAll("[data-editing]").forEach(el=>delete el.dataset.editing);originalRenderActionState(data,body);if(data.congratulations)renderCongratulations(data.congratulations);if(data.literatureProgress)renderLiteratureProgress(data.literatureProgress)};
+  function statusRequestPath(){const url=new URL(statusPath,location.href);if(timerClient){url.searchParams.set("includeTimer","1");url.searchParams.set("instanceId",timerClient.instanceId);url.searchParams.set("product",timerClient.product);url.searchParams.set("indicatorSupported",timerClient.indicatorSupported?"1":"0")}return url.toString()}async function refreshState(){if(refreshPromise)return refreshPromise;refreshPromise=(async()=>{try{const data=await requestJson(statusRequestPath());renderBoard(data.meetingBoard);renderSpeaker(data.speakerQuestions);renderLiteratureProgress(data.literatureProgress);if(data.sharedTimer&&parent!==window)parent.postMessage({type:"nafanya-worker-state",sharedTimer:data.sharedTimer},location.origin);return data}catch(error){log("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435: "+error.message);return null}})();try{return await refreshPromise}finally{refreshPromise=null}}
+  const originalRefreshState=refreshState;refreshState=async function(){const data=await originalRefreshState();if(data){renderCongratulations(data.congratulations);renderLiteratureProgress(data.literatureProgress)}return data};
   document.querySelectorAll("[data-message-key]").forEach(button=>button.onclick=()=>run({type:"message",key:button.dataset.messageKey},button));
   document.querySelectorAll("[data-publish-day]").forEach(button=>button.onclick=()=>run({action:"meeting_board_publish",dayKey:button.dataset.publishDay,requestId:requestId()},button));
   document.querySelectorAll("[data-book]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1){log("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0439 \u043d\u043e\u043c\u0435\u0440.");return}run({action:"book_excerpt",collectionId:button.dataset.book,number},button).then(data=>{if(data){input.value="";input.dispatchEvent(new Event("input"))}})});
+  document.querySelectorAll("[data-next-book]").forEach(button=>button.onclick=()=>run({action:"next_book_excerpt",collectionId:button.dataset.nextBook},button).then(()=>refreshState()));
   document.querySelectorAll("[data-daily]").forEach(button=>button.onclick=()=>run({action:"daily_reflection"},button));
   document.querySelectorAll("[data-game]").forEach(button=>button.onclick=()=>{const input=document.getElementById(button.dataset.input),number=Number(input.value);if(!Number.isInteger(number)||number<1||number>500){log("\u041d\u043e\u043c\u0435\u0440 \u0432\u043e\u043f\u0440\u043e\u0441\u0430: \u043e\u0442 1 \u0434\u043e 500.");return}run({action:"game_question",number},button).then(data=>{if(data){input.value="";input.dispatchEvent(new Event("input"))}})});
   document.querySelectorAll("[data-day]").forEach(panel=>{const input=panel.querySelector("[data-congratulations-input]"),add=panel.querySelector("[data-congratulations-add]"),publish=panel.querySelector("[data-congratulations-publish]");add.onclick=()=>run({action:"meeting_congratulations_add",text:input.value,requestId:requestId()},add).then(data=>{if(data)input.value=""});publish.onclick=()=>run({action:"meeting_congratulations_publish",requestId:requestId()},publish)});

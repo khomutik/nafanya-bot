@@ -119,7 +119,7 @@ try {
   assert.equal(new Set(sendButtons.map(button=>button.font)).size,1);
   assert.equal(new Set(sendButtons.map(button=>button.size)).size,1);
   assert.equal(new Set(sendButtons.filter(button=>!button.disabled).map(button=>button.color)).size,1);
-  assert.equal(await page.locator('[data-daily]').first().isDisabled(),true,'Daily reading is unavailable without a reading for today');
+  assert.equal(await page.locator('[data-daily]').first().isDisabled(),false,'Daily reading stays active and reports a missing excerpt only after an attempt');
   assert.equal(await day.locator('[data-book]').first().isDisabled(),true);
   await day.locator('[data-book]').first().locator('xpath=preceding-sibling::input').fill('1');
   assert.equal(await day.locator('[data-book]').first().isDisabled(),false);

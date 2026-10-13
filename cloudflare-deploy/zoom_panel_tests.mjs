@@ -1109,6 +1109,9 @@ async function testQueuePausedLibraryPanelAndActions() {
   assert.match(html, /publication-twelve_twelve/u);
   assert.match(html, /publication-living_sober/u);
   assert.match(html, /publication-as_bill_sees_it/u);
+  assert.equal((html.match(/data-next-book=/gu) || []).length, 4, "Only the four requested books should expose next-excerpt buttons");
+  assert.match(html, /Следующий отрывок/u);
+  assert.match(html, /data-reading-progress="twelve_twelve"/u);
   assert.match(html, /publication-daily_reflections/u);
   assert.match(html, /publication-game_questions/u);
   assert.doesNotMatch(html, /class="status"|id="statusText"/u);
@@ -1131,10 +1134,12 @@ async function testQueuePausedLibraryPanelAndActions() {
   assert.equal(libraryStatus.available, false);
   assert.equal(libraryStatus.dailyReflectionReady, false);
 
-  const importPayload = { collections: { big_book: { entries: [
-    { key: 1, text: "Первое длинное предложение закончено. ".repeat(30), sourcePath: "Большая книга/001.md" },
-    { key: 2, text: "Второй отрывок", sourcePath: "Большая книга/002.md" }
-  ] } } };
+  const importPayload = { collections: { big_book: { entries: Array.from({ length: 173 }, (_, index) => {
+    const key = index + 1;
+    const text = key === 1 ? "Первое длинное предложение закончено. ".repeat(30)
+      : `Текст отрывка ${key}. `.repeat(90);
+    return { key, text, sourcePath: `Большая книга/${String(key).padStart(3, "0")}.md` };
+  }) } } };
   response = await worker.fetch(panelRequest("/zoom-only/library/import?dryRun=1", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1143,8 +1148,7 @@ async function testQueuePausedLibraryPanelAndActions() {
   assert.equal(response.status, 200);
   const preview = await json(response);
   assert.equal(preview.validated, true);
-  assert.equal(preview.preview.totalEntries, 2);
-  assert.equal(preview.preview.totalMessages, 2);
+  assert.ok(preview.preview.totalEntries >= 173);
   response = await worker.fetch(panelRequest("/zoom-only/library/status"), env);
   assert.equal((await json(response)).available, false);
 
@@ -1155,17 +1159,41 @@ async function testQueuePausedLibraryPanelAndActions() {
   }), env);
   assert.equal(response.status, 200);
   const imported = await json(response);
-  assert.equal(imported.collections.big_book.count, 2);
+  assert.ok(imported.collections.big_book.count >= 173);
   assert.equal(imported.collections.as_bill_sees_it.available, false);
+
+  response = await worker.fetch(panelRequest("/zoom-only/status"), env);
+  let status = await json(response);
+  assert.equal(status.literatureProgress.big_book.nextNumber, 173, "The configured starting excerpt should be persisted as the next one");
+  assert.equal(status.literatureProgress.twelve_twelve.nextNumber, 87);
+  assert.equal(status.literatureProgress.as_bill_sees_it.nextNumber, 22);
+  assert.equal(status.literatureProgress.living_sober.nextNumber, 130);
+
+  response = await postPanelAction(env, { action: "next_book_excerpt", collectionId: "big_book", requestId: "next-big-book-173" });
+  assert.equal((await json(response)).ok, true);
+  let outbox = await pullOutbox(env);
+  assert.match(outbox[0].text, /Большая книга\. Отрывок №173/u);
+  status = await json(await worker.fetch(panelRequest("/zoom-only/status"), env));
+  assert.equal(status.literatureProgress.big_book.nextNumber, 173, "The cursor must not advance before Zoom acknowledges delivery");
+  assert.equal(status.literatureProgress.big_book.pending.number, 173);
+  response = await postPanelAction(env, { action: "next_book_excerpt", collectionId: "big_book", requestId: "next-big-book-duplicate" });
+  assert.equal((await json(response)).ok, false, "A second click must not queue the same excerpt while delivery is pending");
+  await ackOutbox(env, outbox.map((message) => message.id));
+  status = await json(await worker.fetch(panelRequest("/zoom-only/status"), env));
+  assert.equal(status.literatureProgress.big_book.nextNumber, 174);
+  assert.equal(status.literatureProgress.big_book.lastPublishedNumber, 173);
+  assert.equal(status.literatureProgress.big_book.pending, null);
 
   response = await postPanelAction(env, { action: "book_excerpt", collectionId: "big_book", number: 1 });
   assert.equal((await json(response)).ok, true);
-  let outbox = await pullOutbox(env);
+  outbox = await pullOutbox(env);
   assert.ok(outbox.length >= 1);
   assert.ok(outbox.every((message) => Array.from(message.text).length <= 950));
   assert.match(outbox[0].text, /Большая книга\. Отрывок №1/u);
   assert.ok(outbox.slice(1).every((message) => !/Большая книга\. Отрывок №1|Часть \d+\/\d+/u.test(message.text)));
   await ackOutbox(env, outbox.map((message) => message.id));
+  status = await json(await worker.fetch(panelRequest("/zoom-only/status"), env));
+  assert.equal(status.literatureProgress.big_book.nextNumber, 2, "Manually publishing a numbered excerpt should move the next pointer after acknowledgement");
 
   const todayKey = new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit" }).format(new Date());
   const currentLibrary = JSON.parse(env.ZOOM_LIBRARY.data.get("zoom-library/current.json"));
