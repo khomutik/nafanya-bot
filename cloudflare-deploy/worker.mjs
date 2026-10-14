@@ -388,6 +388,7 @@ var MORNING_ANNOUNCEMENT_ID = 2374;
 var EVENING_ANNOUNCEMENT_ID = 2385;
 var DAILY_15_ANNOUNCEMENT_ID = 3053;
 var DAILY_17_ANNOUNCEMENT_ID = 2524;
+var DAILY_LINKED_MESSAGE_ID = 6155;
 var DAILY_22_ANNOUNCEMENT_ID = 4191;
 var DAILY_22_50_ANNOUNCEMENT_ID = 5941;
 var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
@@ -4151,6 +4152,7 @@ var worker_default = {
     ctx.waitUntil(Promise.all([
       runScheduledTaskOncePerDay(env, "morning_07_00", 7, 0, () => sendAnnouncementCopyToGroup(env, MORNING_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "yozhik_08_00", 8, 0, () => sendYozhikToGroup(env, { disableNotification: false })),
+      runScheduledTaskOncePerDay(env, "linked_message_08_00", 8, 0, () => copyTechMessageToGroupSilent(env, CHAT_GROUP_ID, INFO_CHAT_ID, DAILY_LINKED_MESSAGE_ID)),
       runScheduledTaskOncePerDay(env, "info_channel_09_00", 9, 0, () => sendAnnouncementCopyToGroup(env, INFO_CHANNEL_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "service_reminders_12_00", 12, 0, () => sendTodayServiceReminders(env)),
       runScheduledTaskOncePerDay(env, "announce_thread_11_00", 11, 0, () => sendTechMessageCopyToInfoThread(env, DAILY_ANNOUNCE_THREAD_MESSAGE_ID, ANNOUNCE_THREAD_ID)),
@@ -4161,6 +4163,7 @@ var worker_default = {
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_11_00`, item.weekday, 11, 0, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId)),
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_21_20`, item.weekday, 21, 20, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId))
       ]),
+      runScheduledTaskOncePerDay(env, "linked_message_21_00", 21, 0, () => copyTechMessageToGroupSilent(env, CHAT_GROUP_ID, INFO_CHAT_ID, DAILY_LINKED_MESSAGE_ID)),
       runScheduledTaskOncePerDay(env, "daily_22_00", 22, 0, () => sendAnnouncementCopyToGroup(env, DAILY_22_ANNOUNCEMENT_ID), 120),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "daily_22_50", 22, 50, () => sendAnnouncementCopyToGroup(env, DAILY_22_50_ANNOUNCEMENT_ID)),
