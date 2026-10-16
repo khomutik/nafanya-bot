@@ -11,7 +11,7 @@ run('scripts/deploy-preflight.mjs');
 for(const test of ['regression_tests.mjs','zoom_message_source_tests.mjs','zoom_panel_tests.mjs','queue_engine_tests.mjs','zoom_library_tests.mjs']) {
   run(test,...(test==='regression_tests.mjs'?['--skip-live-knowledge']:[]));
 }
-run('--test','message_addressing_tests.mjs','response_quality_tests.mjs','telegram_api_tests.mjs');
+run('--test','message_addressing_tests.mjs','response_quality_tests.mjs','telegram_api_tests.mjs','service_polls_tests.mjs');
 run('../zoom-sender/test/release-tests.mjs');
 const commit=git('rev-parse','HEAD');
 run('node_modules/wrangler/bin/wrangler.js','deploy','--keep-vars','--message',`Unified Telegram + Zoom; git ${commit}`);

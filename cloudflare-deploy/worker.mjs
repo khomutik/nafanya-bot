@@ -6,6 +6,7 @@ import { classifyModeration, getModerationDeleteText, getModerationWarningText }
 import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK_TEXTS, QUEUE_CLOSED_LABEL, QUEUE_OPEN_LABEL, QUEUE_PANEL_TEXT, SERVICE_CONFIRMATION, TIMER_CALLBACK_TEXTS, TIMER_PANEL_TEXT, buildMeetingKeyboard, buildQueueKeyboard, buildQueuePublicKeyboard, buildRootStatusText, buildTimerKeyboard, getQueueInstruction, getQueueModeTitle } from "./bot_panels.js";
 import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, isTransientTelegramError, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
 import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState, callZoomMeetingState, callZoomSharedTimerState } from "./state_clients.js";
+import { buildServicePollsForFriday } from "./service_polls.js";
 import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
@@ -2913,6 +2914,19 @@ async function runScheduledTaskOncePerWeekday(env, taskKey, weekday, hour, minut
   return runScheduledTaskOncePerDay(env, taskKey, hour, minute, task, windowMinutes);
 }
 __name(runScheduledTaskOncePerWeekday, "runScheduledTaskOncePerWeekday");
+async function sendBiweeklyServicePolls(env) {
+  const polls = buildServicePollsForFriday(getMoscowClock().dateKey);
+  if (!polls) return;
+  for (const poll of polls) {
+    const { key, ...pollPayload } = poll;
+    await runScheduledTaskOncePerDay(env, `service_poll_${key}_22_00`, 22, 0, () => callTelegram(env, "sendPoll", {
+      chat_id: INFO_CHAT_ID,
+      message_thread_id: ADMIN_THREAD_ID,
+      ...pollPayload
+    }), 120);
+  }
+}
+__name(sendBiweeklyServicePolls, "sendBiweeklyServicePolls");
 function splitTitleAndBody(text) {
   const normalized = String(text || "").trim();
   const parts = normalized.split(/\n\s*\n/);
@@ -4165,6 +4179,7 @@ var worker_default = {
       ]),
       runScheduledTaskOncePerDay(env, "linked_message_21_00", 21, 0, () => copyTechMessageToGroupSilent(env, CHAT_GROUP_ID, INFO_CHAT_ID, DAILY_LINKED_MESSAGE_ID)),
       runScheduledTaskOncePerDay(env, "daily_22_00", 22, 0, () => sendAnnouncementCopyToGroup(env, DAILY_22_ANNOUNCEMENT_ID), 120),
+      sendBiweeklyServicePolls(env),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "daily_22_50", 22, 50, () => sendAnnouncementCopyToGroup(env, DAILY_22_50_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "evening_23_00", 23, 0, () => sendAnnouncementCopyToGroup(env, EVENING_ANNOUNCEMENT_ID)),
