@@ -24,6 +24,11 @@ try {
   const page = await browser.newPage({viewport:{width:420,height:900}});
   const errors=[];
   page.on('pageerror',error=>errors.push(error.message));
+  const readOutbox=async()=>{
+    const response=await worker.fetch(new Request('https://nafanya.test/zoom-only/outbox',{method:'POST',headers:{'content-type':'application/json','x-nafanya-zoom-secret':'test'},body:JSON.stringify({limit:50})}),env);
+    assert.equal(response.status,200);
+    return (await response.json()).messages;
+  };
   await page.route('https://nafanya.test/**', async route => {
     const req=route.request();
     const response=await worker.fetch(new Request(req.url(),{method:req.method(),headers:req.headers(),...(req.method()==='POST'?{body:req.postData()}: {})}),env);
@@ -48,11 +53,15 @@ try {
   assert.equal(await row.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true,'An unpublished draft cannot be marked in the Zoom chat');
   await day.locator('[data-board-publish]').click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.disabled===false);
+  let boardOutboxCount=(await readOutbox()).length;
   await row.getByRole('button',{name:'Высказался',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.getAttribute('aria-pressed')==='true');
+  assert.equal((await readOutbox()).length,boardOutboxCount,'Marking an entry spoken must not publish until the explicit send button is pressed');
+  assert.equal(await day.locator('[data-board-publish]').isDisabled(),false);
   assert.equal(await row.getByRole('button',{name:'Пропускает',exact:true}).isDisabled(),true);
   await row.getByRole('button',{name:'Вернуть в очередь',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.getAttribute('aria-pressed')==='false');
+  assert.equal((await readOutbox()).length,boardOutboxCount,'Restoring an entry must remain a draft too');
   await row.getByRole('button',{name:'Пропускает',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .state-row>span')?.textContent.includes('222'));
   await day.locator('[data-topic-input]').fill('Old topic');await day.locator('[data-add-topic]').click();
@@ -60,11 +69,7 @@ try {
   assert.deepEqual(await topic.locator('button').allTextContents(),['Редактировать','Удалить']);
   await topic.getByRole('button',{name:'Редактировать',exact:true}).click();await topic.locator('input').fill('New topic');await topic.getByRole('button',{name:'Сохранить',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-topic-list] .state-row>span')?.textContent.includes('New topic'));
-  const readOutbox=async()=>{
-    const response=await worker.fetch(new Request('https://nafanya.test/zoom-only/outbox',{method:'POST',headers:{'content-type':'application/json','x-nafanya-zoom-secret':'test'},body:JSON.stringify({limit:50})}),env);
-    assert.equal(response.status,200);
-    return (await response.json()).messages;
-  };
+  assert.equal(await day.locator('[data-board-publish]').isDisabled(),false,'An unpublished topic keeps the board send button available');
   await page.goto('https://nafanya.test/zoom-only/medals?token=browser-test');
   const medalGroups=page.locator('.medal-subgroup');
   assert.deepEqual(await medalGroups.locator('summary').allTextContents(),['0 лет - Месяцы','1-19 Годы','20-30 лет']);
@@ -108,11 +113,13 @@ try {
   assert.equal(await question.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true);
   await speaker.locator('[data-speaker-draft-publish]').click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .check')?.disabled===false);
+  const speakerOutboxCount=(await readOutbox()).length;
   await question.getByRole('button',{name:'Высказался',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .check')?.getAttribute('aria-pressed')==='true');
-  assert.equal(await speaker.locator('[data-speaker-draft-publish]').isDisabled(),true);
-  assert.equal(await day.locator('[data-board-publish]').isDisabled(),false,'Unpublished topic keeps the board send button available');
-  await page.waitForFunction(()=>![...document.querySelectorAll('.zoom-publish')].some(button=>button.classList.contains('is-success')||button.classList.contains('is-error')));
+  assert.equal((await readOutbox()).length,speakerOutboxCount,'Speaker status changes must wait for explicit publish');
+  assert.equal(await speaker.locator('[data-speaker-draft-publish]').isDisabled(),false);
+  await speaker.locator('[data-speaker-draft-publish]').click();
+  await page.waitForFunction(()=>![...document.querySelectorAll('.zoom-publish')].some(button=>button.classList.contains('is-sending')||button.classList.contains('is-success')||button.classList.contains('is-error')));
   const sendButtons=await page.locator('.zoom-publish').evaluateAll(buttons=>buttons.map(button=>({label:button.textContent.trim(),font:getComputedStyle(button).fontFamily,size:getComputedStyle(button).fontSize,color:getComputedStyle(button).backgroundColor,disabled:button.disabled})));
   assert.ok(sendButtons.length>=10);
   assert.ok(sendButtons.every(button=>button.label==='Отправить в ZOOM'));

@@ -252,6 +252,8 @@ test("control page exposes human buttons and statuses without secrets", () => {
   assert.match(html, /\.control\{position:static/u);
   assert.match(html, /new ResizeObserver\(resizeWorkerPanel\)/u);
   assert.match(html, /new ResizeObserver\(resizeMedalsPanel\)/u);
+  assert.match(html, /iframe\{display:block;width:100%;height:1px;min-height:0/u,
+    "Embedded panels should size to their contents instead of reserving an entire viewport");
   assert.match(html, /<details class="workspace-section" id="medalsPanel" open>[\s\S]*<summary>Медали<\/summary>[\s\S]*<iframe id="medalsPanelFrame"/u);
   assert.match(html, /<\/details>\s*<details class="workspace-section" id="medalsPanel"/u,
     "The medals panel must be a sibling of the tech panel, not nested inside it");

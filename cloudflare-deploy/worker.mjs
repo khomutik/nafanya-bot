@@ -1397,7 +1397,6 @@ var ZoomMeetingStateDurableObject = class {
           throw new Error("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c \u0432 Zoom.");
         }
         board.entries[index] = { ...board.entries[index], status: boardAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
-        board.publishedEntries[publishedIndex] = { ...board.publishedEntries[publishedIndex], status: board.entries[index].status, updatedAt: now };
       }
     } else if (["edit_topic", "remove_topic"].includes(boardAction)) {
       const index = board.additionalTopics.findIndex((item) => item.id === id);
@@ -1413,7 +1412,7 @@ var ZoomMeetingStateDurableObject = class {
     }
     board.version += 1;
     board.updatedAt = now;
-    const stagedAction = ["add_entry", "add_topic", "edit_entry", "edit_topic", "remove_entry", "remove_topic", "defer_entry"].includes(boardAction);
+    const stagedAction = ["add_entry", "add_topic", "edit_entry", "mark_spoken", "restore_waiting", "edit_topic", "remove_entry", "remove_topic", "defer_entry"].includes(boardAction);
     if (stagedAction) {
       board.draftPending = true;
       await this.saveState(runtimeState);
@@ -1471,7 +1470,6 @@ var ZoomMeetingStateDurableObject = class {
         const publishedIndex = speaker.publishedEntries.findIndex((item) => item.id === id);
         if (publishedIndex < 0) throw new Error("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443 \u0432 Zoom.");
         speaker.entries[index] = { ...speaker.entries[index], status: speakerAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
-        speaker.publishedEntries[publishedIndex] = { ...speaker.publishedEntries[publishedIndex], status: speaker.entries[index].status, updatedAt: now };
       }
     } else if (speakerAction === "clear") {
       speaker.entries = [];
@@ -1480,7 +1478,7 @@ var ZoomMeetingStateDurableObject = class {
     }
     speaker.version += 1;
     speaker.updatedAt = now;
-    const stagedAction = ["add", "edit", "remove", "defer", "clear"].includes(speakerAction);
+    const stagedAction = ["add", "edit", "mark_spoken", "restore_waiting", "remove", "defer", "clear"].includes(speakerAction);
     if (stagedAction) {
       speaker.draftPending = true;
       await this.saveState(runtimeState);
