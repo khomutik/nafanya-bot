@@ -383,7 +383,7 @@ var SILENT_INFO_THREAD_IDS = new Set([
 ]);
 var TIMER_DEFAULT_SECONDS = 5 * 60;
 var TIMER_DONE_STICKER_SET_NAME = "NafanyaPN";
-var INFO_CHANNEL_ANNOUNCEMENT_ID = 1934;
+var INFO_CHANNEL_ANNOUNCEMENT_ID = 6405;
 var FREE_SERVICES_ANNOUNCEMENT_ID = 1935;
 var MORNING_ANNOUNCEMENT_ID = 2374;
 var EVENING_ANNOUNCEMENT_ID = 2385;
@@ -392,13 +392,14 @@ var DAILY_17_ANNOUNCEMENT_ID = 2524;
 var DAILY_LINKED_MESSAGE_ID = 6155;
 var DAILY_22_ANNOUNCEMENT_ID = 4191;
 var DAILY_22_50_ANNOUNCEMENT_ID = 5941;
+var DAILY_21_25_ANNOUNCEMENT_ID = 6406;
 var DAILY_ANNOUNCE_THREAD_MESSAGE_ID = 3053;
 var WEEKDAY_TECH_ANNOUNCEMENTS = [
-  { key: "monday", weekday: 1, sourceMessageId: 2893 },
-  { key: "tuesday", weekday: 2, sourceMessageId: 2894 },
-  { key: "thursday", weekday: 4, sourceMessageId: 2895 },
-  { key: "friday", weekday: 5, sourceMessageId: 2896 },
-  { key: "sunday", weekday: 0, sourceMessageId: 2897 }
+  { key: "monday", weekday: 1, sourceMessageId: 6399 },
+  { key: "tuesday", weekday: 2, sourceMessageId: 6400 },
+  { key: "thursday", weekday: 4, sourceMessageId: 6401 },
+  { key: "friday", weekday: 5, sourceMessageId: 6402 },
+  { key: "sunday", weekday: 0, sourceMessageId: 6403 }
 ];
 var TODAY_TOPIC_MESSAGES = [
   { key: "monday", weekday: 1, sourceMessageId: 3132, zoomKey: "theme_monday" },
@@ -4176,6 +4177,7 @@ var worker_default = {
         runScheduledTaskOncePerWeekday(env, `${item.key}_tech_21_20`, item.weekday, 21, 20, () => sendAnnouncementCopyToGroup(env, item.sourceMessageId))
       ]),
       runScheduledTaskOncePerDay(env, "linked_message_21_00", 21, 0, () => copyTechMessageToGroupSilent(env, CHAT_GROUP_ID, INFO_CHAT_ID, DAILY_LINKED_MESSAGE_ID)),
+      runScheduledTaskOncePerDay(env, "daily_21_25", 21, 25, () => sendAnnouncementCopyToGroup(env, DAILY_21_25_ANNOUNCEMENT_ID)),
       runScheduledTaskOncePerDay(env, "daily_22_00", 22, 0, () => sendAnnouncementCopyToGroup(env, DAILY_22_ANNOUNCEMENT_ID), 120),
       sendBiweeklyServicePolls(env),
       runScheduledTaskOncePerDay(env, "free_services_22_45", 22, 45, () => sendAnnouncementCopyToGroup(env, FREE_SERVICES_ANNOUNCEMENT_ID)),
