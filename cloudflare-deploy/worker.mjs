@@ -1848,6 +1848,7 @@ var AnnouncementStateDurableObject = class {
   }
   constructor(state) {
     this.state = state;
+    this.requestChain = Promise.resolve();
   }
   async loadState() {
     return normalizeAnnouncementState(await this.state.storage.get("announcement-state"));
@@ -1856,6 +1857,17 @@ var AnnouncementStateDurableObject = class {
     await this.state.storage.put("announcement-state", normalizeAnnouncementState(announcementState));
   }
   async fetch(request) {
+    const previous = this.requestChain;
+    let release;
+    this.requestChain = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await this.fetchSerialized(request);
+    } finally {
+      release();
+    }
+  }
+  async fetchSerialized(request) {
     const url = new URL(request.url);
     const action = url.pathname.replace("/", "");
     const payload = request.method === "POST" ? await request.json() : {};
@@ -2576,7 +2588,7 @@ async function buildServicePersonMap(env) {
     { display_name: "@rlinrec", username: "rlinrec" }
   ];
   const fromEnv = parseServicePersonMapEnv(env);
-  const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions").catch(() => ({ subscriptions: [] }));
+  const subscriptions = await callPersonalDayState(env, "list_personal_subscriptions");
   return [...canonicalPeople, ...fromEnv, ...(subscriptions?.subscriptions || []).map(serviceMapEntryFromSubscription)];
 }
 __name(buildServicePersonMap, "buildServicePersonMap");
@@ -2783,16 +2795,14 @@ async function sendOneServiceReminder(env, dateKey, roleKey, personName, personM
   if (previous?.messageId) return;
   const person = resolveServicePerson(personMap, personName);
   if (!person?.chatId && !person?.userId) {
-    const text = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0435: \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d Telegram user_id \u0434\u043b\u044f {NAME}.".replace("{NAME}", personName);
     await notifyOwnerTechError(env, {
       module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
       operation: "service_person_map",
-      error: new Error("service person has no Telegram user_id"),
-      details: { display_name: personName, date: dateKey, service: role.label, telegram_id_missing: true },
-      hint: "\u0414\u043e\u0431\u0430\u0432\u044c \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0430 \u0432 SERVICE_PERSON_MAP_JSON \u0438\u043b\u0438 \u043f\u043e\u043f\u0440\u043e\u0441\u0438 \u0435\u0433\u043e \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c \u0431\u043e\u0442\u0443 /start."
+      error: new Error("saved Telegram user_id is missing from service person map"),
+      details: { display_name: personName, username: person.username, date: dateKey, service: role.label, telegram_id_missing: true },
+      hint: "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0437\u0430\u043f\u0438\u0441\u044c \u0432 personalSubscriptions Durable Object: list_personal_subscriptions \u0434\u043e\u043b\u0436\u0435\u043d \u0432\u0435\u0440\u043d\u0443\u0442\u044c userId \u0438 chatId. \u041d\u0435 \u043f\u0440\u043e\u0441\u0438 \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0430 \u043f\u043e\u0432\u0442\u043e\u0440\u044f\u0442\u044c /start \u0431\u0435\u0437 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u0445\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0430."
     });
-    await sendAdminThreadMessage(env, text, true).catch(() => null);
-    return;
+    throw new Error("service reminder recipient has no saved Telegram user_id");
   }
   const chatId = person.chatId || person.userId;
   try {

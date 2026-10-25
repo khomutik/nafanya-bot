@@ -224,6 +224,8 @@ function testWorkerStaticRules() {
   assert.equal(staticAdminUsernames.has("frendlylawyer"), false, "Removed admin must not remain in the static admin list");
   assert.equal(servicePersonMap["\u0410\u043d\u044f \u0421\u0442\u043e\u043a\u0433\u043e\u043b\u044c\u043c"]?.username, "BAD_WOLFa", "New admin should be resolvable by display name for service reminders");
   assert.equal(servicePersonMap["@BAD_WOLFa"]?.username, "BAD_WOLFa", "New admin should be resolvable by Telegram username for service reminders");
+  assert.match(worker, /async function buildServicePersonMap\(env\) \{[\s\S]*const subscriptions = await callPersonalDayState\(env, "list_personal_subscriptions"\);/u, "Service reminder identity lookup must surface Durable Object read failures for cron retry");
+  assert.match(worker, /service reminder recipient has no saved Telegram user_id/u, "Missing service contact identity must fail the scheduled task instead of marking it complete");
   const messageHandlers = fs.readFileSync(new URL("./message_handlers.js", import.meta.url), "utf8");
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");
