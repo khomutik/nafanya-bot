@@ -218,10 +218,12 @@ function testWorkerStaticRules() {
   const wranglerConfig = JSON.parse(fs.readFileSync(new URL("./wrangler.jsonc", import.meta.url), "utf8"));
   const servicePersonMap = JSON.parse(wranglerConfig.vars.SERVICE_PERSON_MAP_JSON);
   const staticAdminUsernames = new Set(String(wranglerConfig.vars.ADMIN_DM_USERNAMES || "").split(/[\s,]+/u).map((item) => item.replace(/^@/u, "").toLowerCase()).filter(Boolean));
-  for (const username of ["katukatun", "pifagor71", "JeanneKova", "Well2456", "nikitinaYLA", "Maks_gav", "VladimirRingo", "D3N1S_G33K", "rlinrec", "gorinayua"]) {
+  for (const username of ["katukatun", "pifagor71", "JeanneKova", "Well2456", "nikitinaYLA", "Maks_gav", "VladimirRingo", "D3N1S_G33K", "rlinrec", "gorinayua", "BAD_WOLFa"]) {
     assert.equal(staticAdminUsernames.has(username.toLowerCase()), true, `Static admin list should include @${username}`);
   }
   assert.equal(staticAdminUsernames.has("frendlylawyer"), false, "Removed admin must not remain in the static admin list");
+  assert.equal(servicePersonMap["\u0410\u043d\u044f \u0421\u0442\u043e\u043a\u0433\u043e\u043b\u044c\u043c"]?.username, "BAD_WOLFa", "New admin should be resolvable by display name for service reminders");
+  assert.equal(servicePersonMap["@BAD_WOLFa"]?.username, "BAD_WOLFa", "New admin should be resolvable by Telegram username for service reminders");
   const messageHandlers = fs.readFileSync(new URL("./message_handlers.js", import.meta.url), "utf8");
   const botPanels = fs.readFileSync(new URL("./bot_panels.js", import.meta.url), "utf8");
   const callbackHandlers = fs.readFileSync(new URL("./callback_handlers.js", import.meta.url), "utf8");

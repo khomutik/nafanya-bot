@@ -2787,8 +2787,8 @@ async function sendOneServiceReminder(env, dateKey, roleKey, personName, personM
     await notifyOwnerTechError(env, {
       module: "\u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0441\u043b\u0443\u0436\u0430\u0449\u0438\u043c",
       operation: "service_person_map",
-      error: new Error("service person not found"),
-      details: { display_name: personName, date: dateKey, service: role.label },
+      error: new Error("service person has no Telegram user_id"),
+      details: { display_name: personName, date: dateKey, service: role.label, telegram_id_missing: true },
       hint: "\u0414\u043e\u0431\u0430\u0432\u044c \u0447\u0435\u043b\u043e\u0432\u0435\u043a\u0430 \u0432 SERVICE_PERSON_MAP_JSON \u0438\u043b\u0438 \u043f\u043e\u043f\u0440\u043e\u0441\u0438 \u0435\u0433\u043e \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c \u0431\u043e\u0442\u0443 /start."
     });
     await sendAdminThreadMessage(env, text, true).catch(() => null);
