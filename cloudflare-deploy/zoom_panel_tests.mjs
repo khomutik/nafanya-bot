@@ -1948,10 +1948,25 @@ async function testBoardDraftDoesNotLeakThroughSpokenUpdates() {
   const act=async (action,more={})=>json(await postPanelAction(env,{action,dayKey:"monday",requestId:crypto.randomUUID(),...more}));
   const first=await act("meeting_board_add_entry",{text:"Original"});
   const id=first.state.entries[0].id;
+  const ids=[id];
+  for(let i=1;i<12;i++) {
+    const added=await act("meeting_board_add_entry",{text:`Queue person ${i+1}`});
+    ids.push(added.state.entries.at(-1).id);
+  }
+  assert.equal((await getZoomOnlyStatus(env)).meetingBoard.entries.length,12,"The board keeps all entries beyond the tenth person");
   assert.equal(first.state.draftPending,true);
   assert.equal((await pullOutbox(env)).length,0);
-  const unpublishedMark=await postPanelAction(env,{action:"meeting_board_mark_spoken",dayKey:"monday",id,requestId:"unpublished-mark"});
-  assert.equal(unpublishedMark.status,400);
+  for(const targetId of [ids[0],ids[5],ids[11]]) {
+    let toggled=await act("meeting_board_toggle_spoken",{id:targetId});
+    assert.equal(toggled.state.entries.find(item=>item.id===targetId).status,"spoken");
+    toggled=await act("meeting_board_toggle_spoken",{id:targetId});
+    assert.equal(toggled.state.entries.find(item=>item.id===targetId).status,"waiting");
+  }
+  assert.equal((await pullOutbox(env)).length,0,"Status toggles on unpublished rows remain drafts");
+  await act("meeting_board_mark_spoken",{id});
+  assert.equal((await getZoomOnlyStatus(env)).meetingBoard.entries[0].status,"spoken","Legacy mark action still works for an unpublished row");
+  await act("meeting_board_restore_waiting",{id});
+  assert.equal((await getZoomOnlyStatus(env)).meetingBoard.entries[0].status,"waiting");
   await act("meeting_board_publish");
   await ackOutbox(env,(await pullOutbox(env)).map(item=>item.id));
   const edited=await act("meeting_board_edit_entry",{id,expectedText:"Original",text:"Edited draft"});
@@ -1981,10 +1996,25 @@ async function testSpeakerDraftDoesNotLeakThroughSpokenUpdates() {
   const act=async (action,more={})=>json(await postPanelAction(env,{action,requestId:crypto.randomUUID(),...more}));
   const first=await act("speaker_questions_add",{text:"Original question"});
   const id=first.state.entries[0].id;
+  const ids=[id];
+  for(let i=1;i<12;i++) {
+    const added=await act("speaker_questions_add",{text:`Speaker question ${i+1}`});
+    ids.push(added.state.entries.at(-1).id);
+  }
+  assert.equal((await getZoomOnlyStatus(env)).speakerQuestions.entries.length,12,"The speaker list keeps all entries beyond the tenth question");
   assert.equal(first.state.draftPending,true);
   assert.equal((await pullOutbox(env)).length,0);
-  const unpublishedMark=await postPanelAction(env,{action:"speaker_questions_mark_spoken",id,requestId:"speaker-unpublished-mark"});
-  assert.equal(unpublishedMark.status,400);
+  for(const targetId of [ids[0],ids[5],ids[11]]) {
+    let toggled=await act("speaker_questions_toggle_spoken",{id:targetId});
+    assert.equal(toggled.state.entries.find(item=>item.id===targetId).status,"spoken");
+    toggled=await act("speaker_questions_toggle_spoken",{id:targetId});
+    assert.equal(toggled.state.entries.find(item=>item.id===targetId).status,"waiting");
+  }
+  assert.equal((await pullOutbox(env)).length,0,"Status toggles on unpublished speaker rows remain drafts");
+  await act("speaker_questions_mark_spoken",{id});
+  assert.equal((await getZoomOnlyStatus(env)).speakerQuestions.entries[0].status,"spoken","Legacy mark action still works for an unpublished question");
+  await act("speaker_questions_restore_waiting",{id});
+  assert.equal((await getZoomOnlyStatus(env)).speakerQuestions.entries[0].status,"waiting");
   await act("speaker_questions_publish");
   const firstPublication=await pullOutbox(env);
   assert.equal(firstPublication.length,1);

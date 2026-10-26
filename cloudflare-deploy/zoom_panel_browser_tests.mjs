@@ -37,11 +37,13 @@ try {
   await page.goto('https://nafanya.test/zoom-only/app?token=browser-test');
   const day=page.locator('[data-day="thursday"]');
   await day.evaluate(el=>el.open=true);
-  const addEntry=async text=>{await day.locator('[data-entry-input]').fill(text);await day.locator('[data-add-entry]').click();await assert.doesNotReject(()=>day.locator('[data-entry-input]').filter({visible:true}).waitFor());};
+  const addEntry=async text=>{const before=await day.locator('[data-entry-list] .state-row').count();await day.locator('[data-entry-input]').fill(text);await day.locator('[data-add-entry]').click();await page.waitForFunction(expected=>document.querySelectorAll('[data-day="thursday"] [data-entry-list] .state-row').length===expected,before+1);};
   await addEntry('111');
   await day.locator('[data-entry-list] .state-row').waitFor();
   await addEntry('222');
   await page.waitForFunction(()=>document.querySelectorAll('[data-day="thursday"] [data-entry-list] .state-row').length===2);
+  for(let i=3;i<=12;i++) await addEntry(`Participant ${i}`);
+  assert.equal(await day.locator('[data-entry-list] .state-row').count(),12,'The queue remains interactive after the tenth entry');
   let row=day.locator('[data-entry-list] .state-row').first();
   assert.deepEqual(await row.locator('.row-actions button').allTextContents(),['✅','Редактировать','Удалить','Пропускает']);
   await row.getByRole('button',{name:'Редактировать',exact:true}).click();
@@ -50,7 +52,15 @@ try {
   assert.equal(await row.locator('input').inputValue(),'111 corrected','Polling must preserve an unfinished edit');
   await row.getByRole('button',{name:'Сохранить',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .state-row>span')?.textContent.includes('111 corrected'));
-  assert.equal(await row.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true,'An unpublished draft cannot be marked in the Zoom chat');
+  assert.equal(await row.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),false,'An unpublished draft can be marked in the panel');
+  for(const index of [0,5,11]) {
+    const item=day.locator('[data-entry-list] .state-row').nth(index);
+    await item.getByRole('button',{name:'Высказался',exact:true}).click();
+    await page.waitForFunction(i=>document.querySelectorAll('[data-day="thursday"] [data-entry-list] .check')[i]?.getAttribute('aria-pressed')==='true',index);
+    await day.locator('[data-entry-list] .state-row').nth(index).getByRole('button',{name:'Вернуть в очередь',exact:true}).click();
+    await page.waitForFunction(i=>document.querySelectorAll('[data-day="thursday"] [data-entry-list] .check')[i]?.getAttribute('aria-pressed')==='false',index);
+  }
+  assert.equal((await readOutbox()).length,0,'Toggling any draft row only changes the panel until publish');
   await day.locator('[data-board-publish]').click();
   await page.waitForFunction(()=>document.querySelector('[data-day="thursday"] [data-entry-list] .check')?.disabled===false);
   let boardOutboxCount=(await readOutbox()).length;
@@ -104,13 +114,23 @@ try {
   assert.match(congratsOutbox.text,/🎉ПОЗДРАВЛЯЕМ[\s\S]*🥳 Маня 1 год 3 месяца[\s\S]*🥳 Вася 7 месяцев[\s\S]*Спасибо участникам/u);
   assert.equal(congratsOutbox.coalesceKey,undefined,'Congratulation message is not a replaceable queue snapshot');
   const speaker=page.locator('[data-speaker]');await speaker.evaluate(el=>el.open=true);
-  await speaker.locator('[data-speaker-input]').fill('First question');await speaker.locator('[data-speaker-add]').click();
+  const addSpeakerQuestion=async text=>{const before=await speaker.locator('.state-row').count();await speaker.locator('[data-speaker-input]').fill(text);await speaker.locator('[data-speaker-add]').click();await page.waitForFunction(expected=>document.querySelectorAll('[data-speaker-list] .state-row').length===expected,before+1);};
+  await addSpeakerQuestion('First question');
+  for(let i=2;i<=12;i++) await addSpeakerQuestion(`Question ${i}`);
+  assert.equal(await speaker.locator('.state-row').count(),12,'The speaker queue remains interactive after the tenth entry');
   const question=speaker.locator('.state-row').first();await question.waitFor();
   assert.deepEqual(await question.locator('button').allTextContents(),['✅','Редактировать','Удалить','Пропускает']);
   await page.waitForFunction(()=>document.querySelector('[data-speaker-add]')?.textContent==='Добавить');
   await question.getByRole('button',{name:'Редактировать',exact:true}).click();await question.locator('input').fill('Corrected question');await question.getByRole('button',{name:'Сохранить',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .state-row>span')?.textContent.includes('Corrected question'));
-  assert.equal(await question.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),true);
+  assert.equal(await question.getByRole('button',{name:'Высказался',exact:true}).isDisabled(),false);
+  for(const index of [0,5,11]) {
+    const item=speaker.locator('.state-row').nth(index);
+    await item.getByRole('button',{name:'Высказался',exact:true}).click();
+    await page.waitForFunction(i=>document.querySelectorAll('[data-speaker-list] .check')[i]?.getAttribute('aria-pressed')==='true',index);
+    await speaker.locator('.state-row').nth(index).getByRole('button',{name:'Вернуть в очередь',exact:true}).click();
+    await page.waitForFunction(i=>document.querySelectorAll('[data-speaker-list] .check')[i]?.getAttribute('aria-pressed')==='false',index);
+  }
   await speaker.locator('[data-speaker-draft-publish]').click();
   await page.waitForFunction(()=>document.querySelector('[data-speaker-list] .check')?.disabled===false);
   const speakerOutboxCount=(await readOutbox()).length;

@@ -1374,7 +1374,7 @@ var ZoomMeetingStateDurableObject = class {
         throw new Error("\u0422\u0430\u043a\u0430\u044f \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0442\u0435\u043c\u0430 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c.");
       }
       board.additionalTopics.push({ id: crypto.randomUUID(), text, createdAt: now, updatedAt: now });
-    } else if (["edit_entry", "mark_spoken", "restore_waiting", "defer_entry", "remove_entry"].includes(boardAction)) {
+    } else if (["edit_entry", "mark_spoken", "restore_waiting", "toggle_spoken", "defer_entry", "remove_entry"].includes(boardAction)) {
       const index = board.entries.findIndex((item) => item.id === id);
       if (index < 0) {
         throw new Error("\u0417\u0430\u043f\u0438\u0441\u044c \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0430\u0441\u044c. \u041f\u0443\u043b\u044c\u0442 \u043f\u043e\u043a\u0430\u0436\u0435\u0442 \u0441\u0432\u0435\u0436\u0438\u0439 \u0441\u043f\u0438\u0441\u043e\u043a.");
@@ -1393,11 +1393,9 @@ var ZoomMeetingStateDurableObject = class {
         }
         [board.entries[index], board.entries[index + 1]] = [board.entries[index + 1], { ...board.entries[index], updatedAt: now }];
       } else {
-        const publishedIndex = board.publishedEntries.findIndex((item) => item.id === id);
-        if (publishedIndex < 0) {
-          throw new Error("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c \u0432 Zoom.");
-        }
-        board.entries[index] = { ...board.entries[index], status: boardAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
+        const currentStatus = board.entries[index].status;
+        const status = boardAction === "toggle_spoken" ? (currentStatus === "spoken" ? "waiting" : "spoken") : boardAction === "mark_spoken" ? "spoken" : "waiting";
+        board.entries[index] = { ...board.entries[index], status, updatedAt: now };
       }
     } else if (["edit_topic", "remove_topic"].includes(boardAction)) {
       const index = board.additionalTopics.findIndex((item) => item.id === id);
@@ -1413,7 +1411,7 @@ var ZoomMeetingStateDurableObject = class {
     }
     board.version += 1;
     board.updatedAt = now;
-    const stagedAction = ["add_entry", "add_topic", "edit_entry", "mark_spoken", "restore_waiting", "edit_topic", "remove_entry", "remove_topic", "defer_entry"].includes(boardAction);
+    const stagedAction = ["add_entry", "add_topic", "edit_entry", "mark_spoken", "restore_waiting", "toggle_spoken", "edit_topic", "remove_entry", "remove_topic", "defer_entry"].includes(boardAction);
     if (stagedAction) {
       board.draftPending = true;
       await this.saveState(runtimeState);
@@ -1454,7 +1452,7 @@ var ZoomMeetingStateDurableObject = class {
         throw new Error("\u0422\u0430\u043a\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441 \u0438\u043b\u0438 \u0437\u0430\u044f\u0432\u043a\u0430 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c.");
       }
       speaker.entries.push({ id: crypto.randomUUID(), text, createdAt: now, updatedAt: now });
-    } else if (["edit", "mark_spoken", "restore_waiting", "defer", "remove"].includes(speakerAction)) {
+    } else if (["edit", "mark_spoken", "restore_waiting", "toggle_spoken", "defer", "remove"].includes(speakerAction)) {
       const id = String(payload.id || "").trim();
       const index = speaker.entries.findIndex((item) => item.id === id);
       if (index < 0) throw new Error("\u0417\u0430\u043f\u0438\u0441\u044c \u0441\u043f\u0438\u043a\u0435\u0440\u0441\u043a\u043e\u0439 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0430.");
@@ -1468,9 +1466,9 @@ var ZoomMeetingStateDurableObject = class {
         if (speaker.entries[index].status === "spoken" || index >= speaker.entries.length - 1) throw new Error("\u042d\u0442\u0443 \u0437\u0430\u043f\u0438\u0441\u044c \u043d\u0435\u043b\u044c\u0437\u044f \u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043d\u0438\u0436\u0435.");
         [speaker.entries[index], speaker.entries[index + 1]] = [speaker.entries[index + 1], { ...speaker.entries[index], updatedAt: now }];
       } else {
-        const publishedIndex = speaker.publishedEntries.findIndex((item) => item.id === id);
-        if (publishedIndex < 0) throw new Error("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0441\u043f\u0438\u043a\u0435\u0440\u0443 \u0432 Zoom.");
-        speaker.entries[index] = { ...speaker.entries[index], status: speakerAction === "mark_spoken" ? "spoken" : "waiting", updatedAt: now };
+        const currentStatus = speaker.entries[index].status;
+        const status = speakerAction === "toggle_spoken" ? (currentStatus === "spoken" ? "waiting" : "spoken") : speakerAction === "mark_spoken" ? "spoken" : "waiting";
+        speaker.entries[index] = { ...speaker.entries[index], status, updatedAt: now };
       }
     } else if (speakerAction === "clear") {
       speaker.entries = [];
@@ -1479,7 +1477,7 @@ var ZoomMeetingStateDurableObject = class {
     }
     speaker.version += 1;
     speaker.updatedAt = now;
-    const stagedAction = ["add", "edit", "mark_spoken", "restore_waiting", "remove", "defer", "clear"].includes(speakerAction);
+    const stagedAction = ["add", "edit", "mark_spoken", "restore_waiting", "toggle_spoken", "remove", "defer", "clear"].includes(speakerAction);
     if (stagedAction) {
       speaker.draftPending = true;
       await this.saveState(runtimeState);
@@ -3371,6 +3369,7 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     meeting_board_edit_topic: "edit_topic",
     meeting_board_mark_spoken: "mark_spoken",
     meeting_board_restore_waiting: "restore_waiting",
+    meeting_board_toggle_spoken: "toggle_spoken",
     meeting_board_defer_entry: "defer_entry",
     meeting_board_remove_entry: "remove_entry",
     meeting_board_remove_topic: "remove_topic",
@@ -3382,6 +3381,7 @@ async function handleZoomOnlyAppActionRequest(request, env) {
     speaker_questions_edit: "edit",
     speaker_questions_mark_spoken: "mark_spoken",
     speaker_questions_restore_waiting: "restore_waiting",
+    speaker_questions_toggle_spoken: "toggle_spoken",
     speaker_questions_defer: "defer",
     speaker_questions_remove: "remove",
     speaker_questions_clear: "clear"
@@ -3855,18 +3855,18 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
   function row(text,buttons,spoken=false){const el=document.createElement("div");el.className="state-row"+(spoken?" is-spoken":"");const label=document.createElement("span");label.textContent=text;const controls=document.createElement("div");controls.className="row-actions";controls.append(...buttons);el.append(label,controls);return el}
   function smallButton(label,action,className="",title=""){const button=document.createElement("button");button.type="button";button.className="action "+className;button.textContent=label;if(title){button.title=title;button.setAttribute("aria-label",title)}button.onclick=()=>{button.focus();action(button)};return button}
   function editRow(button,item,body){if(busy||document.querySelector("[data-editing]"))return;const el=button.closest(".state-row"),original=[...el.childNodes],input=document.createElement("input");input.className="row-edit-input";input.maxLength=300;input.value=item.text;input.setAttribute("aria-label","\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c");el.dataset.editing="true";const controls=document.createElement("div");controls.className="row-actions";const save=smallButton("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c",b=>run({...body,id:item.id,text:input.value,expectedText:item.text},b),"edit rare");const cancel=()=>{delete el.dataset.editing;el.replaceChildren(...original)};controls.append(save,smallButton("\u041e\u0442\u043c\u0435\u043d\u0430",cancel,"rare"));el.replaceChildren(input,controls);input.onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();save.click()}if(event.key==="Escape")cancel()};input.focus();input.select()}
-  function checkButton(item,body){const spoken=item.status==="spoken",button=smallButton("\u2705",b=>run({...body,action:spoken?body.restoreAction:body.action},b),"check rare",spoken?"\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c":"\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f");button.setAttribute("aria-pressed",String(spoken));return button}
+  function checkButton(item,body){const spoken=item.status==="spoken",button=smallButton("\u2705",b=>run(body,b),"check rare",spoken?"\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c":"\u0412\u044b\u0441\u043a\u0430\u0437\u0430\u043b\u0441\u044f");button.setAttribute("aria-pressed",String(spoken));return button}
   function renderBoard(activeBoard){const boards=activeBoard?.boards||(activeBoard?.dayKey?{[activeBoard.dayKey]:activeBoard}:{});document.querySelectorAll("[data-day]").forEach(panel=>{
     if(panel.querySelector("[data-editing]"))return;const board=boards[panel.dataset.day],entries=panel.querySelector("[data-entry-list]"),topics=panel.querySelector("[data-topic-list]");entries.replaceChildren();topics.replaceChildren();
     setPublishAvailable(panel.querySelector("[data-board-publish]"),Boolean(board?.draftPending));
     const draftNote=panel.querySelector("[data-board-draft-note]");if(draftNote){draftNote.style.display=board?.draftPending?"block":"none";draftNote.textContent=board?.draftPending?"\u0415\u0441\u0442\u044c \u043d\u0435\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u043a\u0438. \u0427\u0430\u0442 Zoom \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u043f\u0440\u043e\u0448\u043b\u0443\u044e \u0432\u0435\u0440\u0441\u0438\u044e.":""}
     if(!board?.entries?.length)entries.textContent="\u041f\u043e\u043a\u0430 \u0437\u0430\u044f\u0432\u043e\u043a \u043d\u0435\u0442.";
     (board?.entries||[]).forEach((item,index)=>{const dayKey=panel.dataset.day,spoken=item.status==="spoken",buttons=[
-      checkButton(item,{action:"meeting_board_mark_spoken",restoreAction:"meeting_board_restore_waiting",dayKey,id:item.id}),
+      checkButton(item,{action:"meeting_board_toggle_spoken",dayKey,id:item.id}),
       smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",b=>editRow(b,item,{action:"meeting_board_edit_entry",dayKey}),"edit rare"),
       smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",b=>run({action:"meeting_board_remove_entry",dayKey,id:item.id},b),"danger rare"),
       smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",b=>run({action:"meeting_board_defer_entry",dayKey,id:item.id},b),"defer rare")
-    ];const published=(board.publishedEntries||[]).some(entry=>entry.id===item.id);buttons[0].dataset.unavailable=String(!published);buttons[0].disabled=!published;if(!published)buttons[0].title="\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0432 Zoom";buttons[3].dataset.unavailable=String(spoken||index===board.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";entries.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))});
+    ];buttons[3].dataset.unavailable=String(spoken||index===board.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";entries.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))});
     if(!board?.additionalTopics?.length)topics.textContent="\u0414\u043e\u043f. \u0442\u0435\u043c \u043d\u0435\u0442.";
     (board?.additionalTopics||[]).forEach((item,index)=>topics.append(row((index+1)+". "+item.text,[
       smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",b=>editRow(b,item,{action:"meeting_board_edit_topic",dayKey:panel.dataset.day}),"edit rare"),
@@ -3874,11 +3874,11 @@ function buildZoomMeetingBoardPanelHtml({ actionPath = "/zoom-only/app/action", 
     ])))
   })}
   function renderSpeaker(state){const list=document.querySelector("[data-speaker-list]");if(list.querySelector("[data-editing]"))return;const note=document.querySelector("[data-speaker-draft-note]");note.style.display=state?.draftPending?"block":"none";note.textContent=state?.draftPending?"\u0415\u0441\u0442\u044c \u043d\u0435\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u043a\u0438. \u0427\u0430\u0442 Zoom \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u043f\u0440\u043e\u0448\u043b\u0443\u044e \u0432\u0435\u0440\u0441\u0438\u044e.":"";setPublishAvailable(document.querySelector("[data-speaker-draft-publish]"),Boolean(state?.draftPending));list.replaceChildren();if(!state?.entries?.length){list.textContent="\u0412\u043e\u043f\u0440\u043e\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.";return}state.entries.forEach((item,index)=>{const spoken=item.status==="spoken",buttons=[
-    checkButton(item,{action:"speaker_questions_mark_spoken",restoreAction:"speaker_questions_restore_waiting",id:item.id}),
+    checkButton(item,{action:"speaker_questions_toggle_spoken",id:item.id}),
     smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",b=>editRow(b,item,{action:"speaker_questions_edit"}),"edit rare"),
     smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",b=>run({action:"speaker_questions_remove",id:item.id},b),"danger rare"),
     smallButton("\u041f\u0440\u043e\u043f\u0443\u0441\u043a\u0430\u0435\u0442",b=>run({action:"speaker_questions_defer",id:item.id},b),"defer rare")
-  ];const published=(state.publishedEntries||[]).some(entry=>entry.id===item.id);buttons[0].dataset.unavailable=String(!published);buttons[0].disabled=!published;if(!published)buttons[0].title="\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b \u0432 Zoom";buttons[3].dataset.unavailable=String(spoken||index===state.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";list.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))})}
+  ];buttons[3].dataset.unavailable=String(spoken||index===state.entries.length-1);buttons[3].disabled=buttons[3].dataset.unavailable==="true";list.append(row((index+1)+". "+(spoken?"\u2705 ":"")+item.text,buttons,spoken))})}
   function renderCongratulations(state){document.querySelectorAll("[data-day]").forEach(panel=>{const list=panel.querySelector("[data-congratulations-list]");if(!list||list.querySelector("[data-editing]"))return;list.replaceChildren();if(!state?.entries?.length){list.textContent="\u0421\u0442\u0440\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442."}else state.entries.forEach(item=>list.append(row("\ud83e\udd73 "+item.text,[smallButton("\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",button=>editRow(button,item,{action:"meeting_congratulations_edit"}),"edit rare"),smallButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c",button=>run({action:"meeting_congratulations_remove",id:item.id},button),"danger rare")])));setPublishAvailable(panel.querySelector("[data-congratulations-publish]"),Boolean(state?.entries?.length))})}
   function renderLiteratureProgress(progress){if(!progress)return;document.querySelectorAll("[data-reading-progress]").forEach(note=>{const collectionId=note.dataset.readingProgress,item=progress[collectionId];if(!item)return;const row=note.closest(".publication-row"),button=row?.querySelector("[data-next-book]"),sendButton=row?.querySelector("[data-book]"),input=document.getElementById(sendButton?.dataset?.input||""),pending=Boolean(item.pending),interval=item.intervalDays||7;const last=item.lastPublishedAt?new Intl.DateTimeFormat("ru-RU",{dateStyle:"short",timeStyle:"short",timeZone:"Europe/Moscow"}).format(new Date(item.lastPublishedAt)):"\u0435\u0449\u0451 \u043d\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u043b\u0438";note.textContent=item.pending?"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f Zoom: \u2116"+item.pending.number:"\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439: \u2116"+item.nextNumber+" · \u0438\u043d\u0442\u0435\u0440\u0432\u0430\u043b "+interval+" \u0434\u043d. · \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439: "+(item.lastPublishedNumber?"\u2116"+item.lastPublishedNumber+", "+last:last);if(button){button.dataset.unavailable=String(pending);button.disabled=busy||pending}if(sendButton){sendButton.dataset.pending=String(pending);const valid=/^\\d+$/u.test(input?.value?.trim()||"")&&Number(input.value)>=1&&Number(input.value)<=9999;setPublishAvailable(sendButton,valid&&!pending)}})}
   document.querySelectorAll("[data-daily],[data-book],[data-game],[data-congratulations-publish]").forEach(button=>{button.classList.add("zoom-publish");if(button.matches("[data-daily]")){button.textContent="\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM";setPublishAvailable(button,true)}if(button.matches("[data-book],[data-game]")){button.textContent="\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0432 ZOOM";const input=document.getElementById(button.dataset.input),max=button.matches("[data-game]")?500:9999,update=()=>setPublishAvailable(button,/^\\d+$/u.test(input.value.trim())&&Number(input.value)>=1&&Number(input.value)<=max&&button.dataset.pending!=="true");input.addEventListener("input",update);update()}});
