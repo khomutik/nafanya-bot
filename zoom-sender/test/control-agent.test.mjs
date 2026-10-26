@@ -389,6 +389,8 @@ test("control HTTP entrypoint uses protected cookie and fixed routes", async () 
   assert.match(source, /url\.pathname === "\/zoom-only\/library\/import" && access !== "admin"/u);
   assert.match(source, /\/api\/auth-setup\/stop/u);
   assert.ok(source.includes(`.replaceAll('\"/zoom-only/app/action\"', '\"./zoom-only/app/action\"')`));
+  assert.match(source, /\["\/zoom-only\/app", "\/zoom-only\/medals"\]\.includes\(pathname\)/u,
+    "The medals iframe must rewrite its action URL to stay under the protected control-agent prefix");
   assert.match(source, /url\.pathname === "\/medals-panel"[\s\S]*"\/zoom-only\/medals"/u);
   assert.ok(source.includes(`.replaceAll('\"/zoom-only/library/status\"', '\"./zoom-only/library/status\"')`));
   assert.match(source, /"\/zoom-only\/library\/import"/u);

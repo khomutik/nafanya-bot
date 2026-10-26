@@ -92,7 +92,7 @@ async function proxyWorker(request, res, pathname, search = "", access = "admin"
   });
   const contentType = response.headers.get("content-type") || "application/json";
   res.writeHead(response.status, { "content-type": contentType, "cache-control": "no-store" });
-  if (pathname === "/zoom-only/app" && contentType.includes("text/html")) {
+  if (["/zoom-only/app", "/zoom-only/medals"].includes(pathname) && contentType.includes("text/html")) {
     let html = (await response.text())
       .replaceAll('"/zoom-only/app/action"', '"./zoom-only/app/action"')
       .replaceAll('"/zoom-only/status"', '"./zoom-only/status"')
