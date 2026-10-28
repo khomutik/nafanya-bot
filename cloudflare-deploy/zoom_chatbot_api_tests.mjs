@@ -123,6 +123,16 @@ test("Worker protects pilot delivery and returns only successful Chatbot message
       body: JSON.stringify({ action: "pilot_text", channelId, userId: "user-123", accountId: "attacker-value", text: "test" })
     }), { ZOOM_PANEL_TOKEN: "panel-token", ...env });
     assert.equal(unauthorized.status, 401);
+
+    resetZoomChatbotTokenCacheForTests();
+    globalThis.fetch = async () => Response.json({ reason: "invalid_client" }, { status: 401 });
+    const tokenFailure = await nafanyaWorker.fetch(new Request("https://worker.example/zoom-only/chatbot/pilot-send", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-nafanya-zoom-panel-token": "panel-token" },
+      body: JSON.stringify({ action: "pilot_text", channelId, userId: "user-123", text: "test" })
+    }), { ZOOM_PANEL_TOKEN: "panel-token", ...env });
+    assert.equal(tokenFailure.status, 502);
+    assert.deepEqual(await tokenFailure.json(), { ok: false, error: "zoom_chatbot_token_request_failed:401" });
   } finally {
     globalThis.fetch = previousFetch;
     resetZoomChatbotTokenCacheForTests();
