@@ -1,5 +1,5 @@
 const MODERATION_KEY_PREFIX = "link_moderation_enabled:";
-const MODERATION_REFERENCE_URL = "https://t.me/c/3835668674/440/6155";
+const MODERATION_REFERENCE_MESSAGE_ID = 6155;
 
 const TEXT = {
   enabled: "\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f \u0441\u0441\u044b\u043b\u043e\u043a \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u0430.",
@@ -194,9 +194,14 @@ export async function handleLinkModeration(env, message, deps) {
   }
 
   try {
-    await deps.sendMessage(env, chatId, MODERATION_REFERENCE_URL, null, message.message_id);
+    await deps.callTelegram(env, "copyMessage", {
+      chat_id: chatId,
+      from_chat_id: deps.INFO_CHAT_ID,
+      message_id: MODERATION_REFERENCE_MESSAGE_ID,
+      reply_parameters: { message_id: message.message_id }
+    });
   } catch (error) {
-    logError("send_reference_reply", error, { chatId, messageId: message.message_id, userId: message.from.id });
+    logError("copy_reference_message", error, { chatId, messageId: message.message_id, userId: message.from.id });
     return response();
   }
 

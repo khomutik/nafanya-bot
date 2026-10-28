@@ -4119,6 +4119,7 @@ const messageHandlerDeps = {
       const message = update.message || update.edited_message || update.channel_post || update.edited_channel_post || update.business_message || update.edited_business_message;
       const linkModerationResponse = message ? await handleLinkModeration(env, message, {
         CHAT_GROUP_ID,
+        INFO_CHAT_ID,
         BOT_USERNAME: env?.BOT_USERNAME,
         callAnnouncementState,
         callTelegram,

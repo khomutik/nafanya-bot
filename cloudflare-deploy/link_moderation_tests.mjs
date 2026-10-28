@@ -9,6 +9,7 @@ function fixture({ enabled = true, memberStatus = "member", botCanDelete = true,
   const state = { enabled };
   const deps = {
     CHAT_GROUP_ID: GROUP_ID,
+    INFO_CHAT_ID: -1003835668674,
     BOT_USERNAME: "nafanya_bot",
     callAnnouncementState: async (_env, action, payload) => {
       calls.push(["state", action, payload]);
@@ -21,6 +22,7 @@ function fixture({ enabled = true, memberStatus = "member", botCanDelete = true,
     },
     callTelegram: async (_env, method, payload) => {
       calls.push(["telegram", method, payload]);
+      if (method === "copyMessage") return { result: { message_id: 501 } };
       if (memberError) throw memberError;
       if (method === "getMe") return { result: { id: 9001 } };
       if (payload.user_id === 9001) {
@@ -60,18 +62,28 @@ test("detects visible and hidden links in text and media captions", () => {
   assert.equal(hasMessageUrl({ text: "just ordinary words", entities: [] }), false);
 });
 
-test("deletes an ordinary member's linked message when enabled", async () => {
+test("copies the reference message as a reply before deleting the ordinary member's link", async () => {
   const f = fixture();
   const result = await handleLinkModeration(f.env, linkMessage(), f.deps);
   assert.equal(result.status, 200);
-  assert.deepEqual(f.calls.filter(([kind]) => kind === "send"), [["send", GROUP_ID, "https://t.me/c/3835668674/440/6155", 42]]);
+  assert.deepEqual(f.calls.filter(([kind, method]) => kind === "telegram" && method === "copyMessage"), [["telegram", "copyMessage", {
+    chat_id: GROUP_ID,
+    from_chat_id: -1003835668674,
+    message_id: 6155,
+    reply_parameters: { message_id: 42 }
+  }]]);
   assert.deepEqual(f.calls.filter(([kind]) => kind === "delete"), [["delete", GROUP_ID, 42]]);
-  assert.ok(f.calls.findIndex(([kind]) => kind === "send") < f.calls.findIndex(([kind]) => kind === "delete"));
+  assert.ok(f.calls.findIndex(([kind, method]) => kind === "telegram" && method === "copyMessage") < f.calls.findIndex(([kind]) => kind === "delete"));
 });
 
-test("keeps the linked message if its reference reply cannot be sent", async () => {
+test("keeps the linked message if its reference copy cannot be sent", async () => {
   const f = fixture();
-  f.deps.sendMessage = async () => { throw new Error("Telegram send failed"); };
+  f.deps.callTelegram = async (_env, method, payload) => {
+    f.calls.push(["telegram", method, payload]);
+    if (method === "copyMessage") throw new Error("Telegram copy failed");
+    if (method === "getChatMember") return { result: { status: "member" } };
+    return { result: { id: 9001 } };
+  };
   const originalError = console.error;
   console.error = () => {};
   try {
