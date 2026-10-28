@@ -156,3 +156,22 @@ test("Chatbot sender rejects missing account, malformed channel and untrusted co
   await assert.rejects(sendZoomChatbotMessage(env, { channelId: "arbitrary", userId: "user-123", content: { head: { text: "x" } } }, { fetchImpl }), /channel_id_invalid/u);
   await assert.rejects(sendZoomChatbotMessage(env, { channelId, userId: "user-123", content: "raw" }, { fetchImpl }), /content_invalid/u);
 });
+
+test("Chatbot sender accepts Zoom SDK channel UUID without hyphens", async () => {
+  const compactChannelId = "0123456789abcdef0123456789abcdef";
+  const requests = [];
+  resetZoomChatbotTokenCacheForTests();
+  await sendZoomChatbotMessage(env, {
+    channelId: compactChannelId,
+    userId: "user-123",
+    content: { head: { text: "test" } }
+  }, {
+    fetchImpl: async (url, init) => {
+      requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
+      if (String(url).includes("oauth/token")) return Response.json({ access_token: "token", expires_in: 3600 });
+      return Response.json({ message_id: "message-1", sent_time: "now" });
+    }
+  });
+  assert.equal(requests[1].body.to_jid, `${compactChannelId}@conference.xmpp.zoom.us`);
+  resetZoomChatbotTokenCacheForTests();
+});

@@ -14,7 +14,9 @@ function meetingChannelJid(channelId) {
   const value = cleanZoomIdentifier(channelId, "channel_id", 192);
   const channelJid = /^([a-z\d._-]{1,128})@conference\.xmpp\.zoom\.us$/iu.exec(value);
   if (channelJid) return value;
-  if (!/^[a-f\d-]{36}$/iu.test(value)) throw new Error("zoom_chatbot_channel_id_invalid");
+  // Zoom Apps SDK returns chatChannelUUID without guaranteeing UUID punctuation.
+  // Accept both canonical UUIDs and their 32-character hexadecimal form.
+  if (!/^(?:[a-f\d]{32}|[a-f\d-]{36})$/iu.test(value)) throw new Error("zoom_chatbot_channel_id_invalid");
   return `${value}@conference.xmpp.zoom.us`;
 }
 
