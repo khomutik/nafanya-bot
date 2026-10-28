@@ -329,7 +329,10 @@ test("Zoom App page initializes the SDK and hides server administration", () => 
   assert.match(html, /chatContext\?\.chatChannelUUID/u);
   assert.match(html, /let names=null/u);
   assert.match(html, /const supports=name=>!unsupported\.has\(name\)&&\(!names\|\|names\.has\(name\)\)/u);
-  assert.match(html, /zoomMeetingChatError=String\(error\?\.message\|\|error\|\|""\)\.trim\(\)/u);
+  assert.match(html, /zoomMeetingChatSupported=zoomProduct==="desktop";zoomMeetingChatChannelId=""/u);
+  assert.match(html, /zoomSdk\.getMeetingChatContext\(\)/u);
+  assert.match(html, /runningContext=/u);
+  assert.doesNotMatch(html, /supports\("getMeetingChatContext"\)/u);
   assert.match(html, /\.\/zoom-only\/chatbot\/pilot-send/u);
   assert.match(html, /action,channelId:zoomMeetingChatChannelId/u);
   assert.match(html, /id="meetingChatPilotText"/u);
