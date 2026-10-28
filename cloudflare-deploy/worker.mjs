@@ -7,6 +7,7 @@ import { FIX_CONFIRMATION, HELP_CONFIRMATION, MEETING_PANEL_TEXT, QUEUE_CALLBACK
 import { answerCallback, callTelegram, copyTechMessageToChat, copyTechMessageToGroup, deleteMessageResult, deleteMessageSafe, editMessageText, getStickerSet, isTransientTelegramError, sendMessage, sendSticker, setMyCommands } from "./telegram_api.js";
 import { callAnnouncementState, callLightTalkState, callPersonalDayState, callQueueState, callScheduleState, callTimerState, callZoomMeetingState, callZoomSharedTimerState } from "./state_clients.js";
 import { buildServicePollsForFriday } from "./service_polls.js";
+import { handleLinkModeration } from "./link_moderation.js";
 import { createVacancyReplacementRequest, handleCallbackQuery as routeCallbackQuery } from "./callback_handlers.js";
 import { handleWebhookMessage as routeWebhookMessage } from "./message_handlers.js";
 import { createKnowledgeRuntime } from "./knowledge_runtime.js";
@@ -4116,7 +4117,16 @@ const messageHandlerDeps = {
         return callbackResponse;
       }
       const message = update.message || update.edited_message || update.channel_post || update.edited_channel_post || update.business_message || update.edited_business_message;
-    return routeWebhookMessage(env, message, messageHandlerDeps);
+      const linkModerationResponse = message ? await handleLinkModeration(env, message, {
+        CHAT_GROUP_ID,
+        BOT_USERNAME: env?.BOT_USERNAME,
+        callAnnouncementState,
+        callTelegram,
+        sendMessage: sendMessageWithInfoSilence,
+        deleteMessageSafe
+      }) : null;
+      if (linkModerationResponse) return linkModerationResponse;
+      return routeWebhookMessage(env, message, messageHandlerDeps);
   } catch (error) {
     await notifyOwnerTechError(env, {
       module: "webhook",
