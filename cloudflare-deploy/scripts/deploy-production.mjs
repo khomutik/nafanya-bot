@@ -8,7 +8,7 @@ assert.equal(git('status','--porcelain'),'','Commit all source changes before pr
 git('fetch','origin','main');
 git('merge-base','--is-ancestor','origin/main','HEAD');
 run('scripts/deploy-preflight.mjs');
-for(const test of ['regression_tests.mjs','zoom_message_source_tests.mjs','zoom_panel_tests.mjs','queue_engine_tests.mjs','zoom_library_tests.mjs']) {
+for(const test of ['regression_tests.mjs','zoom_message_source_tests.mjs','zoom_panel_tests.mjs','queue_engine_tests.mjs','zoom_library_tests.mjs','zoom_chatbot_api_tests.mjs']) {
   run(test,...(test==='regression_tests.mjs'?['--skip-live-knowledge']:[]));
 }
 run('--test','message_addressing_tests.mjs','response_quality_tests.mjs','telegram_api_tests.mjs','service_polls_tests.mjs','link_moderation_tests.mjs');

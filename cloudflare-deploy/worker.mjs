@@ -15,6 +15,7 @@ import { answerFixedMeetingQuestion } from "./fixed_meetings.js";
 import { buildAddressingPrompt } from "./message_addressing.js";
 import { RESPONSE_DISCIPLINE_PROMPT, buildRepairPrompt, reviewNafanyaAnswer } from "./response_quality.js";
 import { ZOOM_MEETING_MESSAGE_TEXTS, ZOOM_TOPIC_MESSAGE_KEYS_BY_WEEKDAY } from "./zoom_meeting_texts.js";
+import { buildZoomChatbotImageContent, buildZoomChatbotTextContent, sendZoomChatbotMessage } from "./zoom_chatbot_api.js";
 import {
   ZOOM_LIBRARY_COLLECTIONS,
   ZOOM_LIBRARY_IMPORT_MAX_BYTES,
@@ -3354,6 +3355,68 @@ async function handleZoomOnlyBridgeRequest(request, env) {
   return textResponse("Not found", 404);
 }
 __name(handleZoomOnlyBridgeRequest, "handleZoomOnlyBridgeRequest");
+async function handleZoomChatbotImageRequest(request, env) {
+  const url = new URL(request.url);
+  const match = url.pathname.match(/^\/zoom-chatbot\/medal-image\/([a-z0-9-]+)$/u);
+  if (request.method !== "GET" || !match) return textResponse("Not found", 404);
+  const objectKey = ZOOM_SOBRIETY_MEDAL_ASSETS[match[1]];
+  if (!objectKey || !env?.ZOOM_LIBRARY) return textResponse("Not found", 404);
+  const object = await env.ZOOM_LIBRARY.get(objectKey);
+  if (!object) return textResponse("Not found", 404);
+  return new Response(object.body, { headers: {
+    "content-type": "image/png",
+    "cache-control": "public, max-age=86400, immutable",
+    "access-control-allow-origin": "*",
+    "x-content-type-options": "nosniff"
+  } });
+}
+__name(handleZoomChatbotImageRequest, "handleZoomChatbotImageRequest");
+async function handleZoomChatbotPilotSendRequest(request, env) {
+  if (request.method !== "POST") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  if (!isZoomPanelAuthorized(request, env)) return zoomPanelUnauthorizedResponse();
+  const payload = await request.json().catch(() => ({}));
+  const channelId = String(payload.channelId || "").trim();
+  const userId = String(payload.userId || "").trim();
+  const requestId = String(payload.requestId || "").trim().slice(0, 128);
+  if (!channelId || !userId) {
+    return Response.json({ ok: false, error: "zoom_chatbot_context_required" }, { status: 400 });
+  }
+  try {
+    const sent = [];
+    if (payload.action === "pilot_text") {
+      const text = String(payload.text || "").trim();
+      sent.push(await sendZoomChatbotMessage(env, { channelId, userId, content: buildZoomChatbotTextContent(text) }));
+    } else if (payload.action === "pilot_long") {
+      const source = String(payload.text || "").trim();
+      if (!source || Array.from(source).length > 12_000) throw new Error("zoom_chatbot_long_message_invalid");
+      const parts = splitZoomText(source);
+      for (const part of parts) {
+        sent.push(await sendZoomChatbotMessage(env, { channelId, userId, content: buildZoomChatbotTextContent(part) }));
+      }
+    } else if (payload.action === "pilot_medal") {
+      const medalKey = String(payload.medalKey || "").trim();
+      if (!ZOOM_SOBRIETY_MEDAL_ASSETS[medalKey]) return Response.json({ ok: false, error: "unknown_medal" }, { status: 400 });
+      const baseUrl = String(env?.ZOOM_CHATBOT_PUBLIC_BASE_URL || "https://pochti-normalnye-bot.pochtinormalnye.workers.dev").replace(/\/+$/u, "");
+      const imageUrl = `${baseUrl}/zoom-chatbot/medal-image/${medalKey}`;
+      sent.push(await sendZoomChatbotMessage(env, {
+        channelId,
+        userId,
+        content: buildZoomChatbotImageContent({
+          text: `\u041c\u0435\u0434\u0430\u043b\u044c: ${medalKey}`,
+          imageUrl,
+          altText: `\u041c\u0435\u0434\u0430\u043b\u044c ${medalKey}`
+        })
+      }));
+    } else {
+      return Response.json({ ok: false, error: "pilot_action_not_allowed" }, { status: 400 });
+    }
+    return Response.json({ ok: true, requestId, sentCount: sent.length, messageIds: sent.map(item => item.messageId) });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "zoom_chatbot_pilot_send_failed", requestId, reason: String(error?.message || "unknown").slice(0, 160) }));
+    return Response.json({ ok: false, error: "zoom_chatbot_send_failed" }, { status: 502 });
+  }
+}
+__name(handleZoomChatbotPilotSendRequest, "handleZoomChatbotPilotSendRequest");
 async function handleZoomOnlyAppActionRequest(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
@@ -4155,6 +4218,9 @@ var worker_default = {
     if (request.method === "GET" && url.pathname === "/zoom-only/medals") {
       return handleZoomSobrietyMedalsRequest(request, env);
     }
+    if (url.pathname.startsWith("/zoom-chatbot/medal-image/")) {
+      return handleZoomChatbotImageRequest(request, env);
+    }
     if (request.method === "GET" && url.pathname === "/status") {
       return handleStatusRequest(env);
     }
@@ -4163,6 +4229,9 @@ var worker_default = {
     }
     if (url.pathname === "/zoom-only/app/action") {
       return handleZoomRouteSafely(url.pathname, () => handleZoomOnlyAppActionRequest(request, env));
+    }
+    if (url.pathname === "/zoom-only/chatbot/pilot-send") {
+      return handleZoomRouteSafely(url.pathname, () => handleZoomChatbotPilotSendRequest(request, env));
     }
     if (url.pathname.startsWith("/zoom-only/team-chat/")) {
       return Response.json({ ok: false, error: "team_chat_test_retired" }, { status: 410 });
