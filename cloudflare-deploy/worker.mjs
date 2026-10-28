@@ -3414,7 +3414,7 @@ async function handleZoomChatbotPilotSendRequest(request, env) {
   } catch (error) {
     const reason = String(error?.message || "unknown").slice(0, 160);
     console.error(JSON.stringify({ event: "zoom_chatbot_pilot_send_failed", requestId, reason }));
-    const safeError = /^zoom_chatbot_[a-z0-9_]+(?::\d{3})?$/u.test(reason) ? reason : "zoom_chatbot_send_failed";
+    const safeError = /^zoom_chatbot_[a-z0-9_]+(?::[a-z0-9_]+)*$/u.test(reason) ? reason : "zoom_chatbot_send_failed";
     return Response.json({ ok: false, error: safeError }, { status: 502 });
   }
 }

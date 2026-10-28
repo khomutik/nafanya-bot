@@ -153,7 +153,7 @@ test("Worker protects pilot delivery and returns only successful Chatbot message
 test("Chatbot sender rejects missing account, malformed channel and untrusted content", async () => {
   const fetchImpl = async () => { throw new Error("must_not_send"); };
   await assert.rejects(sendZoomChatbotMessage({ ...env, ZOOM_CHATBOT_ACCOUNT_ID: "" }, { channelId, userId: "user-123", content: { head: { text: "x" } } }, { fetchImpl }), /account_id_invalid/u);
-  await assert.rejects(sendZoomChatbotMessage(env, { channelId: "arbitrary", userId: "user-123", content: { head: { text: "x" } } }, { fetchImpl }), /channel_id_invalid/u);
+  await assert.rejects(sendZoomChatbotMessage(env, { channelId: "arbitrary", userId: "user-123", content: { head: { text: "x" } } }, { fetchImpl }), /channel_id_invalid:len_9:uuid36_0:hex32_0:jid_0:ascii_1/u);
   await assert.rejects(sendZoomChatbotMessage(env, { channelId, userId: "user-123", content: "raw" }, { fetchImpl }), /content_invalid/u);
 });
 
