@@ -324,11 +324,13 @@ test("Zoom App page initializes the SDK and hides server administration", () => 
   assert.match(html, /response\.status!==401/u);
   assert.match(html, /location\.replace\(url\.toString\(\)\)/u);
   assert.match(html, /async function authorizedFetch\(resource,options\)/u);
-  assert.match(html, /getMeetingChatContext/u);
-  assert.match(html, /id="chatbotPilotText"/u);
-  assert.match(html, /id="chatbotPilotLong"/u);
-  assert.match(html, /id="chatbotPilotMedal"/u);
-  assert.doesNotMatch(buildControlHtml(), /<details class="workspace-section" id="chatbotPilot"/u);
+  assert.match(html, /"sendMessageToChat"/u);
+  assert.match(html, /zoomSdk\.sendMessageToChat\(\{message\}\)/u);
+  assert.match(html, /id="meetingChatPilotText"/u);
+  assert.match(html, /id="meetingChatPilotLong"/u);
+  assert.match(html, /id="meetingChatPilotMedal"/u);
+  assert.doesNotMatch(html, /getMeetingChatContext/u);
+  assert.doesNotMatch(buildControlHtml(), /<details class="workspace-section" id="meetingChatPilot"/u);
 });
 
 test("native timer treats an already absent indicator as a successful reset", () => {
