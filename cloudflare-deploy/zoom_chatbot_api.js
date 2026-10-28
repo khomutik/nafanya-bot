@@ -90,7 +90,9 @@ export async function sendZoomChatbotMessage(env, {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.message_id) {
-    throw new Error(`zoom_chatbot_send_failed:${response.status}`);
+    const code = String(result.code || "unknown").toLowerCase().replace(/[^a-z0-9_]/gu, "").slice(0, 32);
+    const detail = String(result.message || result.reason || "").toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 64);
+    throw new Error(`zoom_chatbot_send_failed:${response.status}:code_${code}:msg_${detail || "unknown"}`);
   }
   return {
     ok: true,

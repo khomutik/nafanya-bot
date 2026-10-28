@@ -175,3 +175,15 @@ test("Chatbot sender accepts Zoom SDK channel UUID without hyphens", async () =>
   assert.equal(requests[1].body.to_jid, `${compactChannelId}@conference.xmpp.zoom.us`);
   resetZoomChatbotTokenCacheForTests();
 });
+
+test("Chatbot sender reports only the sanitized Zoom response code and reason", async () => {
+  resetZoomChatbotTokenCacheForTests();
+  const fetchImpl = async (url) => String(url).includes("oauth/token")
+    ? Response.json({ access_token: "token", expires_in: 3600 })
+    : Response.json({ code: 10001, message: "You do not have permission." }, { status: 403 });
+  await assert.rejects(
+    sendZoomChatbotMessage(env, { channelId, userId: "user-123", content: { head: { text: "x" } } }, { fetchImpl }),
+    /zoom_chatbot_send_failed:403:code_10001:msg_you_do_not_have_permission/u
+  );
+  resetZoomChatbotTokenCacheForTests();
+});
