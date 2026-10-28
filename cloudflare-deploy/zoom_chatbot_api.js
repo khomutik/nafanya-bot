@@ -53,7 +53,10 @@ async function requestChatbotToken(env, fetchImpl = fetch, now = Date.now()) {
     headers: { authorization }
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.access_token) throw new Error(`zoom_chatbot_token_request_failed:${response.status}`);
+  if (!response.ok || !body.access_token) {
+    const code = String(body.reason || body.error || "").toLowerCase().replace(/[^a-z0-9_]/gu, "").slice(0, 64);
+    throw new Error(`zoom_chatbot_token_request_failed:${response.status}:${code || "unknown"}`);
+  }
   const expiresIn = Math.max(60, Math.min(3600, Number(body.expires_in) || 3600));
   cachedToken = { value: String(body.access_token), expiresAt: now + (expiresIn * 1000) };
   return cachedToken.value;

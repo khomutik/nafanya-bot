@@ -143,7 +143,7 @@ test("Worker protects pilot delivery and returns only successful Chatbot message
       body: JSON.stringify({ action: "pilot_text", channelId, userId: "user-123", text: "test" })
     }), { ZOOM_PANEL_TOKEN: "panel-token", ...env });
     assert.equal(tokenFailure.status, 502);
-    assert.deepEqual(await tokenFailure.json(), { ok: false, error: "zoom_chatbot_token_request_failed:401" });
+    assert.deepEqual(await tokenFailure.json(), { ok: false, error: "zoom_chatbot_token_request_failed:401:invalid_client" });
   } finally {
     globalThis.fetch = previousFetch;
     resetZoomChatbotTokenCacheForTests();
