@@ -324,12 +324,16 @@ test("Zoom App page initializes the SDK and hides server administration", () => 
   assert.match(html, /response\.status!==401/u);
   assert.match(html, /location\.replace\(url\.toString\(\)\)/u);
   assert.match(html, /async function authorizedFetch\(resource,options\)/u);
-  assert.match(html, /"sendMessageToChat"/u);
-  assert.match(html, /zoomSdk\.sendMessageToChat\(\{message\}\)/u);
+  assert.match(html, /"getMeetingChatContext"/u);
+  assert.match(html, /zoomSdk\.getMeetingChatContext\(\)/u);
+  assert.match(html, /chatContext\?\.chatChannelUUID/u);
+  assert.match(html, /\.\/zoom-only\/chatbot\/pilot-send/u);
+  assert.match(html, /action,channelId:zoomMeetingChatChannelId/u);
   assert.match(html, /id="meetingChatPilotText"/u);
   assert.match(html, /id="meetingChatPilotLong"/u);
   assert.match(html, /id="meetingChatPilotMedal"/u);
-  assert.doesNotMatch(html, /getMeetingChatContext/u);
+  assert.doesNotMatch(html, /zoomSdk\.sendMessageToChat\(/u);
+  assert.doesNotMatch(buildControlHtml(), /id="meetingChatPilot"/u);
   assert.doesNotMatch(buildControlHtml(), /<details class="workspace-section" id="meetingChatPilot"/u);
 });
 
