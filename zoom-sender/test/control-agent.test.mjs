@@ -333,6 +333,7 @@ test("Zoom App page initializes the SDK and hides server administration", () => 
   assert.match(html, /zoomSdk\.getMeetingChatContext\(\)/u);
   assert.match(html, /runningContext=/u);
   assert.doesNotMatch(html, /supports\("getMeetingChatContext"\)/u);
+  assert.match(html, /Zoom \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u043b API \u0447\u0430\u0442\u0430/u);
   assert.match(html, /\.\/zoom-only\/chatbot\/pilot-send/u);
   assert.match(html, /action,channelId:zoomMeetingChatChannelId/u);
   assert.match(html, /id="meetingChatPilotText"/u);
