@@ -47,6 +47,17 @@ test("Chatbot sender requests a bearer token and posts to the meeting chat JID",
   });
 });
 
+test("Chatbot sender accepts the meeting chat JID returned by Zoom SDK", async () => {
+  resetZoomChatbotTokenCacheForTests();
+  const chatJid = `${channelId}@conference.xmpp.zoom.us`;
+  let sentBody;
+  const fetchImpl = async (url, init = {}) => String(url).startsWith("https://zoom.us/oauth/token")
+    ? Response.json({ access_token: "jid-test-bearer", expires_in: 3600 })
+    : (sentBody = JSON.parse(init.body), Response.json({ message_id: "jid-message" }));
+  await sendZoomChatbotMessage(env, { channelId: chatJid, userId: "user-123", content: { head: { text: "test" } } }, { fetchImpl, now: 2_000_000 });
+  assert.equal(sentBody.to_jid, chatJid);
+});
+
 test("Chatbot sender caches the token across button-triggered messages", async () => {
   resetZoomChatbotTokenCacheForTests();
   let tokenRequests = 0;
