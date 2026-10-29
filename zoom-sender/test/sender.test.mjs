@@ -148,6 +148,7 @@ test("config reads dry-run and polling intervals from env with safe fallbacks", 
   assert.equal(fallback.errorIntervalMs, 10000);
   assert.equal(fallback.zoomRecoveryAfterMs, 180000);
   assert.equal(fallback.chatReadonlyDiagnostics, false);
+  assert.equal(fallback.headless, false);
   assert.equal(fallback.outboxMeetingId, "");
   assert.equal(loadConfig({}).maxIntervalMs, 1000);
 });
@@ -438,6 +439,8 @@ test("Zoom browser adapter handles the Zoom web landing gate and read-only diagn
   assert.match(source, /join from browser/iu);
   assert.match(source, /decline cookies|accept cookies/iu);
   assert.match(source, /continue without microphone and camera/iu);
+  assert.match(source, /continue without camera/iu);
+  assert.match(source, /\\u0431\\u0435\\u0437\.\*\\u043a\\u0430\\u043c\\u0435\\u0440/iu);
   assert.match(source, /getByText\(pattern\)/u);
   assert.match(source, /button, a, \[role='button'\]/u);
   assert.match(source, /input\[type="text"\]:visible/u);
@@ -550,7 +553,7 @@ test("an open chat wins over stale hidden waiting-room text", () => {
   assert.deepEqual(joined, { waitingRoom: false, zoomJoined: true });
 });
 
-test("docker packaging is sender-only and contains no obvious secrets", async () => {
+test("docker packaging splits the lean sender from the temporary auth view", async () => {
   const fs = await import("node:fs/promises");
   const [dockerfile, compose, envExample, runbook] = await Promise.all([
     fs.readFile(new URL("../Dockerfile", import.meta.url), "utf8"),
@@ -558,17 +561,23 @@ test("docker packaging is sender-only and contains no obvious secrets", async ()
     fs.readFile(new URL("../.env.example", import.meta.url), "utf8"),
     fs.readFile(new URL("../RUNBOOK.md", import.meta.url), "utf8")
   ]);
-  assert.match(dockerfile, /node src\/main\.mjs/u);
   assert.match(dockerfile, /exec node src\/main\.mjs/u);
-  assert.match(dockerfile, /ZOOM_AUTH_SETUP/u);
+  assert.match(dockerfile, /FROM browser-base AS runtime/u);
+  assert.match(dockerfile, /FROM browser-base AS auth/u);
   assert.match(dockerfile, /node src\/auth-setup\.mjs/u);
   assert.match(dockerfile, /exec node src\/auth-setup\.mjs/u);
-  assert.match(dockerfile, /playwright install --with-deps chromium/u);
+  assert.match(dockerfile, /playwright install --with-deps --no-shell chromium/u);
+  assert.doesNotMatch(dockerfile, /only-shell/u);
   assert.match(dockerfile, /xvfb xauth x11-utils/u);
   assert.match(dockerfile, /Xvfb :99/u);
   assert.match(dockerfile, /chmod 1777 \/tmp\/\.X11-unix/u);
   assert.match(dockerfile, /rm -f \/tmp\/\.X99-lock \/tmp\/\.X11-unix\/X99/u);
-  assert.match(compose, /service|zoom-sender/u);
+  assert.match(compose, /zoom-sender:/u);
+  assert.match(compose, /target:\s*runtime/u);
+  assert.match(compose, /zoom-auth:/u);
+  assert.match(compose, /profiles:\s*\["auth"\]/u);
+  assert.match(compose, /target:\s*auth/u);
+  assert.match(compose, /HEADLESS:\s*"false"/u);
   assert.match(compose, /healthcheck:/u);
   assert.match(compose, /zoom-sender-profile:\/app\/profile/u);
   assert.match(compose, /\.\/diagnostics:\/app\/diagnostics/u);
@@ -596,6 +605,7 @@ test("auth setup uses server env credentials without hardcoded secrets or artifa
   assert.match(source, /Zoom auth profile setup completed/u);
   assert.match(source, /hasFirstVisible/u);
   assert.match(source, /launchPersistentContext/u);
+  assert.match(source, /browser\.pages\(\)\[0\]\s*\|\|\s*await browser\.newPage\(\)/u);
   assert.match(source, /manual_verification_required/u);
   assert.doesNotMatch(source, /screenshot|storageState|cookies\(\)|console\.log\([^)]*email|console\.log\([^)]*password/iu);
 });

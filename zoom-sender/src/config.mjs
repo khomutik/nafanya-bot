@@ -29,7 +29,7 @@ export function loadConfig(env = process.env) {
     mockOutbox: readBool(env.ZOOM_SENDER_MOCK_OUTBOX, false),
     mockMessage: String(env.ZOOM_SENDER_MOCK_MESSAGE || "Dry-run Zoom message").trim(),
     chatReadonlyDiagnostics: readBool(env.ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS, false),
-    headless: readBool(env.HEADLESS ?? env.ZOOM_SENDER_HEADLESS, true),
+    headless: readBool(env.HEADLESS ?? env.ZOOM_SENDER_HEADLESS, false),
     userDataDir: String(env.ZOOM_SENDER_USER_DATA_DIR || "/app/profile").trim(),
     publicationStateFile: String(env.ZOOM_PUBLICATION_STATE_FILE || "/app/profile/nafanya-publications.json").trim(),
     diagnosticsDir: String(env.ZOOM_SENDER_DIAGNOSTICS_DIR || (readBool(env.ZOOM_SENDER_CHAT_READONLY_DIAGNOSTICS, false) ? "/app/diagnostics" : "")).trim(),

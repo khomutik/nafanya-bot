@@ -119,7 +119,7 @@ async function run() {
     ignoreDefaultArgs: ["--enable-automation"],
     args: [...DEFAULT_BROWSER_ARGS, ...(config.browserArgs || [])]
   });
-  const page = await browser.newPage();
+  const page = browser.pages()[0] || await browser.newPage();
   try {
     await page.goto(SIGN_IN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await fillFirstVisible(page, [

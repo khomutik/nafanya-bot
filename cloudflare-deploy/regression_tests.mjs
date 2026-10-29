@@ -473,6 +473,8 @@ function testZoomOnlyStaticRules() {
   assert.match(worker, /url\.pathname\.startsWith\("\/zoom-only\/team-chat\/"\)[\s\S]*team_chat_test_retired/u, "Retired Team Chat routes should fail closed with an explicit compatibility response");
   assert.doesNotMatch(worker, /zoom_team_chat|callZoomTeamChatState|sendMessageToChat|teamChatTest/u, "The failed Team Chat laboratory must be physically removed from runtime code");
   assert.doesNotMatch(wrangler, /ZOOM_TEAM_CHAT_STATE|ZOOM_TEAM_CHAT_TEST|ZOOM_BOT_REPLACEMENT/u, "Retired Team Chat bindings and flags must not survive in active configuration");
+  assert.doesNotMatch(worker, /zoom_chatbot|ZoomChatbot|chatbot\/pilot|zoom-chatbot/u, "The failed Chatbot API pilot must be physically removed from runtime code");
+  assert.doesNotMatch(wrangler, /ZOOM_CHATBOT/u, "Retired Chatbot API configuration must not survive in active configuration");
   assert.match(wrangler, /"tag": "v7"[\s\S]*"deleted_classes"[\s\S]*"ZoomTeamChatStateDurableObject"/u, "The retired Team Chat Durable Object needs an explicit deletion migration");
   assert.match(wrangler, /"tag": "v5"[\s\S]*"ZoomMeetingStateDurableObject"[\s\S]*"ZoomSharedTimerStateDurableObject"/u, "Both new SQLite Durable Objects need an explicit migration");
 }

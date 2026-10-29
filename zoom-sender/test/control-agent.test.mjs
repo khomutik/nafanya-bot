@@ -324,28 +324,9 @@ test("Zoom App page initializes the SDK and hides server administration", () => 
   assert.match(html, /response\.status!==401/u);
   assert.match(html, /location\.replace\(url\.toString\(\)\)/u);
   assert.match(html, /async function authorizedFetch\(resource,options\)/u);
-  assert.match(html, /"getMeetingChatContext"/u);
-  assert.match(html, /Chatbot API/u);
-  assert.match(html, /zoomSdk\.getMeetingChatContext\(\)/u);
-  assert.match(html, /chatContext\?\.chatChannelUUID/u);
   assert.match(html, /let names=null/u);
   assert.match(html, /const supports=name=>!unsupported\.has\(name\)&&\(!names\|\|names\.has\(name\)\)/u);
-  assert.match(html, /"getMeetingChatContext","sendMessageToChat"/u);
-  assert.match(html, /zoomMeetingChatSupported=zoomProduct==="desktop"&&configured\.runningContext==="inMeeting"&&supports\("getMeetingChatContext"\);zoomMeetingChatSendSupported=zoomProduct==="desktop"&&configured\.runningContext==="inMeeting"&&supports\("sendMessageToChat"\);zoomMeetingChatChannelId=""/u);
-  assert.match(html, /zoomSdk\.getMeetingChatContext\(\)/u);
-  assert.match(html, /runningContext=/u);
-  assert.match(html, /supports\("getMeetingChatContext"\)/u);
-  assert.match(html, /Zoom \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u043b API \u0447\u0430\u0442\u0430/u);
-  assert.match(html, /zoomSdk\.sendMessageToChat\(\{message:String\(payload\.text\|\|""\)\}\)/u);
-  assert.match(html, /if\(action==="pilot_text"&&!zoomMeetingChatSendSupported\)/u);
-  assert.match(html, /authorizedFetch\("\.\/zoom-only\/chatbot\/pilot-send"/u);
-  assert.match(html, /zoomMeetingChatSupported=zoomProduct==="desktop"&&configured\.runningContext==="inMeeting"&&supports\("getMeetingChatContext"\)/u);
-  assert.match(html, /\.\/zoom-only\/chatbot\/pilot-send/u);
-  assert.match(html, /id="meetingChatPilotText"/u);
-  assert.match(html, /id="meetingChatPilotLong"/u);
-  assert.match(html, /id="meetingChatPilotMedal"/u);
-  assert.doesNotMatch(buildControlHtml(), /id="meetingChatPilot"/u);
-  assert.doesNotMatch(buildControlHtml(), /<details class="workspace-section" id="meetingChatPilot"/u);
+  assert.doesNotMatch(html, /getMeetingChatContext|sendMessageToChat|Chatbot API|meetingChatPilot|chatbot\/pilot-send/u);
 });
 
 test("native timer treats an already absent indicator as a successful reset", () => {
@@ -497,67 +478,6 @@ test("timer proxy works while sender is off and rejects non-timer actions", asyn
   assert.equal(workerRequests.length, 1);
 });
 
-test("Zoom App Chatbot proxy uses the signed user and strips client supplied account IDs", async (context) => {
-  const workerRequests = [];
-  const worker = createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    workerRequests.push({ url: request.url, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ok: true, sentCount: 1 }));
-  });
-  await new Promise((resolve) => worker.listen(0, "127.0.0.1", resolve));
-  context.after(() => new Promise((resolve) => worker.close(resolve)));
-
-  const portProbe = createServer();
-  await new Promise((resolve) => portProbe.listen(0, "127.0.0.1", resolve));
-  const controlPort = portProbe.address().port;
-  await new Promise((resolve) => portProbe.close(resolve));
-  const appSecret = "test-zoom-app-client-secret";
-  const sessionSecret = "test-zoom-app-session-secret";
-  const child = spawn(process.execPath, [fileURLToPath(new URL("../control-agent/main.mjs", import.meta.url))], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: {
-      ...process.env,
-      ZOOM_CONTROL_HOST: "127.0.0.1",
-      ZOOM_CONTROL_PORT: String(controlPort),
-      ZOOM_CONTROL_TOKEN: "test-control-token",
-      WORKER_BASE_URL: `http://127.0.0.1:${worker.address().port}`,
-      ZOOM_ONLY_SECRET: "test-bridge-secret",
-      ZOOM_PANEL_TOKEN: "test-panel-token",
-      ZOOM_APP_CLIENT_SECRET: appSecret,
-      ZOOM_APP_SESSION_SECRET: sessionSecret
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  context.after(() => { if (!child.killed) child.kill(); });
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("control agent did not start")), 5000);
-    child.stdout.on("data", (chunk) => {
-      if (!String(chunk).includes("Nafanya Zoom control listening")) return;
-      clearTimeout(timeout);
-      resolve();
-    });
-    child.once("exit", (code) => reject(new Error(`control agent exited with ${code}`)));
-  });
-
-  const session = issueZoomAppSession({ typ: "meeting", mid: "meeting-uuid", uid: "trusted-user-id" }, sessionSecret);
-  const cookie = buildZoomAppSessionCookie("nafanya_zoom_app", session);
-  const response = await fetch(`http://127.0.0.1:${controlPort}/zoom-only/chatbot/pilot-send`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ action: "pilot_text", channelId: "12345678-1234-1234-1234-123456789abc", userId: "attacker-id", accountId: "attacker-account" })
-  });
-  assert.equal(response.status, 200);
-  assert.equal(workerRequests.length, 1);
-  assert.match(workerRequests[0].url, /^\/zoom-only\/chatbot\/pilot-send\?controlRequest=\d+$/u);
-  assert.deepEqual(workerRequests[0].body, {
-    action: "pilot_text",
-    channelId: "12345678-1234-1234-1234-123456789abc",
-    userId: "trusted-user-id"
-  });
-});
-
 test("control compose uses host network but binds the agent to localhost", async () => {
   const fs = await import("node:fs/promises");
   const compose = await fs.readFile(new URL("../control-agent.compose.example.yml", import.meta.url), "utf8");
@@ -641,6 +561,7 @@ test("auth view uses fixed docker compose commands without arbitrary shell", asy
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("../control-agent/docker-ops.mjs", import.meta.url), "utf8");
   assert.match(source, /--service-ports/u);
+  assert.match(source, /"zoom-auth"/u);
   assert.match(source, /startAuthSetup/u);
   assert.match(source, /stopAuthSetup/u);
   assert.match(source, /import \{ execFile \} from "node:child_process"/u);
@@ -653,6 +574,8 @@ test("Docker auth view binds noVNC to localhost and has no embedded secret", asy
   const compose = await fs.readFile(new URL("../compose.example.yml", import.meta.url), "utf8");
   const dockerfile = await fs.readFile(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(compose, /127\.0\.0\.1:6080:6080/u);
+  assert.match(compose, /profiles:\s*\["auth"\]/u);
+  assert.match(compose, /target:\s*auth/u);
   assert.match(dockerfile, /novnc|websockify/u);
   assert.match(dockerfile, /x11vnc/u);
   assert.doesNotMatch(dockerfile, /ZOOM_AUTH_(?:EMAIL|PASSWORD)=\S+/u);

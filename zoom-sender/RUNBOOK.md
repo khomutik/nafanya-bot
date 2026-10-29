@@ -123,6 +123,8 @@ Read-only diagnostics включать лишь для диагностики: �
 
 ## 4. Запустить sender
 
+Постоянно запускается только target `runtime`: полноценный Chromium работает на минимальном виртуальном экране Xvfb, без VNC и рабочего стола. Графический target `auth` помечен Compose-профилем и обычной командой `up` не стартует. Headless и Chromium headless-shell не применять: Zoom блокирует оба варианта как ботов.
+
 ```bash
 docker compose -f compose.example.yml up -d
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -135,6 +137,8 @@ docker compose -f compose.example.yml logs --tail=100 zoom-sender
 ```
 
 В логах не должно быть секретов или полной Zoom-ссылки. Пока Нафаня допущен в конференцию, outbox проверяется каждые 1000 мс. В зале ожидания outbox не опрашивается. После выключения sender и панель очереди не делают запросов к Worker; только открытый Zoom App синхронизирует независимый общий таймер.
+
+`zoom-auth` использует тот же volume `zoom-sender-profile`, но запускается control agent только при восстановлении Zoom-входа. После завершения авторизации контейнер удаляется; x11vnc, websockify и noVNC не работают вместе с обычным sender.
 
 ## 5. Проверить health
 

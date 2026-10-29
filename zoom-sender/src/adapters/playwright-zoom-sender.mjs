@@ -4,7 +4,12 @@ const MORE_BUTTON_PATTERNS = [/more/i, /more meeting controls/i, /\u043f\u043e\u
 const CHAT_UNAVAILABLE_PATTERNS = [/chat.*disabled|disabled.*chat|chat.*unavailable|host.*disabled.*chat/i, /\u0447\u0430\u0442.*\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f/iu, /\u0447\u0430\u0442.*\u043e\u0442\u043a\u043b\u044e\u0447/iu];
 const COOKIE_BUTTON_PATTERNS = [/decline cookies/i, /accept cookies/i, /\u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c/iu, /\u043f\u0440\u0438\u043d\u044f\u0442\u044c/iu];
 const JOIN_FROM_BROWSER_PATTERNS = [/join from browser/i, /\u0432\u043e\u0439\u0442\u0438.*\u0431\u0440\u0430\u0443\u0437\u0435\u0440/iu];
-const CONTINUE_WITHOUT_MEDIA_PATTERNS = [/continue without microphone and camera/i, /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu];
+const CONTINUE_WITHOUT_MEDIA_PATTERNS = [
+  /continue without microphone and camera/i,
+  /continue without camera/i,
+  /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d/iu,
+  /\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c.*\u0431\u0435\u0437.*\u043a\u0430\u043c\u0435\u0440/iu
+];
 const JOIN_MEETING_PATTERNS = [/join/i, /join meeting/i, /\u0432\u043e\u0439\u0442\u0438/iu, /\u043f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d/iu];
 const STOP_VIDEO_PATTERNS = [/stop my video/i, /^stop video$/i, /\u0432\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c.*\u0432\u0438\u0434\u0435\u043e/iu, /\u043e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c.*\u0432\u0438\u0434\u0435\u043e/iu];
 const DIAGNOSTIC_TEXT_LIMIT = 12000;
@@ -907,7 +912,7 @@ export class PlaywrightZoomSender {
     const diagnosticsRun = await makeDiagnosticsDir(this.config.diagnosticsDir);
     this.diagnosticsRun = diagnosticsRun;
     this.browser = await chromium.launchPersistentContext(userDataDir, launchOptions);
-    this.page = await this.browser.newPage();
+    this.page = this.browser.pages()[0] || await this.browser.newPage();
     this.browserSessionId = crypto.randomUUID();
     this.attachPageDiagnostics(this.page);
     await this.page.addInitScript(() => {
@@ -937,6 +942,8 @@ export class PlaywrightZoomSender {
     if (nameRefilled) {
       await clickButtonByText(this.page, JOIN_MEETING_PATTERNS).catch(() => false);
     }
+    await this.page.waitForTimeout(1500);
+    await clickTextByPattern(this.page, CONTINUE_WITHOUT_MEDIA_PATTERNS).catch(() => false);
     await this.page.waitForTimeout(3000);
     const mediaOff = await ensureMeetingVideoOff(this.page);
     await openChatPanel(this.page).catch(() => false);

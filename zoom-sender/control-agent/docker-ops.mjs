@@ -105,7 +105,7 @@ export class DockerOps {
   }
 
   async startAuthSetup() {
-    const { stdout } = await this.docker(this.composeArgs(["run", "-d", "--service-ports", "--no-deps", "zoom-sender"]));
+    const { stdout } = await this.docker(this.composeArgs(["run", "-d", "--service-ports", "--no-deps", "zoom-auth"]));
     const containerId = String(stdout || "").trim();
     if (!/^[a-f0-9]{12,64}$/iu.test(containerId)) throw new Error("Auth setup container did not start.");
     return containerId;

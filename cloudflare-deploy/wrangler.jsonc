@@ -25,10 +25,7 @@
     "ADMIN_DM_USERNAMES": "khomutik,katukatun,pifagor71,JeanneKova,Well2456,nikitinaYLA,Maks_gav,VladimirRingo,D3N1S_G33K,Owl1Max,rlinrec,gorinayua,BAD_WOLFa",
     "ADMIN_MANAGER_USER_IDS": "",
     "ADMIN_MANAGER_USERNAMES": "Maks_gav",
-    "PRIVATE_SUBSCRIBER_USER_IDS": "",
-    "ZOOM_CHATBOT_CLIENT_ID": "OHOBvrfqTlivKQdmrg3f2w",
-    "ZOOM_CHATBOT_BOT_JID": "v1iq7m0iy1t5g2yym5uiwwfa@xmpp.zoom.us",
-    "ZOOM_CHATBOT_PUBLIC_BASE_URL": "https://pochti-normalnye-bot.pochtinormalnye.workers.dev"
+    "PRIVATE_SUBSCRIBER_USER_IDS": ""
   },
   "triggers": {
     "crons": [

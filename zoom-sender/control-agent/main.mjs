@@ -81,16 +81,7 @@ async function readRequestBody(request, maxBytes = 32768) {
 }
 
 async function proxyWorker(request, res, pathname, search = "", access = "admin", suppliedBody) {
-  let body = suppliedBody === undefined && request.method === "POST" ? await readRequestBody(request) : suppliedBody;
-  if (pathname === "/zoom-only/chatbot/pilot-send" && access === "zoom_app") {
-    const session = zoomAppSession(request);
-    if (!session?.uid) return json(res, 409, { ok: false, error: "zoom_chatbot_user_context_missing" });
-    let payload;
-    try { payload = JSON.parse(Buffer.from(body || "{}").toString("utf8")); }
-    catch { return json(res, 400, { ok: false, error: "invalid_json" }); }
-    const { userId: _userId, accountId: _accountId, ...safePayload } = payload;
-    body = Buffer.from(JSON.stringify({ ...safePayload, userId: session.uid }));
-  }
+  const body = suppliedBody === undefined && request.method === "POST" ? await readRequestBody(request) : suppliedBody;
   const query = new URLSearchParams(search);
   query.set("controlRequest", String(Date.now()));
   const workerPath = `${pathname}?${query}`;
@@ -169,11 +160,6 @@ const server = http.createServer(async (request, res) => {
       return proxyWorkerOnlyWhileSenderRuns(request, res, url.pathname, url.search, access);
     }
     if (request.method === "GET" && url.pathname === "/api/status") return json(res, 200, await service.status());
-    if (url.pathname === "/zoom-only/chatbot/pilot-send") {
-      if (request.method !== "POST") return json(res, 405, { ok: false, error: "method_not_allowed" });
-      if (access !== "zoom_app") return json(res, 403, { ok: false, error: "zoom_app_required" });
-      return proxyWorker(request, res, url.pathname, "", access);
-    }
     if (request.method === "POST" && url.pathname === "/api/start") { const result = service.requestStart(); audit("zoom_sender_start_requested", { accepted: result.accepted }); return json(res, 202, result); }
     if (request.method === "POST" && url.pathname === "/api/stop") { const result = await service.stop(); audit("zoom_sender_stop_requested", { ok: result.ok }); return json(res, result.status, result); }
     if (request.method === "POST" && url.pathname === "/api/auth-setup") {

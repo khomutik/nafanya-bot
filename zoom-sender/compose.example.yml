@@ -3,6 +3,7 @@ services:
   zoom-sender:
     build:
       context: .
+      target: runtime
     container_name: nafanya-zoom-sender-v2
     restart: unless-stopped
     stop_grace_period: 30s
@@ -13,9 +14,12 @@ services:
         max-file: "3"
     env_file:
       - .env
+    environment:
+      HEADLESS: "false"
+      ZOOM_AUTH_SETUP: "false"
+      ZOOM_AUTH_VIEW_ENABLED: "false"
     ports:
       - "127.0.0.1:3097:3097"
-      - "127.0.0.1:6080:6080"
     volumes:
       - zoom-sender-profile:/app/profile
       - ./diagnostics:/app/diagnostics
@@ -25,6 +29,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  zoom-auth:
+    profiles: ["auth"]
+    build:
+      context: .
+      target: auth
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      HEADLESS: "false"
+      ZOOM_AUTH_SETUP: "true"
+      ZOOM_AUTH_VIEW_ENABLED: "true"
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - zoom-sender-profile:/app/profile
+      - ./diagnostics:/app/diagnostics
 
 volumes:
   zoom-sender-profile:
